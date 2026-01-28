@@ -286,14 +286,18 @@ namespace fastbotx {
     // Thread-local random number generator for better performance and thread safety
     inline int randomInt(int min, int max) {
         thread_local std::mt19937 rng(std::random_device{}());
-        std::uniform_int_distribution<int> dist(min, max - 1);
+        // Performance: avoid constructing a new distribution object every call.
+        // Reuse a thread_local distribution and update its parameters.
+        thread_local std::uniform_int_distribution<int> dist;
+        dist.param(std::uniform_int_distribution<int>::param_type(min, max - 1));
         return dist(rng);
     }
 
 
     inline int randomInt(int min, int max, int seed) {
         thread_local std::mt19937 rng(seed);
-        std::uniform_int_distribution<int> dist(min, max - 1);
+        thread_local std::uniform_int_distribution<int> dist;
+        dist.param(std::uniform_int_distribution<int>::param_type(min, max - 1));
         return dist(rng);
     }
 

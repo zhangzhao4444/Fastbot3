@@ -33,7 +33,7 @@ namespace fastbotx {
          * @return Shared pointer to created ReuseState
          */
         static std::shared_ptr<ReuseState>
-        create(const ElementPtr &element, const stringPtr &activityName);
+        create(const ElementPtr &element, const stringPtr &activityName, const NamingPtr &naming);
 
     protected:
         virtual void buildStateFromElement(WidgetPtr parentWidget, ElementPtr element);
@@ -48,7 +48,7 @@ namespace fastbotx {
 
         ReuseState();
 
-        virtual void buildState(const ElementPtr &element);
+        virtual void buildState(const ElementPtr &element, const NamingPtr &naming);
 
         virtual void buildBoundingBox(const ElementPtr &element);
 

@@ -25,6 +25,8 @@
 #include "Widget.h"
 #include "Element.h"
 #include "ActionFilter.h"
+#include "Element.h"
+#include "naming/StateKey.h"
 #include <vector>
 
 
@@ -55,6 +57,10 @@ namespace fastbotx {
          * @return Shared pointer to the back action
          */
         ActivityStateActionPtr getBackAction() const { return this->_backAction; }
+
+        NamingPtr getCurrentNaming() const { return this->_currentNaming; }
+
+        StateKeyPtr getStateKey() const { return this->_stateKey; }
 
         /**
          * @brief Get the activity name string pointer
@@ -164,6 +170,27 @@ namespace fastbotx {
         bool isSaturated(const ActivityStateActionPtr &action) const;
 
         /**
+         * @brief Check if state is saturated (all actions are saturated)
+         * 
+         * A state is saturated if all its actions are saturated.
+         * 
+         * @return true if state is saturated
+         */
+        bool isSaturated() const;
+
+        bool isTrivialState() const { return _stateKey ? _stateKey->isTrivialState() : false; }
+
+        int getMergedWidgetCount(uintptr_t widgetHash) const;
+
+        NamePtr getNameForWidgetHash(uintptr_t widgetHash) const;
+
+        ActivityStateActionPtr getActionByTargetHash(ActionType type, uintptr_t widgetHash) const;
+
+        ActivityStateActionPtr getActionByType(ActionType type) const;
+
+        ActivityStateActionPtr relocateAction(ActionType type, const NamePtr &targetName) const;
+
+        /**
          * @brief Set priority of this state
          * 
          * @param p Priority value
@@ -203,6 +230,16 @@ namespace fastbotx {
          * @param copy State to copy details from
          */
         virtual void fillDetails(const std::shared_ptr<State> &copy);
+
+        void buildStateKey(const NamingPtr &naming);
+
+        void appendTree(const ElementPtr &tree);
+
+        const std::vector<ElementPtr> &getTreeHistory() const { return _treeHistory; }
+
+        ElementPtr getLatestTree() const;
+
+        void resolveActionTargets(const ElementPtr &tree);
 
         /**
          * @brief Check if state has no detailed information
@@ -261,6 +298,13 @@ namespace fastbotx {
         
         /// Map from widget hash to vector of merged widgets (for widget deduplication)
         WidgetPtrVecMap _mergedWidgets;
+
+        NamingPtr _currentNaming;
+        StateKeyPtr _stateKey;
+        NamePtrVec _nameWidgets;
+        std::map<uintptr_t, NamePtr> _widgetNames;
+
+        std::vector<ElementPtr> _treeHistory;
 
         /// Flag indicating if detailed information has been cleared
         bool _hasNoDetail;

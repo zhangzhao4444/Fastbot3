@@ -11,14 +11,16 @@
 #include "Element.h"
 #include "../thirdpart/tinyxml2/tinyxml2.h"
 #include "../thirdpart/json/json.hpp"
+#include <cstring>
 
 
 namespace fastbotx {
 
     Element::Element()
             : _enabled(false), _checked(false), _checkable(false), _clickable(false),
-              _focusable(false), _scrollable(false), _longClickable(false), _childCount(0),
-              _focused(false), _index(0), _password(false), _selected(false), _isEditable(false) {
+              _focusable(false), _scrollable(false), _longClickable(false), _visible(true),
+              _childCount(0), _focused(false), _index(0), _password(false), _selected(false),
+              _isEditable(false) {
         _children.clear();
         this->_bounds = Rect::RectZero;
     }
@@ -37,14 +39,12 @@ namespace fastbotx {
      * @warning Root elements cannot be deleted (they have no parent)
      */
     void Element::deleteElement() {
-        auto parentOfElement = this->getParent();
-        if (parentOfElement.expired()) {
+        // Lock parent once; if expired, lock() returns nullptr.
+        auto parentLocked = this->getParent().lock();
+        if (!parentLocked) {
             BLOGE("%s", "element is a root elements");
             return;
         }
-        
-        // Performance: Lock parent once and reuse the shared_ptr
-        auto parentLocked = parentOfElement.lock();
         
         // Use remove_if algorithm for efficient removal
         auto iter = std::remove_if(parentLocked->_children.begin(),
@@ -61,6 +61,39 @@ namespace fastbotx {
         
         // Clear this element's parent reference
         this->_parent.reset();
+    }
+
+    void Element::adoptChildrenToParent() {
+        auto parentOfElement = this->getParent();
+        if (parentOfElement.expired()) {
+            return;
+        }
+        auto parentLocked = parentOfElement.lock();
+        for (const auto &child : this->_children) {
+            if (child) {
+                child->_parent = parentLocked;
+                parentLocked->_children.emplace_back(child);
+            }
+        }
+        this->_children.clear();
+        this->deleteElement();
+    }
+
+    void Element::clearChildren() {
+        this->_children.clear();
+        this->_childCount = 0;
+    }
+
+    int Element::countDescendants() const {
+        int count = 0;
+        for (const auto &child : _children) {
+            if (!child) {
+                continue;
+            }
+            count += 1;
+            count += child->countDescendants();
+        }
+        return count;
     }
 
 /// According to given xpath selector, containing text, content, classname, resource id, test if
@@ -138,6 +171,9 @@ namespace fastbotx {
             // Performance: Reserve capacity if we can estimate result size
             // (Not done here as it's hard to estimate, but could be optimized further)
             for (const auto &child: this->_children) {
+                if (!child) {
+                    continue;
+                }
                 // Check if current child matches
                 if (func(child)) {
                     result.push_back(child);
@@ -166,6 +202,9 @@ namespace fastbotx {
     void Element::recursiveDoElements(const std::function<void(std::shared_ptr<Element>)> &doFunc) {
         if (doFunc != nullptr) {
             for (const auto &child: this->_children) {
+                if (!child) {
+                    continue;
+                }
                 // Apply function to current child
                 doFunc(child);
                 // Recursively apply to children
@@ -192,28 +231,24 @@ namespace fastbotx {
      */
     ElementPtr Element::createFromXml(const std::string &xmlContent) {
         tinyxml2::XMLDocument doc;
-        
-        // Performance: Reserve capacity for string vector to reduce reallocations
-        // Estimate: typically 1 line per 100-200 chars, but be conservative
+
+#if _DEBUG_
+        // Debug-only: log XML content line by line.
+        // Keep it out of release builds to avoid heavy string work and log spam.
         std::vector<std::string> strings;
         strings.reserve(xmlContent.size() / 100 + 1);
-        
-        // Split XML content by newlines for logging (debug only)
         int startIndex = 0, endIndex = 0;
         for (size_t i = 0; i <= xmlContent.size(); i++) {
-            // If we reached the end of the string or a newline character
             if (i >= xmlContent.size() || xmlContent[i] == '\n') {
                 endIndex = static_cast<int>(i);
-                // Performance: Use string view or direct substring to avoid copy
                 strings.emplace_back(xmlContent, startIndex, endIndex - startIndex);
                 startIndex = endIndex + 1;
             }
         }
-        
-        // Log XML content line by line (debug mode only)
-        for (const auto& line: strings) {
+        for (const auto &line: strings) {
             BLOG("The content of XML is: %s", line.c_str());
         }
+#endif
         
         // Parse XML content
         tinyxml2::XMLError errXml = doc.Parse(xmlContent.c_str());
@@ -339,7 +374,7 @@ namespace fastbotx {
     }
 
     void Element::fromXMLNode(const tinyxml2::XMLElement *xmlNode, const ElementPtr &parentOfNode) {
-        if (nullptr == xmlNode)
+        if (xmlNode == nullptr)
             return;
 //    BLOG("This Node is %s", std::string(xmlNode->GetText()).c_str());
         int indexOfNode = 0;
@@ -435,6 +470,12 @@ namespace fastbotx {
             this->_selected = selected;
         }
 
+        bool visibleToUser = true;
+        err = xmlNode->QueryBoolAttribute("visible-to-user", &visibleToUser);
+        if (err == tinyxml2::XML_SUCCESS) {
+            this->_visible = visibleToUser;
+        }
+
         this->_isEditable = "android.widget.EditText" == this->_classname;
         if (FORCE_EDITTEXT_CLICK_TRUE && this->_isEditable) {
             this->_longClickable = this->_clickable = this->_enabled = true;
@@ -454,6 +495,38 @@ namespace fastbotx {
         if (!xmlNode->NoChildren()) {
             for (const tinyxml2::XMLElement *childNode = xmlNode->FirstChildElement();
                  nullptr != childNode; childNode = childNode->NextSiblingElement()) {
+                const char *childClass = "";
+                childNode->QueryStringAttribute("class", &childClass);
+                bool childVisible = true;
+                childNode->QueryBoolAttribute("visible-to-user", &childVisible);
+                const char *childRes = "";
+                childNode->QueryStringAttribute("resource-id", &childRes);
+                const char *childText = "";
+                childNode->QueryStringAttribute("text", &childText);
+                const char *childContent = "";
+                childNode->QueryStringAttribute("content-desc", &childContent);
+
+#if IGNORE_INVISIBLE_NODE
+                if (!childVisible) {
+                    continue;
+                }
+#endif
+#if ALWAYS_IGNORE_WEBVIEW
+                if (childClass != nullptr && std::strcmp(childClass, "android.webkit.WebView") == 0) {
+                    continue;
+                }
+#endif
+#if EXCLUDE_EMPTY_CHILD
+                // Avoid constructing temporary std::string objects on the hot path.
+                const bool classEmpty = (childClass == nullptr) || (*childClass == '\0');
+                const bool resEmpty = (childRes == nullptr) || (*childRes == '\0');
+                const bool textEmpty = (childText == nullptr) || (*childText == '\0');
+                const bool contentEmpty = (childContent == nullptr) || (*childContent == '\0');
+                if (childNode->NoChildren() && classEmpty && resEmpty && textEmpty && contentEmpty) {
+                    continue;
+                }
+#endif
+
                 const tinyxml2::XMLElement *nextXMLElement = childNode;
                 ElementPtr childElement = std::make_shared<Element>();
                 this->_children.emplace_back(childElement);

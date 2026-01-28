@@ -131,6 +131,64 @@ namespace fastbotx {
          */
         virtual AlgorithmType getAlgorithmType() { return this->_algorithmType; }
 
+        StatePtr getCurrentState() const { return this->_currentState; }
+
+        ActivityStateActionPtr getCurrentAction() const { return this->_currentAction; }
+
+        /**
+         * @brief Set current state transition (APE alignment)
+         * 
+         * @param transition The current state transition
+         */
+        void setCurrentStateTransition(const StateTransitionPtr &transition) {
+            _currentStateTransition = transition;
+        }
+
+        /**
+         * @brief Get current state transition (APE alignment)
+         * 
+         * @return Current state transition
+         */
+        StateTransitionPtr getCurrentStateTransition() const {
+            return _currentStateTransition;
+        }
+
+        /**
+         * @brief Recover current state from action history (APE alignment)
+         * 
+         * Attempts to recover the current state and action from the action history.
+         * This is used when the agent restarts and needs to restore its previous state.
+         * 
+         * Note: This is a simplified implementation. Full APE implementation uses ActionRecord
+         * history maintained in Model. Native implementation may need Model to provide history.
+         */
+        virtual void recoverCurrentState();
+
+        /**
+         * @brief Update graph with current state transition (APE alignment)
+         * 
+         * Updates the graph with the current state transition and checks stability.
+         * This is called after a new state is reached.
+         */
+        virtual void updateGraph();
+
+        /**
+         * @brief Check graph/state/activity stability (APE alignment)
+         * 
+         * Checks if the graph, state, or activity has been stable for too long,
+         * and requests restart if necessary.
+         */
+        virtual void checkStable();
+
+        /**
+         * @brief Check non-deterministic transitions (APE alignment)
+         * 
+         * Checks if current state transition is non-deterministic (NEW_ACTION_TARGET type)
+         * and triggers refinement if needed.
+         * Called after updateGraph() in APE's flow.
+         */
+        virtual void checkNonDeterministicTransitions();
+
     protected:
 
         /**

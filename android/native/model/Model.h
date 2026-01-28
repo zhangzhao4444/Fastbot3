@@ -8,6 +8,7 @@
 #define  Model_H_
 
 #include <memory>
+#include <mutex>
 #include "Base.h"
 #include "State.h"
 #include "Element.h"
@@ -16,6 +17,7 @@
 #include "AbstractAgent.h"
 #include "AgentFactory.h"
 #include "Preference.h"
+#include "naming/NamingManager.h"
 
 namespace fastbotx {
 
@@ -131,6 +133,22 @@ namespace fastbotx {
          */
         PreferencePtr getPreference() const { return this->_preference; }
 
+        NamingManagerPtr getNamingManager() const { return this->_namingManager; }
+
+        /**
+         * @brief Rebuild the model by removing states with mismatched naming and re-adding transitions
+         * 
+         * This method aligns with APE's rebuild functionality:
+         * 1. Identifies states whose naming no longer matches the current naming manager
+         * 2. Removes these states and collects their transitions
+         * 3. Sorts transitions by timestamp (if available)
+         * 4. Rebuilds affected states
+         * 5. Re-adds transitions in timestamp order
+         * 
+         * @return Reference to this model for method chaining
+         */
+        Model& rebuild();
+
         /**
          * @brief Set the package name for network action parameters
          * 
@@ -160,6 +178,10 @@ namespace fastbotx {
         Model();
 
     private:
+        // Thread-safety: Model and its Graph are mutated across getOperate/addAgent/rebuild paths.
+        // Use recursive mutex because public entry points call each other (getOperate(string)->getOperate(Element)->getOperateOpt).
+        mutable std::recursive_mutex _mutex;
+
         /**
          * @brief Get custom action from preference if one exists for this page
          * 
@@ -220,9 +242,113 @@ namespace fastbotx {
          * @return OperatePtr The operation object ready for execution
          */
         OperatePtr convertActionToOperate(ActionPtr action, StatePtr state);
+
+        void rebuildModel();
+
+        void addStateTransitionIfPossible(const AbstractAgentPtr &agent,
+                                          const StatePtr &newState,
+                                          const ElementPtr &newTree);
+
+        /**
+         * @brief Pre-evolve model: check under/over abstracted states before adding to graph
+         * 
+         * Implements APE's preEvolveModel flow:
+         * 1. checkUnderAbstractedState() (aggregation)
+         * 2. checkOverAbstractedState() (refinement)
+         * 3. checkUnderAbstractedState() (aggregation again)
+         * 
+         * @param state The state to evolve
+         * @param agent The agent
+         */
+        void preEvolveModel(StatePtr &state, const AbstractAgentPtr &agent);
+
+        /**
+         * @brief Check and refine over-abstracted state
+         * 
+         * @param state The state to check
+         * @param agent The agent
+         */
+        void checkOverAbstractedState(StatePtr &state, const AbstractAgentPtr &agent);
+
+        /**
+         * @brief Check and aggregate under-abstracted state
+         * 
+         * @param state The state to check
+         * @param agent The agent
+         */
+        void checkUnderAbstractedState(StatePtr &state, const AbstractAgentPtr &agent);
+
+        /**
+         * @brief State abstraction: aggregate over-fine states (APE alignment)
+         * 
+         * This is the intermediate layer method that matches APE's Model.stateAbstraction.
+         * Delegates to NamingManager.batchAbstract and triggers rebuild if naming changes.
+         * 
+         * @param naming Current naming (may be too fine)
+         * @param targetState The target state to check
+         * @param parentNaming Parent naming (coarser)
+         * @param states Set of states to consider for abstraction
+         * @return true if abstraction occurred (naming changed)
+         */
+        bool stateAbstraction(const NamingPtr &naming,
+                             const StatePtr &targetState,
+                             const NamingPtr &parentNaming,
+                             const StatePtrSet &states);
+
+        /**
+         * @brief Pre-check trivial new state and refresh if needed
+         * 
+         * If state is trivial, resample multiple times and check top naming equivalence.
+         * 
+         * @param state The state to check
+         * @param element The GUI tree element
+         * @param activityPtr Activity name
+         * @param agent The agent
+         */
+        void preCheckTrivialNewState(StatePtr &state, const ElementPtr &element,
+                                     const stringPtr &activityPtr, const AbstractAgentPtr &agent);
+
+        /**
+         * @brief Validate all actions in the new state
+         * 
+         * Ensures only executable actions participate in priority calculation.
+         * 
+         * @param state The state whose actions to validate
+         */
+        void validateAllNewActions(const StatePtr &state);
+
+        /**
+         * @brief Resolve non-deterministic transitions (APE alignment)
+         * 
+         * Checks if a state transition is non-deterministic (NEW_ACTION_TARGET type)
+         * and triggers refinement if needed.
+         * 
+         * @param edge The state transition to check
+         * @return true if refinement occurred (naming changed)
+         */
+        bool resolveNonDeterministicTransitions(const StateTransitionPtr &edge);
+
+        /**
+         * @brief Restore Q-values after rebuild
+         * 
+         * After rebuild, newly created Action objects have Q-values initialized to 0.
+         * This method restores Q-values from Agent's _reuseQValue mappings to Action objects.
+         * 
+         * Process:
+         * 1. Iterate through all agents
+         * 2. For each agent, iterate through all states in graph
+         * 3. For each state, iterate through all actions
+         * 4. Look up Q-value from agent's Q-value mapping by action hash
+         * 5. Restore Q-value to Action object
+         * 
+         * Supports both ModelReusableAgent (single Q-value) and DoubleSarsaAgent (Q1 and Q2).
+         */
+        void restoreQValuesAfterRebuild();
         
         /// Smart pointer to the graph object managing all states and actions
         GraphPtr _graph;
+
+        NamingManagerPtr _namingManager;
         
         /// Map from device ID to agent object
         /// Allows multiple devices to have different agents with different strategies

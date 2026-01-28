@@ -10,6 +10,7 @@
 #include "State.h"
 #include "../Base.h"
 #include "Element.h"
+#include "naming/Naming.h"
 
 namespace fastbotx {
 
@@ -34,7 +35,8 @@ namespace fastbotx {
          * @return Shared pointer to created State
          */
         static StatePtr
-        createState(AlgorithmType agentT, const stringPtr &activity, const ElementPtr &element);
+        createState(AlgorithmType agentT, const stringPtr &activity, const ElementPtr &element,
+                    const NamingPtr &naming);
     };
 }
 #endif /* SateFactory_H_ */

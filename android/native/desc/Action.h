@@ -10,6 +10,7 @@
 #include "Node.h"
 #include "Base.h"
 #include "Widget.h"
+#include "Element.h"
 #include "DeviceOperateWrapper.h"
 
 #include <utility>
@@ -133,6 +134,14 @@ namespace fastbotx {
 
         std::shared_ptr<Widget> getTarget() const { return this->_target; }
 
+        const std::vector<ElementPtr> &getResolvedNodes() const { return this->_resolvedNodes; }
+
+        void setResolvedNodes(const std::vector<ElementPtr> &nodes) { this->_resolvedNodes = nodes; }
+
+        ElementPtr getResolvedNode() const { return this->_resolvedNode; }
+
+        void setResolvedNode(const ElementPtr &node) { this->_resolvedNode = node; }
+
         bool getEnabled() const override;
 
         bool isValid() const override;
@@ -158,6 +167,8 @@ namespace fastbotx {
         std::weak_ptr<State> _state;
         std::shared_ptr<Widget> _target;
         uintptr_t _hashcode{};
+        std::vector<ElementPtr> _resolvedNodes;
+        ElementPtr _resolvedNode;
 
         ~ActivityStateAction() override;
 

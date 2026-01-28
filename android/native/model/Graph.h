@@ -10,7 +10,11 @@
 #include "State.h"
 #include "Base.h"
 #include "Action.h"
+#include "Element.h"
+#include "naming/Naming.h"
+#include "GUITreeTransition.h"
 #include <map>
+#include <atomic>
 
 namespace fastbotx {
 
@@ -25,6 +29,75 @@ namespace fastbotx {
      * Used for organizing states by their activity context
      */
     typedef std::map<std::string, StatePtrSet> StatePtrStrMap;
+
+    class StateTransition : public HashNode {
+    public:
+        StateTransition(StatePtr sourceState,
+                        ActionType actionType,
+                        uintptr_t targetWidgetHash,
+                        StatePtr targetState,
+                        ElementPtr sourceTree,
+                        ElementPtr targetTree);
+
+        StatePtr getSource() const { return _source; }
+        StatePtr getTarget() const { return _target; }
+        ActionType getActionType() const { return _actionType; }
+        uintptr_t getTargetWidgetHash() const { return _targetWidgetHash; }
+        ElementPtr getSourceTree() const { return _sourceTree; }
+        ElementPtr getTargetTree() const { return _targetTree; }
+
+        /**
+         * @brief Append a GUITreeTransition to this StateTransition (APE alignment)
+         * 
+         * @param treeTransition The GUITreeTransition to append
+         */
+        void appendGUITreeTransition(const GUITreeTransitionPtr &treeTransition);
+
+        /**
+         * @brief Get all GUITreeTransitions (APE alignment)
+         * 
+         * @return Const reference to GUITreeTransition vector
+         */
+        const GUITreeTransitionPtrVec &getGUITreeTransitions() const { return _treeTransitions; }
+
+        /**
+         * @brief Get the last GUITreeTransition (APE alignment)
+         * 
+         * @return Last GUITreeTransition, or nullptr if empty
+         */
+        GUITreeTransitionPtr getLastGUITreeTransition() const;
+
+        /**
+         * @brief Get timestamp from first GUITreeTransition (APE alignment)
+         * 
+         * @return Timestamp, or 0 if no transitions
+         */
+        int getTimestamp() const;
+
+        void incrementVisit() { _visitCount++; }
+        int getVisitCount() const { return _visitCount; }
+
+        bool isStrong() const { return _visitCount > 0; }
+
+        bool isSameActivity() const;
+
+        uintptr_t hash() const override { return _hashcode; }
+
+    private:
+        StatePtr _source;
+        StatePtr _target;
+        ActionType _actionType;
+        uintptr_t _targetWidgetHash;
+        ElementPtr _sourceTree;
+        ElementPtr _targetTree;
+        int _visitCount;
+        uintptr_t _hashcode;
+        
+        /// APE alignment: List of GUITreeTransitions
+        GUITreeTransitionPtrVec _treeTransitions;
+    };
+
+    typedef std::shared_ptr<StateTransition> StateTransitionPtr;
 
     /**
      * @brief Counter for tracking action statistics by action type
@@ -119,7 +192,7 @@ namespace fastbotx {
          * 
          * @return Current timestamp
          */
-        time_t getTimestamp() const { return this->_timeStamp; }
+        time_t getTimestamp() const { return _timeStamp.load(); }
 
         /**
          * @brief Add a listener to be notified when new states are added
@@ -139,6 +212,27 @@ namespace fastbotx {
          */
         StatePtr addState(StatePtr state);
 
+        TransitionVisitType addTransition(const StatePtr &source,
+                                          const ActivityStateActionPtr &action,
+                                          const StatePtr &target,
+                                          const ElementPtr &sourceTree,
+                                          const ElementPtr &targetTree,
+                                          StateTransitionPtr &existingTransition,
+                                          StateTransitionPtr &newTransition);
+
+        const std::vector<StateTransitionPtr> &getTransitions() const { return _transitions; }
+
+        /**
+         * @brief Get outgoing state transitions for a given action
+         * 
+         * Returns all transitions that start from the action's source state and use this action.
+         * Used for priority adjustment based on target state saturation and activity transitions.
+         * 
+         * @param action The action to get transitions for
+         * @return Vector of state transitions
+         */
+        std::vector<StateTransitionPtr> getOutStateTransitions(const ActivityStateActionPtr &action) const;
+
         /**
          * @brief Get total distribution count (total number of state accesses)
          * 
@@ -146,12 +240,85 @@ namespace fastbotx {
          */
         long getTotalDistri() const { return this->_totalDistri; }
 
+        const StatePtrSet &getStatesByNaming(const NamingPtr &naming) const;
+
+        const StatePtrSet &getStates() const { return _states; }
+
+        StatePtrSet getStatesByActivity(const std::string &activity) const;
+
+        /**
+         * @brief Remove a state from the graph and collect all related transitions
+         * 
+         * Removes the state and all transitions connected to it (both incoming and outgoing).
+         * This is used during model rebuild when states need to be removed due to naming changes.
+         * 
+         * @param state The state to remove
+         * @param removedTransitions Output parameter to collect removed transitions
+         */
+        void removeState(const StatePtr &state, std::vector<StateTransitionPtr> &removedTransitions);
+
         /**
          * @brief Get set of all visited activity names
          * 
          * @return Const reference to set of visited activity string pointers
          */
         const stringPtrSet& getVisitedActivities() const { return this->_visitedActivities; };
+
+        /**
+         * @brief Find a visited activity string pointer without allocating
+         *
+         * Avoids creating a temporary shared_ptr<string> (heap allocation) just to probe the set.
+         * Uses a linear scan, which is acceptable because visited activities are typically small.
+         *
+         * @param activity Activity name string
+         * @return Cached stringPtr if found, nullptr otherwise
+         */
+        stringPtr findVisitedActivityPtr(const std::string &activity) const;
+
+        /**
+         * @brief Add an entry GUI tree (first state when app starts)
+         * 
+         * @param tree The entry GUI tree
+         */
+        void addEntryGUITree(const ElementPtr &tree);
+
+        /**
+         * @brief Add a clean entry GUI tree (first state from clean install)
+         * 
+         * @param tree The clean entry GUI tree
+         */
+        void addCleanEntryGUITree(const ElementPtr &tree);
+
+        /**
+         * @brief Check if a state is an entry state
+         * 
+         * @param state The state to check
+         * @return true if state is an entry state
+         */
+        bool isEntryState(const StatePtr &state) const;
+
+        /**
+         * @brief Check if a state is a clean entry state
+         * 
+         * @param state The state to check
+         * @return true if state is a clean entry state
+         */
+        bool isCleanEntryState(const StatePtr &state) const;
+
+        /**
+         * @brief Get tree transition history
+         * 
+         * @return Const reference to tree transition history
+         */
+        const std::vector<StateTransitionPtr> &getTreeTransitionHistory() const { return _treeTransitionHistory; }
+
+        /**
+         * @brief Rebuild state transition history from tree transition history
+         * 
+         * This method rebuilds the state transition history after model rebuild,
+         * ensuring that transitions are properly tracked.
+         */
+        void rebuildHistory();
 
         /**
          * @brief Destructor clears all internal data structures
@@ -181,6 +348,9 @@ namespace fastbotx {
         
         /// Set of all visited activity names (shared pointers to strings for memory efficiency)
         stringPtrSet _visitedActivities;
+
+        /// Map from naming to set of states (for abstraction/refinement)
+        std::map<NamingPtr, StatePtrSet, Comparator<Naming>> _statesByNaming;
         
         /// Map from activity name to (visit_count, percentage) pair
         /// Used for tracking activity distribution statistics
@@ -205,9 +375,30 @@ namespace fastbotx {
         
         /// List of listeners to notify when new states are added
         GraphListenerPtrVec _listeners;
+
+        std::vector<StateTransitionPtr> _transitions;
+        std::map<std::pair<uintptr_t, uintptr_t>, std::vector<StateTransitionPtr>> _transitionsByAction;
+        
+        /// Entry GUI trees (first states when app starts)
+        std::set<ElementPtr, Comparator<Element>> _entryGUITrees;
+        
+        /// Clean entry GUI trees (first states from clean install)
+        std::set<ElementPtr, Comparator<Element>> _cleanEntryGUITrees;
+        
+        /// Entry states (states corresponding to entry GUI trees)
+        StatePtrSet _entryStates;
+        
+        /// Clean entry states (states corresponding to clean entry GUI trees)
+        StatePtrSet _cleanEntryStates;
+        
+        /// Tree transition history (all GUI tree transitions)
+        std::vector<StateTransitionPtr> _treeTransitionHistory;
+        
+        /// State transition history (rebuilt from tree transition history)
+        std::vector<StateTransitionPtr> _stateTransitionHistory;
         
         /// Current timestamp of the graph (updated when states are added)
-        time_t _timeStamp;
+        std::atomic<time_t> _timeStamp;
 
         /// Default distribution pair (0, 0.0) used for initializing new activities
         const static std::pair<int, double> _defaultDistri;

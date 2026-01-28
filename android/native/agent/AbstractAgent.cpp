@@ -154,10 +154,16 @@ namespace fastbotx {
         // Accumulate priority increments for all actions (for calculating total state priority)
         double totalPriority = 0;
         
+        // Get graph for accessing transitions
+        GraphPtr graph = nullptr;
+        if (auto modelPtr = _model.lock()) {
+            graph = modelPtr->getGraph();
+        }
+        
         // Iterate through all actions in state and adjust priorities
         for (const ActivityStateActionPtr &action: _newState->getActions()) {
-            // Get and set base priority
-            int basePriority = action->getPriorityByActionType();
+            // Get and set base priority (APE: basePriority << 3)
+            int basePriority = action->getPriorityByActionType() << 3;
             action->setPriority(basePriority);
             
             // Handle no-target actions (e.g., BACK, FEED system actions)
@@ -176,6 +182,12 @@ namespace fastbotx {
                 continue;  // Skip invalid actions
             }
             
+            // APE: Check if action is resolved at current timestamp
+            // In native, we check if action has resolved nodes
+            if (action->getResolvedNodes().empty() && !action->getResolvedNode()) {
+                continue;  // Action not resolved yet
+            }
+            
             // Calculate priority for target actions
             int priority = action->getPriority();
             
@@ -184,14 +196,52 @@ namespace fastbotx {
                 priority += UnvisitedActionBonus;
             }
             
-            // If new action (state not saturated), significantly increase priority
+            // APE: If action is not saturated, add extra priority for aliased actions
             if (!this->_newState->isSaturated(action)) {
-                priority += NewActionMultiplier * action->getPriorityByActionType();
+                size_t aliasCount = action->getResolvedNodes().size();
+                if (aliasCount == 0 && action->getResolvedNode()) {
+                    aliasCount = 1;
+                }
+                if (aliasCount > 1) {
+                    int extraPriority = static_cast<int>(std::min(aliasCount, static_cast<size_t>(MAX_EXTRA_PRIORITY_ALIASED_ACTIONS))) 
+                                        * action->getPriorityByActionType();
+                    priority += extraPriority;
+                }
+            }
+            
+            // APE: Adjust priority based on out state transitions
+            if (graph) {
+                std::vector<StateTransitionPtr> edges = graph->getOutStateTransitions(action);
+                for (const auto &edge : edges) {
+                    if (!edge) {
+                        continue;
+                    }
+                    // APE: If transition is strong
+                    if (edge->isStrong()) {
+                        StatePtr targetState = edge->getTarget();
+                        if (targetState) {
+                            // APE: If target state is saturated, reduce priority
+                            if (targetState->isSaturated()) {
+                                priority -= 10;
+                            } else {
+                                // APE: If same activity, increase priority
+                                if (edge->isSameActivity()) {
+                                    priority += 10;
+                                }
+                            }
+                        }
+                    } else {
+                        // APE: If weak transition and multiple edges (non-deterministic), increase priority
+                        if (edges.size() > 1) {
+                            priority += 10;
+                        }
+                    }
+                }
             }
 
-            // Ensure priority is not negative
+            // Ensure priority is not negative (APE: minimum is 1)
             if (priority <= 0) {
-                priority = 0;
+                priority = 1;
             }
 
             // Set adjusted priority
@@ -203,6 +253,66 @@ namespace fastbotx {
         
         // Set total state priority
         _newState->setPriority(static_cast<int>(totalPriority));
+    }
+
+    void AbstractAgent::recoverCurrentState() {
+        _currentStateRecovered = false;
+        if (_currentState) {
+            return; // Already have current state
+        }
+        // Note: Full APE implementation uses ActionRecord history from Model
+        // Native implementation would need Model to provide action history
+        // For now, this is a placeholder that can be extended when action history is available
+        BDLOG("recoverCurrentState: Action history not available in native implementation");
+    }
+
+    void AbstractAgent::updateGraph() {
+        // APE alignment: Update graph with current state transition
+        // In native, this logic is handled in Model::addStateTransitionIfPossible
+        // This method is provided for API compatibility
+        if (!_currentState && _appActivityJustStarted) {
+            // Entry state handling is done in Model::addStateTransitionIfPossible
+            _appActivityJustStartedFromClean = false;
+            _appActivityJustStarted = false;
+        }
+        // State transition is handled by Model::addStateTransitionIfPossible
+        checkStable();
+        // APE alignment: Check non-deterministic transitions after updateGraph
+        checkNonDeterministicTransitions();
+    }
+
+    void AbstractAgent::checkStable() {
+        // APE alignment: Check graph/state/activity stability
+        // In native, stability counters are currently unused
+        // This is a placeholder for future implementation
+        BDLOG("Graph Stable Counter: graph (%ld), state (%ld), activity (%ld)",
+              _graphStableCounter, _stateStableCounter, _activityStableCounter);
+        
+        // Note: Full APE implementation calls onGraphStable, onStateStable, onActivityStable
+        // and may request restart if counters exceed thresholds
+        // Native implementation can extend this when stability checking is needed
+    }
+
+    void AbstractAgent::checkNonDeterministicTransitions() {
+        // APE alignment: Check non-deterministic transitions after updateGraph
+        if (_currentStateRecovered) {
+            return; // Skip if state was recovered
+        }
+        auto model = _model.lock();
+        if (!model) {
+            return;
+        }
+        // Check if we have a current state transition
+        if (!_currentStateTransition) {
+            return;
+        }
+        // APE alignment: Call Model.resolveNonDeterministicTransitions
+        bool refined = model->resolveNonDeterministicTransitions(_currentStateTransition);
+        if (refined) {
+            BDLOG("Model has been refined due to non-deterministic transition, reset stateful agent");
+            // Note: In full APE implementation, this would call updateModel and validateAllNewActions
+            // Native implementation: rebuildModel is already called in resolveNonDeterministicTransitions
+        }
     }
 
     /**

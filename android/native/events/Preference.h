@@ -114,6 +114,20 @@ namespace fastbotx {
         // not recursive
         void pruningValidTexts(const ElementPtr &element);
 
+        void pruneInvalidNodes(const ElementPtr &rootXML);
+
+        void patchGUITree(const ElementPtr &node);
+
+        bool doPatchingChildren(const ElementPtr &node) const;
+
+        bool sameRow(const std::vector<ElementPtr> &children) const;
+
+        bool sameColumn(const std::vector<ElementPtr> &children) const;
+
+        void ignoreActionsInWebView(const ElementPtr &node, bool ignore);
+
+        void checkAndRemoveWebView(const ElementPtr &node);
+
         // recursive
         void
         findMatchedElements(std::vector<ElementPtr> &outElements, const XpathPtr &xpathSelector,

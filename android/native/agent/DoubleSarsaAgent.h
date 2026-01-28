@@ -391,6 +391,17 @@ namespace fastbotx {
          * @return Q1-value
          */
         double getQ1Value(const ActionPtr &action);
+
+        /**
+         * @brief Get Q1-value from mapping by action hash (APE alignment)
+         *
+         * This mirrors ModelReusableAgent::getQValueFromMapping and is mainly used for
+         * rebuild-related Q restoration or diagnostics where only the hash is available.
+         *
+         * @param actionHash Action's hash value
+         * @return Q1-value from mapping, or 0.0 if not found
+         */
+        double getQ1ValueFromMapping(uintptr_t actionHash) const;
         
         /**
          * @brief Get action's Q2-value
@@ -399,6 +410,14 @@ namespace fastbotx {
          * @return Q2-value
          */
         double getQ2Value(const ActionPtr &action);
+
+        /**
+         * @brief Get Q2-value from mapping by action hash (APE alignment)
+         *
+         * @param actionHash Action's hash value
+         * @return Q2-value from mapping, or 0.0 if not found
+         */
+        double getQ2ValueFromMapping(uintptr_t actionHash) const;
         
         /**
          * @brief Get action's Q-value (from randomly chosen Q1 or Q2)

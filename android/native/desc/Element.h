@@ -140,7 +140,13 @@ namespace fastbotx {
 
         bool getEnable() const { return this->_enabled; }
 
+        bool getVisible() const { return this->_visible; }
+
         ScrollType getScrollType() const;
+
+        // APE alignment: timestamp of GUI tree snapshot (used for transition sorting)
+        int getTimestamp() const { return _timestamp; }
+        void setTimestamp(int timestamp) { _timestamp = timestamp; }
 
         // reset properties, in Preference
         void reSetResourceID(const std::string &resourceID) { this->_resourceID = resourceID; }
@@ -159,6 +165,12 @@ namespace fastbotx {
 
         void reSetEnabled(bool enable) { this->_enabled = enable; }
 
+        void reSetCheckable(bool checkable) { this->_checkable = checkable; }
+
+        void reSetLongClickable(bool longClickable) { this->_longClickable = longClickable; }
+
+        void reSetVisible(bool visible) { this->_visible = visible; }
+
         void reSetBounds(RectPtr rect) { this->_bounds = std::move(rect); }
 
         void reSetParent(const std::shared_ptr<Element> &parent) { this->_parent = parent; }
@@ -166,6 +178,12 @@ namespace fastbotx {
         void reAddChild(const std::shared_ptr<Element> &child) {
             this->_children.emplace_back(child);
         }
+
+        void adoptChildrenToParent();
+
+        void clearChildren();
+
+        int countDescendants() const;
 
         std::string toJson() const;
 
@@ -209,6 +227,7 @@ namespace fastbotx {
         bool _focusable;
         bool _scrollable;
         bool _longClickable;
+        bool _visible;
         int _childCount;
         bool _focused;
         int _index;
@@ -219,6 +238,9 @@ namespace fastbotx {
         RectPtr _bounds;
         std::vector<std::shared_ptr<Element> > _children;
         std::weak_ptr<Element> _parent;
+
+        // APE alignment: GUI tree snapshot timestamp (monotonic from Graph)
+        int _timestamp{0};
 
         // a construct helper
         static bool _allClickableFalse;

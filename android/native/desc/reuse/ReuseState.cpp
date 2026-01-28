@@ -10,6 +10,7 @@
 #include "ReuseState.h"
 
 #include <utility>
+#include <mutex>
 #include "RichWidget.h"
 #include "ActivityNameAction.h"
 #include "../utils.hpp"
@@ -40,13 +41,20 @@ namespace fastbotx {
      * @param element Element to get bounds from
      */
     void ReuseState::buildBoundingBox(const ElementPtr &element) {
+        if (!element) {
+            return;
+        }
         // Check if this is the root element (no parent)
         if (element->getParent().expired()) {
             RectPtr bounds = element->getBounds();
             // Check bounds validity before using
             if (bounds != nullptr && !bounds->isEmpty()) {
+                // Protect access to static State::_sameRootBounds (shared across all State subclasses).
+                static std::mutex g_sameRootBoundsMutex;
+                std::lock_guard<std::mutex> lock(g_sameRootBoundsMutex);
+
                 // Initialize shared root bounds if empty
-                if (_sameRootBounds->isEmpty() && element) {
+                if (_sameRootBounds && _sameRootBounds->isEmpty()) {
                     _sameRootBounds = bounds;
                 }
                 // Use shared bounds if they match, otherwise use element's bounds
@@ -60,6 +68,10 @@ namespace fastbotx {
     }
 
     void ReuseState::buildStateFromElement(WidgetPtr parentWidget, ElementPtr element) {
+        if (!element) {
+            BLOGE("ReuseState::buildStateFromElement: element is nullptr");
+            return;
+        }
         buildBoundingBox(element);
         // use RichWidget build the states
         WidgetPtr widget = std::make_shared<RichWidget>(parentWidget, element);
@@ -83,6 +95,10 @@ namespace fastbotx {
      * @param elem Element to build widget from (already ElementPtr, no cast needed)
      */
     void ReuseState::buildFromElement(WidgetPtr parentWidget, ElementPtr elem) {
+        if (!elem) {
+            BLOGE("ReuseState::buildFromElement: elem is nullptr");
+            return;
+        }
         buildBoundingBox(elem);
         // Performance: elem is already ElementPtr, no need for dynamic_cast
         // This method is called recursively for children, using regular Widget
@@ -107,17 +123,26 @@ namespace fastbotx {
      * @param activityName Activity name string pointer
      * @return Shared pointer to newly created ReuseState
      */
-    ReuseStatePtr ReuseState::create(const ElementPtr &element, const stringPtr &activityName) {
+    ReuseStatePtr ReuseState::create(const ElementPtr &element, const stringPtr &activityName,
+                                     const NamingPtr &naming) {
         // Use new + shared_ptr instead of make_shared because constructor is protected
         ReuseStatePtr statePointer = std::shared_ptr<ReuseState>(new ReuseState(activityName));
-        statePointer->buildState(element);
+        statePointer->buildState(element, naming);
         return statePointer;
     }
 
-    void ReuseState::buildState(const ElementPtr &element) {
+    void ReuseState::buildState(const ElementPtr &element, const NamingPtr &naming) {
+        if (!element) {
+            BLOGE("ReuseState::buildState: element is nullptr");
+            return;
+        }
         buildStateFromElement(nullptr, element);
         mergeWidgetsInState();
-        buildHashForState();
+        if (naming) {
+            buildStateKey(naming);
+        } else {
+            buildHashForState();
+        }
         buildActionForState();
     }
 
@@ -132,13 +157,13 @@ namespace fastbotx {
      * - Combines activity hash with widget hash
      */
     void ReuseState::buildHashForState() {
-        // Build hash from activity name
-        std::string activityString = *(_activity.get());
-        uintptr_t activityHash = (std::hash<std::string>{}(activityString) * 31U) << 5;
-        
-        // Combine with widget hash (may include order if STATE_WITH_WIDGET_ORDER is enabled)
-        activityHash ^= (combineHash<Widget>(_widgets, STATE_WITH_WIDGET_ORDER) << 1);
-        _hashcode = activityHash;
+        // Deprecated: use buildStateKey() with Naming instead.
+        if (_activity) {
+            std::string activityString = *(_activity.get());
+            uintptr_t activityHash = (std::hash<std::string>{}(activityString) * 31U) << 5;
+            activityHash ^= (combineHash<Widget>(_widgets, STATE_WITH_WIDGET_ORDER) << 1);
+            _hashcode = activityHash;
+        }
     }
 
     /**

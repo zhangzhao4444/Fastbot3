@@ -178,13 +178,19 @@ namespace fastbotx {
     ActivityStateAction::~ActivityStateAction() {
         this->_state.reset();
         this->_target = nullptr;
+        this->_resolvedNodes.clear();
+        this->_resolvedNode = nullptr;
     }
 
     OperatePtr ActivityStateAction::toOperate() const {
         auto opt = Action::toOperate(); // call base virtual method
         opt->sid = this->getState().expired() ? "" : this->getState().lock()->getId();
-        if (this->getTarget()) {
+        if (this->_resolvedNode && this->_resolvedNode->getBounds()) {
+            opt->pos = *(this->_resolvedNode->getBounds());
+        } else if (this->getTarget()) {
             opt->pos = *(this->getTarget()->getBounds());
+        }
+        if (this->getTarget()) {
             opt->editable = this->getTarget()->isEditable();
         }
         return opt;

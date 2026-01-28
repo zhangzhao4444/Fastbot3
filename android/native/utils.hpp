@@ -7,11 +7,14 @@
 #ifndef UTILS_HPP_
 #define UTILS_HPP_
 
-#define _DEBUG_ 1
+#ifndef _DEBUG_
+#define _DEBUG_ 0
+#endif
 #define TAG "[FastbotNative]"
 
 #include <string>
 #include <algorithm>
+#include <cstddef>
 
 #ifdef __ANDROID__
 
@@ -37,23 +40,26 @@
 #define ACTIVITY_VC_STR "ViewController"
 #endif
 
-//#if _DEBUG_
+#if _DEBUG_
 #define BDLOG(fmt, ...)   LOGD(fmt,##__VA_ARGS__)
 #define BDLOGE(fmt, ...)  LOGE(fmt,##__VA_ARGS__)
-//#else
-//#define BDLOGE(...)
-//#define BDLOG(...)
-//#endif
+#else
+#define BDLOGE(...)
+#define BDLOG(...)
+#endif
 
 #define BLOG(fmt, ...)    LOGI(fmt,##__VA_ARGS__)
 #define BLOGE(fmt, ...)   LOGE(fmt,##__VA_ARGS__)
+
+// Shared constant for chunking long log lines (Android logcat truncation guard)
+constexpr std::size_t FASTBOT_MAX_LOG_LEN = 3000;
 
 // Android logcat has a limit of ~4KB per log line
 // Split long strings into chunks to avoid truncation
 inline void logLongStringError(const std::string& longStr) {
     // Android logcat has a limit of ~4KB per log line, but considering log prefix
     // (timestamp, tag, pid, etc.), we use a smaller chunk size to ensure complete output
-    const size_t MAX_LOG_LEN = 3000; // Reduced from 4000 to ensure no truncation
+    const size_t MAX_LOG_LEN = FASTBOT_MAX_LOG_LEN;
     size_t pos = 0;
     size_t totalLen = longStr.length();
     
@@ -78,7 +84,7 @@ inline void logLongStringError(const std::string& longStr) {
 inline void logLongStringInfo(const std::string& longStr) {
     // Android logcat has a limit of ~4KB per log line, but considering log prefix
     // (timestamp, tag, pid, etc.), we use a smaller chunk size to ensure complete output
-    const size_t MAX_LOG_LEN = 3000; // Reduced from 4000 to ensure no truncation
+    const size_t MAX_LOG_LEN = FASTBOT_MAX_LOG_LEN;
     size_t pos = 0;
     size_t totalLen = longStr.length();
     
@@ -126,6 +132,24 @@ inline void logLongStringInfo(const std::string& longStr) {
 #define PARENT_CLICK_CHANGE_CHILDREN 1
 
 #define SCROLL_BOTTOM_UP_N_ENABLE 0
+
+#define ACTION_REFINEMENT_THRESHOLD 3
+#define MAX_INITIAL_NAMES_PER_STATE_THRESHOLD 20
+#define MAX_STATES_PER_ACTIVITY 10
+#define MAX_GUI_TREES_PER_STATE 20
+#define TRIVIAL_STATE_ACTION_THRESHOLD 5
+#define TRIVIAL_STATE_WIDGET_THRESHOLD 5
+#define ACTION_REFINEMENT_FIRST 1
+#define MAX_EXTRA_PRIORITY_ALIASED_ACTIONS 5
+#define IGNORE_EMPTY_NODE 1
+#define IGNORE_OUT_OF_BOUNDS_NODE 1
+#define IGNORE_INVISIBLE_NODE 1
+#define ALWAYS_IGNORE_WEBVIEW 0
+#define IGNORE_WEBVIEW_THRESHOLD 64
+#define EXCLUDE_EMPTY_CHILD 1
+#define ALWAYS_IGNORE_WEBVIEW_ACTION 0
+#define PATCH_GUI_TREE 1
+#define ENABLE_REPLACING_NAMELET 0
 
 #define FASTBOT_VERSION "local build"
 

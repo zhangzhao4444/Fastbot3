@@ -239,6 +239,15 @@ namespace fastbotx {
         }
         return 0.0;  // Default Q-value
     }
+
+    double DoubleSarsaAgent::getQ1ValueFromMapping(uintptr_t actionHash) const {
+        std::lock_guard<std::mutex> reuseGuard(this->_reuseModelLock);
+        auto it = this->_reuseQValue1.find(actionHash);
+        if (it != this->_reuseQValue1.end()) {
+            return it->second;
+        }
+        return 0.0;
+    }
     
     /**
      * @brief Get action's Q2-value
@@ -254,6 +263,15 @@ namespace fastbotx {
             return it->second;
         }
         return 0.0;  // Default Q-value
+    }
+
+    double DoubleSarsaAgent::getQ2ValueFromMapping(uintptr_t actionHash) const {
+        std::lock_guard<std::mutex> reuseGuard(this->_reuseModelLock);
+        auto it = this->_reuseQValue2.find(actionHash);
+        if (it != this->_reuseQValue2.end()) {
+            return it->second;
+        }
+        return 0.0;
     }
     
     /**
@@ -1068,6 +1086,9 @@ namespace fastbotx {
             auto reuseEntryInReuseModel = reusedModelDataPtr->Get(entryIndex);
             uint64_t actionHash = reuseEntryInReuseModel->action();
             auto activityEntry = reuseEntryInReuseModel->targets();
+            if (!activityEntry) {
+                continue;
+            }
             
             // Build activity mapping
             ReuseEntryM entryPtr;
@@ -1112,10 +1133,11 @@ namespace fastbotx {
             // Iterate through reuse model, build FlatBuffers data structure
             for (const auto &actionIterator: this->_reuseModel) {
                 uint64_t actionHash = actionIterator.first;
-                ReuseEntryM activityCountEntryMap = actionIterator.second;
+                const ReuseEntryM &activityCountEntryMap = actionIterator.second;
                 
                 // FlatBuffers needs vector instead of map
                 std::vector<flatbuffers::Offset<fastbotx::ActivityTimes>> activityCountEntryVector;
+                activityCountEntryVector.reserve(activityCountEntryMap.size());
                 
                 // Iterate through activity mapping
                 for (const auto &activityCountEntry: activityCountEntryMap) {

@@ -16,7 +16,7 @@ ELSEIF (CMAKE_SYSTEM_NAME MATCHES "Linux")
 ENDIF (CMAKE_SYSTEM_NAME MATCHES "Android")
 
 IF (CMAKE_BUILD_TYPE MATCHES "Release")
- message(STATUES "compile release")
+ message(STATUS "compile release")
 ELSE (CMAKE_BUILD_TYPE MATCHES "Release")
 add_definitions(-D_DEBUG_)
 ENDIF (CMAKE_BUILD_TYPE MATCHES "Release")
@@ -24,7 +24,7 @@ ENDIF (CMAKE_BUILD_TYPE MATCHES "Release")
 set(ANDROID_STL "c++_static")
 set(CMAKE_CXX_STANDARD 14) 
 set(CMAKE_CXX_STANDARD_REQUIRED on)
-set(LOCAL_CXX_FLAGS "-std=c++14 -fPIC  -fvisibility=hidden -std=c++11 -frtti -Wno-switch-enum -Wno-switch ${LOCAL_CPPFLAGS}")
+set(LOCAL_CXX_FLAGS "-std=c++14 -fPIC -fvisibility=hidden -frtti -Wno-switch-enum -Wno-switch -Wall -Wextra ${LOCAL_CPPFLAGS}")
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../libs/${ANDROID_ABI}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../libs/${ANDROID_ABI}")
@@ -47,6 +47,7 @@ include_directories(
   "./"
   "agent/"
   "desc/"
+  "desc/naming"
   "desc/reuse"
   "events/"
   "model/"
@@ -63,6 +64,7 @@ file( GLOB SRC_LIST
       "*.hpp" 
       "*.cpp" 
       "desc/*.cpp" 
+      "desc/naming/*.cpp"
       "desc/reuse/*.cpp" 
       "model/*.cpp" 
       "agent/*.cpp"
@@ -71,6 +73,10 @@ file( GLOB SRC_LIST
       "thirdpart/tinyxml2/*.cpp"
       "thirdpart/flatbuffers/*.cpp"
       "thirdpart/json/*.hpp")
+
+# Temporarily disable reusable agent (ModelReusableAgent)
+# Keep the file in repo but exclude it from build to reduce binary size and avoid dead code.
+list(FILTER SRC_LIST EXCLUDE REGEX ".*/agent/ModelReusableAgent\\.cpp$")
 
 message(STATUS ${SRC_LIST})
 

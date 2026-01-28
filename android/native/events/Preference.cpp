@@ -7,13 +7,60 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
-#include <regex>
+#include <mutex>
+#include <cstring>
+#include <cstdio>
 #include "utils.hpp"
 #include "Preference.h"
 #include "../thirdpart/json/json.hpp"
 
 
 namespace fastbotx {
+
+    namespace {
+        // Lightweight XPath-like parser helpers.
+        // Input examples (from configs):
+        //   "//*[@resource-id='xxx' and text='yyy' and index=3]"
+        static bool extractQuotedValue(const std::string &s, const char *key, std::string &out) {
+            std::string prefix;
+            prefix.reserve(std::strlen(key) + 2);
+            prefix.append(key);
+            prefix.append("='");
+            const auto start = s.find(prefix);
+            if (start == std::string::npos) {
+                return false;
+            }
+            const auto valueStart = start + prefix.size();
+            const auto end = s.find('\'', valueStart);
+            if (end == std::string::npos || end < valueStart) {
+                return false;
+            }
+            out.assign(s, valueStart, end - valueStart);
+            return true;
+        }
+
+        static bool extractIntValue(const std::string &s, const char *key, int &out) {
+            std::string prefix;
+            prefix.reserve(std::strlen(key) + 1);
+            prefix.append(key);
+            prefix.push_back('=');
+            const auto start = s.find(prefix);
+            if (start == std::string::npos) {
+                return false;
+            }
+            std::size_t i = start + prefix.size();
+            // parse consecutive digits
+            std::size_t j = i;
+            while (j < s.size() && s[j] >= '0' && s[j] <= '9') {
+                ++j;
+            }
+            if (j == i) {
+                return false;
+            }
+            out = std::stoi(s.substr(i, j - i));
+            return true;
+        }
+    } // namespace
 
 
     CustomAction::CustomAction()
@@ -55,30 +102,36 @@ namespace fastbotx {
         if (xpathString.empty())
             return;
         this->_xpathStr = xpathString;
-        std::smatch result;
-        std::regex resourceIDRegex("resource-id='(.*?)'");
-        std::regex textRegex("text='(.*?)'");
-        std::regex indexRegex("index=(\\d+)");
-        std::regex contentRegex("content-desc='(.*?)'");
-        std::regex clazzRegex("class='(.*?)'");
-        if (std::regex_search(xpathString, result, resourceIDRegex)) {
-            this->resourceID = *(result.end() - 1);
+        // Performance: avoid std::regex (expensive on some Android runtimes).
+        extractQuotedValue(xpathString, "resource-id", this->resourceID);
+        extractQuotedValue(xpathString, "text", this->text);
+        extractQuotedValue(xpathString, "content-desc", this->contentDescription);
+        extractQuotedValue(xpathString, "class", this->clazz);
+        extractIntValue(xpathString, "index", this->index);
+        // Determine operation mode:
+        // - If string contains "and" and has more than one '=' token, treat as AND selector.
+        // Use a single-pass scan to avoid multiple full-string traversals.
+        int eqCount = 0;
+        bool hasAndToken = false;
+        for (size_t i = 0; i < xpathString.size(); i++) {
+            const char c = xpathString[i];
+            if (c == '=') {
+                eqCount++;
+            }
+            // Only treat "and" as a boolean operator token when it is delimited,
+            // to avoid false positives like "android".
+            if (!hasAndToken && c == 'a' && i + 2 < xpathString.size()
+                && xpathString[i + 1] == 'n' && xpathString[i + 2] == 'd') {
+                const bool leftDelim = (i == 0) || xpathString[i - 1] == ' ' || xpathString[i - 1] == '[';
+                const bool rightDelim = (i + 3 >= xpathString.size()) || xpathString[i + 3] == ' ' || xpathString[i + 3] == ']';
+                if (leftDelim && rightDelim) {
+                    hasAndToken = true;
+                }
+            }
         }
-        if (std::regex_search(xpathString, result, textRegex)) {
-            this->text = *(result.end() - 1);
-        }
-        if (std::regex_search(xpathString, result, indexRegex)) {
-            this->index = std::stoi(*(result.end() - 1));
-        }
-        if (std::regex_search(xpathString, result, contentRegex)) {
-            this->contentDescription = *(result.end() - 1);
-        }
-        if (std::regex_search(xpathString, result, clazzRegex)) {
-            this->clazz = *(result.end() - 1);
-        }
-        if ((xpathString.find("and")) != std::string::npos
-            && std::count(xpathString.begin(), xpathString.end(), '=') > 1)
+        if (hasAndToken && eqCount > 1) {
             this->operationAND = true;
+        }
         BDLOG(" xpath parsed: res id %s, text %s, index %d, content %s %d",
               this->resourceID.c_str(), this->text.c_str(), this->index,
               this->contentDescription.c_str(), this->operationAND);
@@ -92,9 +145,11 @@ namespace fastbotx {
     }
 
     PreferencePtr Preference::inst() {
-        if (nullptr == _preferenceInst) {
+        // Thread-safety: protect singleton initialization for concurrent JNI calls.
+        static std::once_flag once;
+        std::call_once(once, []() {
             _preferenceInst = std::make_shared<Preference>();
-        }
+        });
         return _preferenceInst;
     }
 
@@ -191,29 +246,34 @@ namespace fastbotx {
             return;
 
         // input texts
-        char prelog[30];
+        char prelog[30] = {0};
         // Use thread-local random number generator for better performance
         // (randomInt already uses thread_local RNG, so no need to initialize here)
         if (opt->editable && opt->getText().empty()
             && (opt->act == ActionType::CLICK || opt->act == ActionType::LONG_CLICK)) {
             if (this->_randomInputText &&
                 this->_inputTexts.size() > 0) {
-                int randIdx = randomInt(0, (int) this->_inputTexts.size());
+                const int inputSize = static_cast<int>(this->_inputTexts.size());
+                int randIdx = randomInt(0, inputSize);
                 std::string &txt = this->_inputTexts[randIdx];
                 opt->setText(txt);
-                strcpy(prelog, "user preset strings");
+                std::snprintf(prelog, sizeof(prelog), "%s", "user preset strings");
             } else {
                 float rate = randomInt(0, 100);
                 if (!this->_fuzzingTexts.empty() && rate < 50) {
-                    int randIdx = randomInt(0, (int) this->_fuzzingTexts.size());
+                    const int fuzzSize = static_cast<int>(this->_fuzzingTexts.size());
+                    int randIdx = randomInt(0, fuzzSize);
                     std::string &txt = this->_fuzzingTexts[randIdx];
                     opt->setText(txt);
-                    strcpy(prelog, "fuzzing text");
+                    std::snprintf(prelog, sizeof(prelog), "%s", "fuzzing text");
                 } else if (rate < 85) {
-                    int randIdx = randomInt(0, (int) this->_pageTextsCache.size());
-                    std::string &txt = this->_pageTextsCache[randIdx];
-                    opt->setText(txt);
-                    strcpy(prelog, "page text");
+                    const int pageTextSize = static_cast<int>(this->_pageTextsCache.size());
+                    if (pageTextSize > 0) {
+                        int randIdx = randomInt(0, pageTextSize);
+                        std::string &txt = this->_pageTextsCache[randIdx];
+                        opt->setText(txt);
+                        std::snprintf(prelog, sizeof(prelog), "%s", "page text");
+                    }
                 }
             }
             BLOG("patch %s input text: %s", prelog, opt->getText().c_str());
@@ -246,6 +306,15 @@ namespace fastbotx {
         if (!this->_rootScreenSize || this->_rootScreenSize->isEmpty()) {
             BLOGE("%s", "No root size in current page");
         }
+#if PATCH_GUI_TREE
+        this->patchGUITree(rootXML);
+#endif
+#if ALWAYS_IGNORE_WEBVIEW_ACTION
+#if !ALWAYS_IGNORE_WEBVIEW
+        this->ignoreActionsInWebView(rootXML, rootXML ? rootXML->isWebView() : false);
+#endif
+#endif
+        this->pruneInvalidNodes(rootXML);
         // recursively resolve black widgets
         this->resolveBlackWidgets(rootXML, activity);
         // recursively deal all rootXML tree
@@ -264,6 +333,243 @@ namespace fastbotx {
             for (const auto &child: element->getChildren()) {
                 this->resolveElement(child, activity);
             }
+        }
+    }
+
+    void Preference::pruneInvalidNodes(const ElementPtr &rootXML) {
+        if (!rootXML) {
+            return;
+        }
+        std::vector<ElementPtr> toDelete;
+        std::vector<ElementPtr> toLift;
+        RectPtr rootBounds = this->_rootScreenSize;
+        if (!rootBounds || rootBounds->isEmpty()) {
+            return;
+        }
+        rootXML->recursiveElements([&](const ElementPtr &elem) {
+            if (!elem || elem->getParent().expired()) {
+                return false;
+            }
+#if ALWAYS_IGNORE_WEBVIEW
+            if (elem->isWebView()) {
+                return true;
+            }
+#else
+            if (IGNORE_WEBVIEW_THRESHOLD > 0 && elem->isWebView() &&
+                elem->getChildren().size() > static_cast<size_t>(IGNORE_WEBVIEW_THRESHOLD)) {
+                return true;
+            }
+#endif
+#if IGNORE_INVISIBLE_NODE
+            if (!elem->getVisible()) {
+                return true;
+            }
+#endif
+            RectPtr bounds = elem->getBounds();
+            if (!bounds || bounds->isEmpty()) {
+#if IGNORE_EMPTY_NODE
+                return true;
+#else
+                return false;
+#endif
+            }
+#if IGNORE_OUT_OF_BOUNDS_NODE
+            Point center = bounds->center();
+            if (!rootBounds->contains(center)) {
+                return true;
+            }
+#endif
+            if (elem->getChildren().empty() &&
+                elem->getText().empty() &&
+                elem->getContentDesc().empty() &&
+                elem->getResourceID().empty()) {
+#if IGNORE_EMPTY_NODE
+                return true;
+#endif
+            }
+#if EXCLUDE_EMPTY_CHILD
+            if (!elem->getChildren().empty() &&
+                elem->getText().empty() &&
+                elem->getContentDesc().empty() &&
+                elem->getResourceID().empty()) {
+                if (elem->getChildren().size() == 1) {
+                    auto child = elem->getChildren().front();
+                    if (child && child->getBounds() && bounds && equals(child->getBounds(), bounds)) {
+                        toLift.emplace_back(elem);
+                    }
+                }
+            }
+#endif
+            return false;
+        }, toDelete);
+        for (const auto &elem : toDelete) {
+            if (elem) {
+                elem->deleteElement();
+            }
+        }
+        for (const auto &elem : toLift) {
+            if (elem) {
+                elem->adoptChildrenToParent();
+            }
+        }
+    }
+
+    void Preference::patchGUITree(const ElementPtr &node) {
+        if (!node || node->getChildren().empty()) {
+            return;
+        }
+        if (node->isWebView()) {
+            return;
+        }
+        RectPtr nodeBounds = node->getBounds();
+        if (!nodeBounds || nodeBounds->isEmpty()) {
+            return;
+        }
+        Rect childrenBounds;
+        bool hasChild = false;
+        for (const auto &child : node->getChildren()) {
+            if (!child || !child->getBounds()) {
+                continue;
+            }
+            RectPtr cb = child->getBounds();
+            if (!hasChild) {
+                childrenBounds = *cb;
+                hasChild = true;
+            } else {
+                childrenBounds.left = std::min(childrenBounds.left, cb->left);
+                childrenBounds.right = std::max(childrenBounds.right, cb->right);
+                childrenBounds.top = std::min(childrenBounds.top, cb->top);
+                childrenBounds.bottom = std::max(childrenBounds.bottom, cb->bottom);
+            }
+        }
+        if (hasChild &&
+            nodeBounds->left <= childrenBounds.left &&
+            nodeBounds->right >= childrenBounds.right &&
+            nodeBounds->top <= childrenBounds.top &&
+            nodeBounds->bottom >= childrenBounds.bottom) {
+            if (doPatchingChildren(node)) {
+                auto children = node->getChildren();
+                for (const auto &child : children) {
+                    if (!child) {
+                        continue;
+                    }
+                    if (!child->getClickable()) {
+                        child->reSetClickable(true);
+                        if (children.size() == 1) {
+                            if (node->getIndex() != child->getIndex()) {
+                                child->reSetIndex(node->getIndex());
+                            }
+                        }
+                    }
+                }
+                Point center = nodeBounds->center();
+                if (childrenBounds.left <= center.x &&
+                    childrenBounds.right >= center.x &&
+                    childrenBounds.top <= center.y &&
+                    childrenBounds.bottom >= center.y) {
+                    node->reSetClickable(false);
+                }
+            }
+        }
+        for (const auto &child : node->getChildren()) {
+            patchGUITree(child);
+        }
+        if (!ALWAYS_IGNORE_WEBVIEW) {
+            checkAndRemoveWebView(node);
+        }
+    }
+
+    bool Preference::sameRow(const std::vector<ElementPtr> &children) const {
+        int top = -1;
+        int bottom = -1;
+        for (const auto &child : children) {
+            if (!child || !child->getBounds()) {
+                continue;
+            }
+            RectPtr bounds = child->getBounds();
+            if (top == -1) {
+                top = bounds->top;
+                bottom = bounds->bottom;
+            } else if (top != bounds->top || bottom != bounds->bottom) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool Preference::sameColumn(const std::vector<ElementPtr> &children) const {
+        int left = -1;
+        int right = -1;
+        for (const auto &child : children) {
+            if (!child || !child->getBounds()) {
+                continue;
+            }
+            RectPtr bounds = child->getBounds();
+            if (left == -1) {
+                left = bounds->left;
+                right = bounds->right;
+            } else if (left != bounds->left || right != bounds->right) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool Preference::doPatchingChildren(const ElementPtr &node) const {
+        if (!node || !node->getClickable()) {
+            return false;
+        }
+        if (node->getChildren().empty()) {
+            return false;
+        }
+        if (node->getChildren().size() == 1) {
+            return true;
+        }
+        if (sameRow(node->getChildren())) {
+            return true;
+        }
+        if (sameColumn(node->getChildren())) {
+            return true;
+        }
+        return false;
+    }
+
+    void Preference::ignoreActionsInWebView(const ElementPtr &node, bool ignore) {
+        if (!node) {
+            return;
+        }
+        if (ignore) {
+            if (node->getClickable()) {
+                node->reSetClickable(false);
+            }
+            if (node->getCheckable()) {
+                node->reSetCheckable(false);
+            }
+            if (node->getLongClickable()) {
+                node->reSetLongClickable(false);
+            }
+            if (node->getScrollable()) {
+                node->reSetScrollable(false);
+            }
+        }
+        if (node->isWebView()) {
+            ignore = true;
+        }
+        if (node->getChildren().empty()) {
+            return;
+        }
+        for (const auto &child : node->getChildren()) {
+            ignoreActionsInWebView(child, ignore);
+        }
+    }
+
+    void Preference::checkAndRemoveWebView(const ElementPtr &node) {
+        if (!node || !node->isWebView()) {
+            return;
+        }
+        int count = node->countDescendants();
+        if (count > IGNORE_WEBVIEW_THRESHOLD) {
+            node->clearChildren();
         }
     }
 

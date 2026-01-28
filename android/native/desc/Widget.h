@@ -54,6 +54,14 @@ namespace fastbotx {
 
         std::string getText() const { return this->_text; }
 
+        const std::string &getClassName() const { return this->_clazz; }
+
+        const std::string &getResourceID() const { return this->_resourceID; }
+
+        const std::string &getContentDesc() const { return this->_contextDesc; }
+
+        int getIndex() const { return this->_index; }
+
         bool getEnabled() const { return this->_enabled; }
 
         bool hasOperate(OperateType opt) const { return this->_operateMask & opt; }

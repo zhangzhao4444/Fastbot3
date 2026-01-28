@@ -18,6 +18,7 @@
 #include <cmath>
 #include <sstream>
 #include <cinttypes>
+#include <mutex>
 
 namespace fastbotx {
 
@@ -101,12 +102,11 @@ namespace fastbotx {
         StatePtr sharedPtr = std::shared_ptr<State>(new State(std::move(activityName)));
         sharedPtr->buildFromElement(nullptr, std::move(elem));
         
-        // Compute hash based on activity name
+        // Compute hash based on activity name (fallback when naming is not available)
         uintptr_t activityHash;
         if (sharedPtr->_activity == nullptr || sharedPtr->_activity.get() == nullptr) {
             BLOGE("State::create: activity is nullptr, using empty string for hash");
             activityHash = (std::hash<std::string>{}("") * 31U) << 5;
-            // Continue with empty activity hash (should not happen in normal flow)
         } else {
             activityHash =
                     (std::hash<std::string>{}(*(sharedPtr->_activity.get())) * 31U) << 5;
@@ -171,6 +171,24 @@ namespace fastbotx {
         return sharedPtr;
     }
 
+    void State::buildStateKey(const NamingPtr &naming) {
+        if (!naming) {
+            return;
+        }
+        _currentNaming = naming;
+        Naming::NamingResult result = naming->namingWidgets(_widgets, _rootBounds);
+        _nameWidgets = result.names;
+        _widgetNames.clear();
+        for (size_t i = 0; i < result.nodes.size() && i < result.names.size(); i++) {
+            if (result.nodes[i] && result.names[i]) {
+                _widgetNames[result.nodes[i]->hash()] = result.names[i];
+            }
+        }
+        std::string activity = _activity ? *_activity.get() : "";
+        _stateKey = std::make_shared<StateKey>(activity, naming, _nameWidgets);
+        _hashcode = _stateKey->hash();
+    }
+
     /**
      * @brief Check if an action is saturated (visited too many times)
      * 
@@ -213,18 +231,164 @@ namespace fastbotx {
         return action->getVisitedCount() >= 1;
     }
 
+    bool State::isSaturated() const {
+        for (const auto &action : _actions) {
+            if (!action) {
+                continue;
+            }
+            // Check if action is enabled and valid
+            if (!action->getEnabled() || !action->isValid()) {
+                continue;
+            }
+            // If any action is not saturated, state is not saturated
+            if (!isSaturated(action)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    int State::getMergedWidgetCount(uintptr_t widgetHash) const {
+        auto mergedIt = this->_mergedWidgets.find(widgetHash);
+        if (mergedIt != this->_mergedWidgets.end()) {
+            return static_cast<int>(mergedIt->second.size());
+        }
+        return 0;
+    }
+
+    NamePtr State::getNameForWidgetHash(uintptr_t widgetHash) const {
+        auto iter = _widgetNames.find(widgetHash);
+        if (iter != _widgetNames.end()) {
+            return iter->second;
+        }
+        return nullptr;
+    }
+
+    ActivityStateActionPtr State::getActionByTargetHash(ActionType type, uintptr_t widgetHash) const {
+        for (const auto &action : _actions) {
+            if (!action || !action->requireTarget()) {
+                continue;
+            }
+            auto target = action->getTarget();
+            if (!target) {
+                continue;
+            }
+            if (action->getActionType() == type && target->hash() == widgetHash) {
+                return action;
+            }
+        }
+        return nullptr;
+    }
+
+    ActivityStateActionPtr State::getActionByType(ActionType type) const {
+        for (const auto &action : _actions) {
+            if (!action || action->requireTarget()) {
+                continue;
+            }
+            if (action->getActionType() == type) {
+                return action;
+            }
+        }
+        return nullptr;
+    }
+
+    ActivityStateActionPtr State::relocateAction(ActionType type, const NamePtr &targetName) const {
+        if (!targetName) {
+            return getActionByType(type);
+        }
+        ActivityStateActionPtr best;
+        size_t bestFineness = 0;
+        for (const auto &action : _actions) {
+            if (!action || !action->requireTarget()) {
+                continue;
+            }
+            if (action->getActionType() != type) {
+                continue;
+            }
+            auto target = action->getTarget();
+            if (!target) {
+                continue;
+            }
+            NamePtr candidateName = getNameForWidgetHash(target->hash());
+            if (!candidateName || !candidateName->getNamer()) {
+                continue;
+            }
+            if (!candidateName->refinesTo(targetName) && !targetName->refinesTo(candidateName)) {
+                continue;
+            }
+            size_t fineness = candidateName->getNamer()->getNamerTypes().size();
+            if (!best || fineness > bestFineness) {
+                best = action;
+                bestFineness = fineness;
+            }
+        }
+        return best;
+    }
+
+    void State::appendTree(const ElementPtr &tree) {
+        if (!tree) {
+            return;
+        }
+        _treeHistory.emplace_back(tree);
+    }
+
+    ElementPtr State::getLatestTree() const {
+        if (_treeHistory.empty()) {
+            return nullptr;
+        }
+        return _treeHistory.back();
+    }
+
+    void State::resolveActionTargets(const ElementPtr &tree) {
+        if (!tree) {
+            return;
+        }
+        for (const auto &action : _actions) {
+            if (!action || !action->requireTarget()) {
+                continue;
+            }
+            auto target = action->getTarget();
+            if (!target) {
+                continue;
+            }
+            auto xpath = std::make_shared<Xpath>();
+            xpath->clazz = target->getClassName();
+            xpath->resourceID = target->getResourceID();
+            xpath->text = target->getText();
+            xpath->contentDescription = target->getContentDesc();
+            xpath->index = target->getIndex();
+            xpath->operationAND = true;
+
+            std::vector<ElementPtr> matched;
+            if (tree->matchXpathSelector(xpath)) {
+                matched.emplace_back(tree);
+            }
+            tree->recursiveElements([&](const ElementPtr &elem) {
+                return elem->matchXpathSelector(xpath);
+            }, matched);
+            action->setResolvedNodes(matched);
+        }
+    }
+
     RectPtr State::_sameRootBounds = std::make_shared<Rect>();
+    namespace {
+        // Protect static shared root bounds across threads/states.
+        std::mutex g_sameRootBoundsMutex;
+    }
 
     void State::buildFromElement(WidgetPtr parentWidget, ElementPtr elem) {
         // Handle root element bounds
         if (elem != nullptr && elem->getParent().expired()) {
             RectPtr elemBounds = elem->getBounds();
             if (elemBounds != nullptr && !elemBounds->isEmpty()) {
+                // Protect access to static _sameRootBounds to avoid races under concurrent state builds.
+                std::lock_guard<std::mutex> lock(g_sameRootBoundsMutex);
+
                 // Initialize static root bounds (only on first call)
-                if (_sameRootBounds->isEmpty()) {
+                if (_sameRootBounds && _sameRootBounds->isEmpty()) {
                     _sameRootBounds = elemBounds;
                 }
-                
+
                 // If current bounds match static bounds, use static reference (save memory)
                 if (equals(_sameRootBounds, elemBounds)) {
                     this->_rootBounds = _sameRootBounds;
@@ -246,6 +410,9 @@ namespace fastbotx {
         
         // Recursively process children
         for (const auto &childElement: elem->getChildren()) {
+            if (!childElement) {
+                continue;
+            }
             buildFromElement(widget, childElement);
         }
     }
@@ -440,6 +607,16 @@ namespace fastbotx {
         
         if (action->getTarget() == nullptr) {
             return action;
+        }
+
+        const auto &resolvedNodes = action->getResolvedNodes();
+        if (!resolvedNodes.empty()) {
+            int total = static_cast<int>(resolvedNodes.size());
+            if (total > 0) {
+                int index = action->getVisitedCount() % total;
+                action->setResolvedNode(resolvedNodes[index]);
+                return action;
+            }
         }
         
         uintptr_t h = action->getTarget()->hash();
