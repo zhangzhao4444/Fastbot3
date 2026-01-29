@@ -150,6 +150,17 @@ namespace fastbotx {
         Model& rebuild();
 
         /**
+         * @brief Resolve non-deterministic transitions (APE alignment)
+         * 
+         * Checks if a state transition is non-deterministic (NEW_ACTION_TARGET type)
+         * and triggers refinement if needed.
+         * 
+         * @param edge The state transition to check
+         * @return true if refinement occurred (naming changed)
+         */
+        bool resolveNonDeterministicTransitions(const StateTransitionPtr &edge);
+
+        /**
          * @brief Set the package name for network action parameters
          * 
          * @param packageName The package name string
@@ -316,17 +327,6 @@ namespace fastbotx {
          * @param state The state whose actions to validate
          */
         void validateAllNewActions(const StatePtr &state);
-
-        /**
-         * @brief Resolve non-deterministic transitions (APE alignment)
-         * 
-         * Checks if a state transition is non-deterministic (NEW_ACTION_TARGET type)
-         * and triggers refinement if needed.
-         * 
-         * @param edge The state transition to check
-         * @return true if refinement occurred (naming changed)
-         */
-        bool resolveNonDeterministicTransitions(const StateTransitionPtr &edge);
 
         /**
          * @brief Restore Q-values after rebuild

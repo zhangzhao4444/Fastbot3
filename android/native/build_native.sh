@@ -30,7 +30,7 @@ build_abi() {
     # Configure CMake
     cmake -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
           -DANDROID_ABI="$ABI" \
-          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_BUILD_TYPE=Debug \
           .
     
     if [ $? -ne 0 ]; then

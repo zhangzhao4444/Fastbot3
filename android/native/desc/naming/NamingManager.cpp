@@ -172,7 +172,11 @@ namespace fastbotx {
         if (!action || !_currentNaming) {
             return _currentNaming;
         }
-        NamingPtr updated = _factory->refineForAliasedAction(_currentNaming, action);
+        StatePtr state = action->getState().lock();
+        if (!state) {
+            return _currentNaming;
+        }
+        NamingPtr updated = _factory->refineForAliasedAction(_currentNaming, state);
         if (updated && updated != _currentNaming) {
             _currentNaming = updated;
             _version++;

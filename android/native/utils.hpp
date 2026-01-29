@@ -78,6 +78,9 @@ inline void logLongStringError(const std::string& longStr) {
         pos += chunkLen;
         chunkNum++;
     }
+    // Silence unused-variable warnings in non-debug builds where BDLOGE is a no-op.
+    (void)chunkNum;
+    (void)totalChunks;
 }
 
 // Log long string at INFO level (for debug information like state)
@@ -103,6 +106,9 @@ inline void logLongStringInfo(const std::string& longStr) {
         pos += chunkLen;
         chunkNum++;
     }
+    // Silence unused-variable warnings in non-debug builds where BDLOG is a no-op.
+    (void)chunkNum;
+    (void)totalChunks;
 }
 
 // If should drop detail after hashing

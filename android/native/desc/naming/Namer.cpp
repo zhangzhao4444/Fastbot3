@@ -85,7 +85,11 @@ namespace fastbotx {
                 }
             }
         }
-        return std::make_shared<Name>(shared_from_this(), std::move(attrs));
+        // In a const method, shared_from_this() yields shared_ptr<const Namer>.
+        // Cast away constness for storing in Name, which only keeps a logical
+        // association with the Namer configuration.
+        auto self = std::const_pointer_cast<Namer>(shared_from_this());
+        return std::make_shared<Name>(self, std::move(attrs));
     }
 
     NamerPtr NamerFactory::getNamer(const std::set<NamerType> &types) {

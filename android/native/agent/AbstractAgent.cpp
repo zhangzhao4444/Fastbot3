@@ -59,6 +59,7 @@ namespace fastbotx {
         this->_currentAction.reset();
         this->_newAction.reset();
         this->_validateFilter.reset();
+        this->_currentStateTransition.reset();
     }
 
     /**

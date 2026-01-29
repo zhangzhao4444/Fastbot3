@@ -712,6 +712,7 @@ namespace fastbotx {
             return;
         }
         int iteration = 0;
+        (void)iteration; // suppress unused warning in non-debug builds where BDLOG is a no-op
         while (true) {
             BDLOG("Check over-abstracted state %s: #%d", state->getId().c_str(), iteration++);
             StatePtr oldState = state;
@@ -760,6 +761,7 @@ namespace fastbotx {
             return;
         }
         int iteration = 0;
+        (void)iteration;
         while (true) {
             BDLOG("Check under-abstracted state %s: #%d", state->getId().c_str(), iteration++);
             StatePtr oldState = state;

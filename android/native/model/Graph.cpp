@@ -17,7 +17,10 @@ namespace fastbotx {
 
     namespace {
         uintptr_t makeActionKey(ActionType type, uintptr_t targetHash) {
-            return (static_cast<uintptr_t>(type) << 48) ^ targetHash;
+            // Use 64-bit intermediate to avoid shift-count overflow on 32-bit
+            // platforms where uintptr_t is 32 bits wide.
+            uint64_t key = (static_cast<uint64_t>(type) << 48) ^ static_cast<uint64_t>(targetHash);
+            return static_cast<uintptr_t>(key);
         }
     }
 

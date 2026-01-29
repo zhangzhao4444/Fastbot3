@@ -65,6 +65,12 @@ namespace fastbotx {
     /// Class for identifying node or element, could be used for merging elements.
     class HashNode {
     public:
+        // Provide a virtual destructor so derived classes that add virtual
+        // functions (such as overriding hash()) are safely destructible via
+        // base-class pointers and do not trigger compiler diagnostics about
+        // non-virtual destructors on polymorphic types.
+        virtual ~HashNode() = default;
+
         virtual uintptr_t hash() const {
             return reinterpret_cast<uintptr_t>(this);
         }
@@ -91,11 +97,15 @@ namespace fastbotx {
         return *(left.get()) == *(right.get());
     }
 
-    // for std::sort
+    // Generic comparator for shared_ptr<T> used in ordered containers.
+    // We compare by raw pointer address to provide a strict weak ordering
+    // without requiring T to implement operator<. This is sufficient for
+    // sets/maps where logical equality is determined separately (e.g. by hash).
     template<typename T>
     struct Comparator {
-        bool operator()(std::shared_ptr<T> const &left, std::shared_ptr<T> const &right) const {
-            return *left.get() < *right.get();
+        bool operator()(const std::shared_ptr<T> &left,
+                        const std::shared_ptr<T> &right) const {
+            return left.get() < right.get();
         }
     };
 

@@ -256,6 +256,9 @@ namespace fastbotx {
         /// Newly selected action (action used to reach _newState)
         ActivityStateActionPtr _newAction;
 
+        /// Current state transition associated with the agent (APE alignment)
+        StateTransitionPtr _currentStateTransition;
+
 //    ActionRecordPtrVec  _actionHistory;
 
         /// Action validation filter for filtering invalid actions

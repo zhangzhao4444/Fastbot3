@@ -14,6 +14,13 @@
 
 namespace fastbotx {
 
+    // Forward declaration for helper used later in this translation unit.
+    namespace {
+        StateKeyPtr buildStateKeyForTree(const ElementPtr &tree,
+                                         const stringPtr &activity,
+                                         const NamingPtr &naming);
+    }
+
     NamingFactory::NamingFactory() {
         _base = createBaseNaming();
         _top = createTopNaming();
@@ -118,7 +125,7 @@ namespace fastbotx {
         return filter;
     }
 
-    NamingPtr NamingFactory::refineForAliasedAction(const NamingPtr &current, const StatePtr &state) const {
+    NamingPtr NamingFactory::refineForAliasedAction(const NamingPtr &current, const StatePtr &state) {
         if (!current || !state) {
             return current;
         }
@@ -180,7 +187,7 @@ namespace fastbotx {
                                            const StatePtr &initialState,
                                            const NamingPtr &targetParentNaming,
                                            const StatePtrSet &targetStates,
-                                           const GraphPtr &graph) const {
+                                           const GraphPtr &graph) {
         // APE alignment: batchAbstract signature matches APE's implementation
         // Step 1: Validate inputs
         if (!targetNaming || !initialState || !targetParentNaming || !graph) {
@@ -189,13 +196,27 @@ namespace fastbotx {
         if (!initialState->getLatestTree()) {
             return targetNaming;
         }
+
+        // Local helper to build StateKey for a given tree/activity/naming triple.
+        auto buildKeyFor = [](const ElementPtr &tree,
+                              const stringPtr &activity,
+                              const NamingPtr &naming) -> StateKeyPtr {
+            if (!tree || !activity || !naming) {
+                return nullptr;
+            }
+            ReuseStatePtr temp = ReuseState::create(tree, activity, naming);
+            if (!temp) {
+                return nullptr;
+            }
+            return temp->getStateKey();
+        };
         
         // Step 2: Filter targets - find states in the same parent abstract block
         // APE: filterTargets(initialState, targetNaming, targetStates)
         // In parent naming, compute originStateKey for initialState
-        StateKeyPtr originStateKey = buildStateKeyForTree(initialState->getLatestTree(),
-                                                         initialState->getActivityString(),
-                                                         targetParentNaming);
+        StateKeyPtr originStateKey = buildKeyFor(initialState->getLatestTree(),
+                                                 initialState->getActivityString(),
+                                                 targetParentNaming);
         if (!originStateKey) {
             return targetNaming;
         }
@@ -215,18 +236,18 @@ namespace fastbotx {
                 continue;
             }
             // Check if state belongs to the same parent abstract block
-            StateKeyPtr parentKey = buildStateKeyForTree(state->getLatestTree(),
-                                                         state->getActivityString(),
-                                                         targetParentNaming);
+            StateKeyPtr parentKey = buildKeyFor(state->getLatestTree(),
+                                                state->getActivityString(),
+                                                targetParentNaming);
             if (!parentKey || parentKey->hash() != originStateKey->hash()) {
                 continue;
             }
             affectedStates.emplace_back(state);
-            // Collect all trees from affected states
+                // Collect all trees from affected states
             for (const auto &tree : state->getTreeHistory()) {
                 affectedTrees.insert(tree);
                 // Compute StateKey in targetNaming for this tree
-                StateKeyPtr key = buildStateKeyForTree(tree, state->getActivityString(), targetNaming);
+                StateKeyPtr key = buildKeyFor(tree, state->getActivityString(), targetNaming);
                 if (key) {
                     targetKeys.insert(key->hash());
                 }
@@ -248,9 +269,10 @@ namespace fastbotx {
         // - Add AssertStatesFewerThan predicate
         // - Return parent naming
         std::vector<ElementPtr> trees(affectedTrees.begin(), affectedTrees.end());
-        blacklistNaming(trees, targetNaming);
-        removeConflictingPredicates(targetParentNaming, trees);
-        addPredicate(std::make_shared<AssertStatesFewerThan>(targetParentNaming, trees, threshold));
+        auto *self = const_cast<NamingFactory *>(this);
+        self->blacklistNaming(trees, targetNaming);
+        self->removeConflictingPredicates(targetParentNaming, trees);
+        self->addPredicate(std::make_shared<AssertStatesFewerThan>(targetParentNaming, trees, threshold));
         
         return targetParentNaming;
     }
@@ -435,7 +457,7 @@ namespace fastbotx {
                                                      const StateTransitionPtr &st1,
                                                      const StateTransitionPtr &st2,
                                                      const GraphPtr &graph,
-                                                     const std::function<bool(const NamingPtr &)> &isLeaf) const {
+                                                     const std::function<bool(const NamingPtr &)> &isLeaf) {
         if (!current || !st1 || !st2 || !graph) {
             return current;
         }
@@ -545,7 +567,8 @@ namespace fastbotx {
                 if (skip) {
                     continue;
                 }
-                addPredicate(std::make_shared<AssertActionDivergent>(newNaming, affectedTrees, targetHash));
+                const_cast<NamingFactory *>(this)
+                        ->addPredicate(std::make_shared<AssertActionDivergent>(newNaming, affectedTrees, targetHash));
                 return newNaming;
             }
             return nullptr;
@@ -635,7 +658,8 @@ namespace fastbotx {
                     }
                     std::vector<ElementPtr> group1 = {tree1};
                     std::vector<ElementPtr> group2 = {tree2};
-                    addPredicate(std::make_shared<AssertSourceDivergent>(newNaming, group1, group2));
+                    const_cast<NamingFactory *>(this)
+                            ->addPredicate(std::make_shared<AssertSourceDivergent>(newNaming, group1, group2));
                     return newNaming;
                 }
             }

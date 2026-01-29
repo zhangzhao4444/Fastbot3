@@ -225,30 +225,6 @@ agent/DoubleSarsaAgent.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/DoubleSarsaAgent.cpp.s
 .PHONY : agent/DoubleSarsaAgent.cpp.s
 
-agent/ModelReusableAgent.o: agent/ModelReusableAgent.cpp.o
-.PHONY : agent/ModelReusableAgent.o
-
-# target to build an object file
-agent/ModelReusableAgent.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/ModelReusableAgent.cpp.o
-.PHONY : agent/ModelReusableAgent.cpp.o
-
-agent/ModelReusableAgent.i: agent/ModelReusableAgent.cpp.i
-.PHONY : agent/ModelReusableAgent.i
-
-# target to preprocess a source file
-agent/ModelReusableAgent.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/ModelReusableAgent.cpp.i
-.PHONY : agent/ModelReusableAgent.cpp.i
-
-agent/ModelReusableAgent.s: agent/ModelReusableAgent.cpp.s
-.PHONY : agent/ModelReusableAgent.s
-
-# target to generate assembly for a file
-agent/ModelReusableAgent.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/ModelReusableAgent.cpp.s
-.PHONY : agent/ModelReusableAgent.cpp.s
-
 desc/Action.o: desc/Action.cpp.o
 .PHONY : desc/Action.o
 
@@ -441,6 +417,198 @@ desc/Widget.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/Widget.cpp.s
 .PHONY : desc/Widget.cpp.s
 
+desc/naming/Name.o: desc/naming/Name.cpp.o
+.PHONY : desc/naming/Name.o
+
+# target to build an object file
+desc/naming/Name.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/Name.cpp.o
+.PHONY : desc/naming/Name.cpp.o
+
+desc/naming/Name.i: desc/naming/Name.cpp.i
+.PHONY : desc/naming/Name.i
+
+# target to preprocess a source file
+desc/naming/Name.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/Name.cpp.i
+.PHONY : desc/naming/Name.cpp.i
+
+desc/naming/Name.s: desc/naming/Name.cpp.s
+.PHONY : desc/naming/Name.s
+
+# target to generate assembly for a file
+desc/naming/Name.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/Name.cpp.s
+.PHONY : desc/naming/Name.cpp.s
+
+desc/naming/Namelet.o: desc/naming/Namelet.cpp.o
+.PHONY : desc/naming/Namelet.o
+
+# target to build an object file
+desc/naming/Namelet.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/Namelet.cpp.o
+.PHONY : desc/naming/Namelet.cpp.o
+
+desc/naming/Namelet.i: desc/naming/Namelet.cpp.i
+.PHONY : desc/naming/Namelet.i
+
+# target to preprocess a source file
+desc/naming/Namelet.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/Namelet.cpp.i
+.PHONY : desc/naming/Namelet.cpp.i
+
+desc/naming/Namelet.s: desc/naming/Namelet.cpp.s
+.PHONY : desc/naming/Namelet.s
+
+# target to generate assembly for a file
+desc/naming/Namelet.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/Namelet.cpp.s
+.PHONY : desc/naming/Namelet.cpp.s
+
+desc/naming/Namer.o: desc/naming/Namer.cpp.o
+.PHONY : desc/naming/Namer.o
+
+# target to build an object file
+desc/naming/Namer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/Namer.cpp.o
+.PHONY : desc/naming/Namer.cpp.o
+
+desc/naming/Namer.i: desc/naming/Namer.cpp.i
+.PHONY : desc/naming/Namer.i
+
+# target to preprocess a source file
+desc/naming/Namer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/Namer.cpp.i
+.PHONY : desc/naming/Namer.cpp.i
+
+desc/naming/Namer.s: desc/naming/Namer.cpp.s
+.PHONY : desc/naming/Namer.s
+
+# target to generate assembly for a file
+desc/naming/Namer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/Namer.cpp.s
+.PHONY : desc/naming/Namer.cpp.s
+
+desc/naming/Naming.o: desc/naming/Naming.cpp.o
+.PHONY : desc/naming/Naming.o
+
+# target to build an object file
+desc/naming/Naming.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/Naming.cpp.o
+.PHONY : desc/naming/Naming.cpp.o
+
+desc/naming/Naming.i: desc/naming/Naming.cpp.i
+.PHONY : desc/naming/Naming.i
+
+# target to preprocess a source file
+desc/naming/Naming.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/Naming.cpp.i
+.PHONY : desc/naming/Naming.cpp.i
+
+desc/naming/Naming.s: desc/naming/Naming.cpp.s
+.PHONY : desc/naming/Naming.s
+
+# target to generate assembly for a file
+desc/naming/Naming.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/Naming.cpp.s
+.PHONY : desc/naming/Naming.cpp.s
+
+desc/naming/NamingFactory.o: desc/naming/NamingFactory.cpp.o
+.PHONY : desc/naming/NamingFactory.o
+
+# target to build an object file
+desc/naming/NamingFactory.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/NamingFactory.cpp.o
+.PHONY : desc/naming/NamingFactory.cpp.o
+
+desc/naming/NamingFactory.i: desc/naming/NamingFactory.cpp.i
+.PHONY : desc/naming/NamingFactory.i
+
+# target to preprocess a source file
+desc/naming/NamingFactory.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/NamingFactory.cpp.i
+.PHONY : desc/naming/NamingFactory.cpp.i
+
+desc/naming/NamingFactory.s: desc/naming/NamingFactory.cpp.s
+.PHONY : desc/naming/NamingFactory.s
+
+# target to generate assembly for a file
+desc/naming/NamingFactory.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/NamingFactory.cpp.s
+.PHONY : desc/naming/NamingFactory.cpp.s
+
+desc/naming/NamingManager.o: desc/naming/NamingManager.cpp.o
+.PHONY : desc/naming/NamingManager.o
+
+# target to build an object file
+desc/naming/NamingManager.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/NamingManager.cpp.o
+.PHONY : desc/naming/NamingManager.cpp.o
+
+desc/naming/NamingManager.i: desc/naming/NamingManager.cpp.i
+.PHONY : desc/naming/NamingManager.i
+
+# target to preprocess a source file
+desc/naming/NamingManager.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/NamingManager.cpp.i
+.PHONY : desc/naming/NamingManager.cpp.i
+
+desc/naming/NamingManager.s: desc/naming/NamingManager.cpp.s
+.PHONY : desc/naming/NamingManager.s
+
+# target to generate assembly for a file
+desc/naming/NamingManager.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/NamingManager.cpp.s
+.PHONY : desc/naming/NamingManager.cpp.s
+
+desc/naming/Predicate.o: desc/naming/Predicate.cpp.o
+.PHONY : desc/naming/Predicate.o
+
+# target to build an object file
+desc/naming/Predicate.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/Predicate.cpp.o
+.PHONY : desc/naming/Predicate.cpp.o
+
+desc/naming/Predicate.i: desc/naming/Predicate.cpp.i
+.PHONY : desc/naming/Predicate.i
+
+# target to preprocess a source file
+desc/naming/Predicate.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/Predicate.cpp.i
+.PHONY : desc/naming/Predicate.cpp.i
+
+desc/naming/Predicate.s: desc/naming/Predicate.cpp.s
+.PHONY : desc/naming/Predicate.s
+
+# target to generate assembly for a file
+desc/naming/Predicate.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/Predicate.cpp.s
+.PHONY : desc/naming/Predicate.cpp.s
+
+desc/naming/StateKey.o: desc/naming/StateKey.cpp.o
+.PHONY : desc/naming/StateKey.o
+
+# target to build an object file
+desc/naming/StateKey.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/StateKey.cpp.o
+.PHONY : desc/naming/StateKey.cpp.o
+
+desc/naming/StateKey.i: desc/naming/StateKey.cpp.i
+.PHONY : desc/naming/StateKey.i
+
+# target to preprocess a source file
+desc/naming/StateKey.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/StateKey.cpp.i
+.PHONY : desc/naming/StateKey.cpp.i
+
+desc/naming/StateKey.s: desc/naming/StateKey.cpp.s
+.PHONY : desc/naming/StateKey.s
+
+# target to generate assembly for a file
+desc/naming/StateKey.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/desc/naming/StateKey.cpp.s
+.PHONY : desc/naming/StateKey.cpp.s
+
 desc/reuse/ActivityNameAction.o: desc/reuse/ActivityNameAction.cpp.o
 .PHONY : desc/reuse/ActivityNameAction.o
 
@@ -536,6 +704,30 @@ events/Preference.s: events/Preference.cpp.s
 events/Preference.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/events/Preference.cpp.s
 .PHONY : events/Preference.cpp.s
+
+model/GUITreeTransition.o: model/GUITreeTransition.cpp.o
+.PHONY : model/GUITreeTransition.o
+
+# target to build an object file
+model/GUITreeTransition.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/model/GUITreeTransition.cpp.o
+.PHONY : model/GUITreeTransition.cpp.o
+
+model/GUITreeTransition.i: model/GUITreeTransition.cpp.i
+.PHONY : model/GUITreeTransition.i
+
+# target to preprocess a source file
+model/GUITreeTransition.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/model/GUITreeTransition.cpp.i
+.PHONY : model/GUITreeTransition.cpp.i
+
+model/GUITreeTransition.s: model/GUITreeTransition.cpp.s
+.PHONY : model/GUITreeTransition.s
+
+# target to generate assembly for a file
+model/GUITreeTransition.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/model/GUITreeTransition.cpp.s
+.PHONY : model/GUITreeTransition.cpp.s
 
 model/Graph.o: model/Graph.cpp.o
 .PHONY : model/Graph.o
@@ -798,9 +990,6 @@ help:
 	@echo "... agent/DoubleSarsaAgent.o"
 	@echo "... agent/DoubleSarsaAgent.i"
 	@echo "... agent/DoubleSarsaAgent.s"
-	@echo "... agent/ModelReusableAgent.o"
-	@echo "... agent/ModelReusableAgent.i"
-	@echo "... agent/ModelReusableAgent.s"
 	@echo "... desc/Action.o"
 	@echo "... desc/Action.i"
 	@echo "... desc/Action.s"
@@ -825,6 +1014,30 @@ help:
 	@echo "... desc/Widget.o"
 	@echo "... desc/Widget.i"
 	@echo "... desc/Widget.s"
+	@echo "... desc/naming/Name.o"
+	@echo "... desc/naming/Name.i"
+	@echo "... desc/naming/Name.s"
+	@echo "... desc/naming/Namelet.o"
+	@echo "... desc/naming/Namelet.i"
+	@echo "... desc/naming/Namelet.s"
+	@echo "... desc/naming/Namer.o"
+	@echo "... desc/naming/Namer.i"
+	@echo "... desc/naming/Namer.s"
+	@echo "... desc/naming/Naming.o"
+	@echo "... desc/naming/Naming.i"
+	@echo "... desc/naming/Naming.s"
+	@echo "... desc/naming/NamingFactory.o"
+	@echo "... desc/naming/NamingFactory.i"
+	@echo "... desc/naming/NamingFactory.s"
+	@echo "... desc/naming/NamingManager.o"
+	@echo "... desc/naming/NamingManager.i"
+	@echo "... desc/naming/NamingManager.s"
+	@echo "... desc/naming/Predicate.o"
+	@echo "... desc/naming/Predicate.i"
+	@echo "... desc/naming/Predicate.s"
+	@echo "... desc/naming/StateKey.o"
+	@echo "... desc/naming/StateKey.i"
+	@echo "... desc/naming/StateKey.s"
 	@echo "... desc/reuse/ActivityNameAction.o"
 	@echo "... desc/reuse/ActivityNameAction.i"
 	@echo "... desc/reuse/ActivityNameAction.s"
@@ -837,6 +1050,9 @@ help:
 	@echo "... events/Preference.o"
 	@echo "... events/Preference.i"
 	@echo "... events/Preference.s"
+	@echo "... model/GUITreeTransition.o"
+	@echo "... model/GUITreeTransition.i"
+	@echo "... model/GUITreeTransition.s"
 	@echo "... model/Graph.o"
 	@echo "... model/Graph.i"
 	@echo "... model/Graph.s"

@@ -13,6 +13,10 @@
 
 namespace fastbotx {
 
+    // Forward declaration so we can hold a weak_ptr to StateTransition
+    class StateTransition;
+    typedef std::shared_ptr<StateTransition> StateTransitionPtr;
+
     /**
      * @brief Represents a transition between two GUI trees with an action
      * 

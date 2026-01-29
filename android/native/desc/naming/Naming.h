@@ -14,6 +14,11 @@
 
 namespace fastbotx {
 
+    // Forward declaration and smart pointer alias so we can use NamingPtr
+    // inside the class definition below.
+    class Naming;
+    typedef std::shared_ptr<Naming> NamingPtr;
+
     // A Naming is a composition of one or more Namelets that together define
     // how widgets in a GUI tree are partitioned into equivalence classes.
     // It forms a refinement tree where parents are coarser partitions and
@@ -68,8 +73,6 @@ namespace fastbotx {
         std::vector<NameletPtr> _namelets;
         std::weak_ptr<Naming> _parent;
     };
-
-    typedef std::shared_ptr<Naming> NamingPtr;
 
 } // namespace fastbotx
 

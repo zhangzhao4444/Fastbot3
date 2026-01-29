@@ -368,6 +368,9 @@ namespace fastbotx {
         /// Uses mutable to allow locking in const methods
         mutable std::mutex _reuseModelLock;
 
+    public:
+        // Q-value helper APIs exposed so Model can restore Q-values after rebuild.
+
         /**
          * @brief Compute alpha value
          * 
@@ -387,8 +390,7 @@ namespace fastbotx {
         /**
          * @brief Get action's Q1-value
          * 
-         * @param action Action pointer
-         * @return Q1-value
+         * Exposed so Model can restore Q-values after rebuild.
          */
         double getQ1Value(const ActionPtr &action);
 
@@ -406,8 +408,7 @@ namespace fastbotx {
         /**
          * @brief Get action's Q2-value
          * 
-         * @param action Action pointer
-         * @return Q2-value
+         * Exposed so Model can restore Q-values after rebuild.
          */
         double getQ2Value(const ActionPtr &action);
 
@@ -433,16 +434,14 @@ namespace fastbotx {
         /**
          * @brief Set action's Q1-value
          * 
-         * @param action Action pointer
-         * @param qValue Q1-value
+         * Exposed so Model can restore Q-values after rebuild.
          */
         void setQ1Value(const ActionPtr &action, double qValue);
         
         /**
          * @brief Set action's Q2-value
          * 
-         * @param action Action pointer
-         * @param qValue Q2-value
+         * Exposed so Model can restore Q-values after rebuild.
          */
         void setQ2Value(const ActionPtr &action, double qValue);
         

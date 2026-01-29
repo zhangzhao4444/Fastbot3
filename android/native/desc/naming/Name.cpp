@@ -13,6 +13,12 @@ namespace fastbotx {
         buildKey();
     }
 
+    Name::Name(const std::shared_ptr<const Namer> &namer,
+               std::vector<std::pair<NamerType, std::string>> attrs)
+            : _namer(std::const_pointer_cast<Namer>(namer)), _attrs(std::move(attrs)) {
+        buildKey();
+    }
+
     void Name::buildKey() {
         // Build key with a single std::string and reserved capacity to
         // reduce allocations compared to std::ostringstream.

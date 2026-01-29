@@ -207,6 +207,8 @@ namespace fastbotx {
             
             BDLOG("Double SARSA: State expectation=%.4f, stateVisitedCount=%.0f, normalized=%.4f, total reward: %.4f + %.4f = %.4f", 
                   stateExpectation, stateVisitedCount, normalizedStateValue, rewardBeforeState, normalizedStateValue, rewardValue);
+            // Silence unused-variable warning in non-debug builds where BDLOG is a no-op.
+            (void)rewardBeforeState;
             
             BLOG("Double SARSA: total visited " ACTIVITY_VC_STR " count is %zu", visitedActivities.size());
         }
@@ -368,6 +370,9 @@ namespace fastbotx {
             uintptr_t actionHash = this->_previousActions[idx]->hash();
             double reward = (idx < static_cast<int>(this->_rewardCache.size())) ? this->_rewardCache[idx] : 0.0;
             BDLOG("Double SARSA:   [%d] action_hash=0x%" PRIxPTR ", reward=%.4f", idx, actionHash, reward);
+            // Silence unused-variable warnings in non-debug builds where BDLOG is a no-op.
+            (void)actionHash;
+            (void)reward;
         }
         
         // Log _newAction (used for bootstrapping)
@@ -377,6 +382,10 @@ namespace fastbotx {
             double q2New = getQ2Value(_newAction);
             BDLOG("Double SARSA: Bootstrap action (_newAction): hash=0x%" PRIxPTR ", Q1=%.4f, Q2=%.4f", 
                   newActionHash, q1New, q2New);
+            // Silence unused-variable warnings in non-debug builds where BDLOG is a no-op.
+            (void)newActionHash;
+            (void)q1New;
+            (void)q2New;
         }
         
         // Counters for Q1 and Q2 updates
@@ -449,6 +458,8 @@ namespace fastbotx {
                     nStepReturn = this->_rewardCache[j] + DefaultGamma * nStepReturn;
                     BDLOG("Double SARSA: Action[%d] step[%d] reward=%.4f, return: %.4f -> %.4f", 
                           i, j, this->_rewardCache[j], prevReturn, nStepReturn);
+                    // Silence unused-variable warning in non-debug builds where BDLOG is a no-op.
+                    (void)prevReturn;
                 }
             }
             
@@ -475,6 +486,10 @@ namespace fastbotx {
                   i, actionHash, (updateQ1 == 0 ? "Q1" : "Q2"), currentQValue, nStepReturn, this->_alpha, qUpdate, newQValue);
             BDLOG("Double SARSA: Action[%d] hash=0x%" PRIxPTR " after update: Q1=%.4f, Q2=%.4f", 
                   i, actionHash, updatedQ1Value, updatedQ2Value);
+            // Silence unused-variable warnings in non-debug builds where BDLOG is a no-op.
+            (void)actionHash;
+            (void)updatedQ1Value;
+            (void)updatedQ2Value;
         }
         
         // Log update statistics
@@ -484,6 +499,9 @@ namespace fastbotx {
         BDLOG("Double SARSA: Q1 update ratio=%.2f%%, Q2 update ratio=%.2f%%", 
               (windowSize > 0 ? 100.0 * q1UpdateCount / windowSize : 0.0),
               (windowSize > 0 ? 100.0 * q2UpdateCount / windowSize : 0.0));
+        // Silence unused-variable warnings in non-debug builds where BDLOG is a no-op.
+        (void)q1UpdateCount;
+        (void)q2UpdateCount;
     }
 
     /**
@@ -662,6 +680,8 @@ namespace fastbotx {
                     iter->second[activity] += 1;
                     BDLOG("Double SARSA: Updating reuse model - action %s (hash=%" PRIu64 "), activity=%s, count: %d -> %d", 
                           modelAction->getId().c_str(), hash, activity->c_str(), oldCount, iter->second[activity]);
+                    // Silence unused-variable warning in non-debug builds where BDLOG is a no-op.
+                    (void)oldCount;
                 }
             }
         }
@@ -712,7 +732,11 @@ namespace fastbotx {
                     BDLOG("Double SARSA: New best action selected: hash=0x%" PRIxPTR " %s with %s=%.4f", 
                           actionHash, action->toString().c_str(), (choice == 0 ? "Q1" : "Q2"), qValue);
                 }
+                // Silence unused-variable warning in non-debug builds where BDLOG is a no-op.
+                (void)actionHash;
             }
+            // Silence unused-variable warning in non-debug builds where BDLOG is a no-op.
+            (void)actionCount;
             
             if (bestAction != nullptr) {
                 uintptr_t bestActionHash = bestAction->hash();
@@ -720,6 +744,10 @@ namespace fastbotx {
                 double bestQ2 = nonConstThis->getQ2Value(bestAction);
                 BDLOG("Double SARSA: Epsilon-greedy selected action: hash=0x%" PRIxPTR " %s with max %s=%.4f (Q1=%.4f, Q2=%.4f)", 
                       bestActionHash, bestAction->toString().c_str(), (choice == 0 ? "Q1" : "Q2"), maxQ, bestQ1, bestQ2);
+                // Silence unused-variable warnings in non-debug builds where BDLOG is a no-op.
+                (void)bestActionHash;
+                (void)bestQ1;
+                (void)bestQ2;
             }
             
             if (bestAction != nullptr) {
@@ -783,6 +811,11 @@ namespace fastbotx {
         if (actionsNotInModel.empty()) {
             BDLOG("Double SARSA: Cannot find unexecuted action not in reuse model - total actions=%d, model actions=%d, in reuse model=%d, visited=%d (this is normal, will try next strategy)", 
                    totalActions, modelActions, inReuseModel, visitedActions);
+            // Silence unused-variable warnings in non-debug builds where BDLOG is a no-op.
+            (void)totalActions;
+            (void)modelActions;
+            (void)inReuseModel;
+            (void)visitedActions;
             return nullptr;
         }
         
@@ -948,6 +981,8 @@ namespace fastbotx {
             
             actionIndex++;
         }
+        // Silence unused-variable warnings in non-debug builds where BDLOG is a no-op.
+        (void)actionIndex;
         
         if (returnAction != nullptr) {
             uintptr_t returnActionHash = returnAction->hash();
@@ -955,6 +990,10 @@ namespace fastbotx {
             double returnQ2 = getQ2Value(returnAction);
             BDLOG("Double SARSA: selectActionByQValue selected: hash=0x%" PRIxPTR " %s with max adjusted Q=%.4f from %s (Q1=%.4f, Q2=%.4f)", 
                   returnActionHash, returnAction->toString().c_str(), maxQ, (choice == 0 ? "Q1" : "Q2"), returnQ1, returnQ2);
+            // Silence unused-variable warnings in non-debug builds where BDLOG is a no-op.
+            (void)returnActionHash;
+            (void)returnQ1;
+            (void)returnQ2;
         }
         
         return returnAction;

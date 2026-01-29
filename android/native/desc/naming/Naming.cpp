@@ -113,7 +113,9 @@ namespace fastbotx {
         namelet->setParent(parent);
         next.emplace_back(namelet);
         auto created = std::make_shared<Naming>(next);
-        created->_parent = shared_from_this();
+        // shared_from_this() in a const method returns shared_ptr<const Naming>,
+        // so use const_pointer_cast to assign to weak_ptr<Naming>.
+        created->_parent = std::const_pointer_cast<Naming>(shared_from_this());
         return created;
     }
 
@@ -136,8 +138,9 @@ namespace fastbotx {
             return false;
         }
         auto current = other->getParent();
+        auto self = std::const_pointer_cast<Naming>(shared_from_this());
         while (current) {
-            if (current == shared_from_this()) {
+            if (current == self) {
                 return true;
             }
             current = current->getParent();

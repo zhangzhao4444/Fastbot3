@@ -24,6 +24,11 @@ namespace fastbotx {
         // determines the hash value.
         Name(const NamerPtr &namer, std::vector<std::pair<NamerType, std::string>> attrs);
 
+        // Convenience overload to allow construction from shared_ptr<const Namer>
+        // (e.g., when calling shared_from_this() in const contexts).
+        Name(const std::shared_ptr<const Namer> &namer,
+             std::vector<std::pair<NamerType, std::string>> attrs);
+
         // HashNode interface: returns the precomputed hash of the normalized key.
         uintptr_t hash() const override { return _hash; }
 

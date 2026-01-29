@@ -30,7 +30,7 @@ namespace fastbotx {
 
         // Refine the current naming when an action is aliased (maps to too
         // many candidate widgets). Adds predicates to preserve divergence.
-        NamingPtr refineForAliasedAction(const NamingPtr &current, const StatePtr &state) const;
+        NamingPtr refineForAliasedAction(const NamingPtr &current, const StatePtr &state);
         // Abstract the naming if it becomes too fine for the given number
         // of states (used to prevent state explosion).
         NamingPtr abstractIfTooFine(const NamingPtr &current, size_t stateCount) const;
@@ -41,13 +41,13 @@ namespace fastbotx {
                                 const StatePtr &initialState,
                                 const NamingPtr &targetParentNaming,
                                 const StatePtrSet &targetStates,
-                                const GraphPtr &graph) const;
+                                const GraphPtr &graph);
         // Refine naming to resolve nondeterministic transitions between states.
         NamingPtr refineForNonDeterminism(const NamingPtr &current,
                                           const StateTransitionPtr &st1,
                                           const StateTransitionPtr &st2,
                                           const GraphPtr &graph,
-                                          const std::function<bool(const NamingPtr &)> &isLeaf) const;
+                                          const std::function<bool(const NamingPtr &)> &isLeaf);
 
         // Compute the maximum acceptable number of states for a given
         // naming fineness before further refinement/abstraction is needed.
