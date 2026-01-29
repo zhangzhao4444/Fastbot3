@@ -92,7 +92,7 @@ namespace fastbotx {
      * - Hash computation for state comparison
      * - JSON/XML conversion
      */
-    class Element : public Serializable {
+    class Element : public Serializable, public std::enable_shared_from_this<Element> {
     public:
         Element();
 

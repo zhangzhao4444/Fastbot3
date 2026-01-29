@@ -137,6 +137,12 @@ inline void logLongStringInfo(const std::string& longStr) {
 
 #define PARENT_CLICK_CHANGE_CHILDREN 1
 
+// If Accessibility/UiAutomator reports no clickable widgets (or marks interactive
+// widgets as non-clickable), Fastbot may end up exploring only scroll actions.
+// Enable this to conservatively "recover" missing CLICK actions for leaf widgets
+// that look interactive based on stable attributes.
+#define FORCE_RECOVER_MISSING_CLICK_ACTIONS 1
+
 #define SCROLL_BOTTOM_UP_N_ENABLE 0
 
 #define ACTION_REFINEMENT_THRESHOLD 3

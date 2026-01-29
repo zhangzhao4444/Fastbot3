@@ -262,7 +262,16 @@ namespace fastbotx {
 
         // Track if any element is clickable during parsing
         _allClickableFalse = true;
-        elementPtr->fromXml(doc, elementPtr);
+        // Root has no parent.
+        elementPtr->fromXml(doc, nullptr);
+
+        // Diagnostic: if the parsed tree has no children, we most likely received
+        // a truncated hierarchy (only root node). This would lead to scroll-only actions.
+        // Keep this log lightweight (prefix only) to avoid logcat truncation.
+        if (elementPtr->_childCount == 0 && elementPtr->countDescendants() == 0) {
+            std::string prefix = xmlContent.substr(0, std::min<std::size_t>(512, xmlContent.size()));
+            BLOGE("Parsed GUI tree has no children. XML prefix: %s", prefix.c_str());
+        }
         
         // If no elements are clickable, make all clickable as fallback
         // This ensures the UI can still be interacted with
@@ -283,7 +292,8 @@ namespace fastbotx {
     ElementPtr Element::createFromXml(const tinyxml2::XMLDocument &doc) {
         ElementPtr elementPtr = std::make_shared<Element>(); // Use the empty element as the FAKE root element
         _allClickableFalse = true;
-        elementPtr->fromXml(doc, elementPtr);
+        // Root has no parent.
+        elementPtr->fromXml(doc, nullptr);
         if (_allClickableFalse) {
             elementPtr->recursiveDoElements([](const ElementPtr &elm) {
                 elm->_clickable = true;
@@ -376,6 +386,8 @@ namespace fastbotx {
     void Element::fromXMLNode(const tinyxml2::XMLElement *xmlNode, const ElementPtr &parentOfNode) {
         if (xmlNode == nullptr)
             return;
+        // Set parent link for this element.
+        this->_parent = parentOfNode;
 //    BLOG("This Node is %s", std::string(xmlNode->GetText()).c_str());
         int indexOfNode = 0;
         tinyxml2::XMLError err = xmlNode->QueryIntAttribute("index", &indexOfNode);
@@ -491,8 +503,34 @@ namespace fastbotx {
             this->_enabled = true;
         }
 
+#if FORCE_RECOVER_MISSING_CLICK_ACTIONS
+        // Ape-style principle: do not lose potentially interactive widgets.
+        // Some UI hierarchies expose tappable elements without setting clickable=true.
+        // Recover a CLICK action for "interesting" leaf nodes to avoid exploration
+        // degenerating into scroll-only behavior.
+        //
+        // Heuristic (conservative):
+        // - only for leaf nodes (no children)
+        // - visible to user
+        // - enabled or focusable
+        // - has non-empty bounds
+        // - has at least one stable identifier (resource-id/text/content-desc)
+        if (!this->_clickable && !this->_longClickable && !this->_checkable && !this->_scrollable &&
+            xmlNode->NoChildren() && this->_visible && (this->_enabled || this->_focusable) &&
+            this->_bounds && !this->_bounds->isEmpty() &&
+            (!this->_resourceID.empty() || !this->_text.empty() || !this->_contentDesc.empty())) {
+            this->_clickable = true;
+            // Only log in debug builds (BDLOG is a no-op otherwise).
+            BDLOG("Recover CLICK for non-clickable leaf: class=%s rid=%s text=%s desc=%s",
+                  this->_classname.c_str(), this->_resourceID.c_str(), this->_text.c_str(),
+                  this->_contentDesc.c_str());
+        }
+#endif
+
         int childrenCountOfCurrentNode = 0;
         if (!xmlNode->NoChildren()) {
+            // Capture shared_ptr for parent assignment in children.
+            ElementPtr self = shared_from_this();
             for (const tinyxml2::XMLElement *childNode = xmlNode->FirstChildElement();
                  nullptr != childNode; childNode = childNode->NextSiblingElement()) {
                 const char *childClass = "";
@@ -531,10 +569,8 @@ namespace fastbotx {
                 ElementPtr childElement = std::make_shared<Element>();
                 this->_children.emplace_back(childElement);
                 childrenCountOfCurrentNode++;
-                // generate XML for deeper children, pass the current xmlNode as their parent
-                childElement->fromXMLNode(nextXMLElement, childElement);
-                // update the parent of this current child
-                childElement->_parent = parentOfNode;
+                // Parse child with correct parent links.
+                childElement->fromXMLNode(nextXMLElement, self);
             }
         }
         this->_childCount = childrenCountOfCurrentNode;
