@@ -265,6 +265,12 @@ namespace fastbotx {
         // Root has no parent.
         elementPtr->fromXml(doc, nullptr);
 
+        // Debug: print basic stats of the parsed GUI tree
+        // This helps verify how many nodes are actually present in the Element tree.
+        BDLOG("DEBUG Element tree stats: directChildren=%d, descendants=%d",
+              elementPtr->_childCount,
+              elementPtr->countDescendants());
+
         // Diagnostic: if the parsed tree has no children, we most likely received
         // a truncated hierarchy (only root node). This would lead to scroll-only actions.
         // Keep this log lightweight (prefix only) to avoid logcat truncation.

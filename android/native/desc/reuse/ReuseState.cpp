@@ -76,6 +76,12 @@ namespace fastbotx {
         // use RichWidget build the states
         WidgetPtr widget = std::make_shared<RichWidget>(parentWidget, element);
         this->_widgets.emplace_back(widget);
+
+        // Debug: log each widget created from Element (including root)
+        if (widget) {
+            BDLOG("DEBUG ReuseState root widget: %s", widget->toString().c_str());
+        }
+
         for (const auto &childElement: element->getChildren()) {
             buildFromElement(widget, childElement);
         }
@@ -105,6 +111,12 @@ namespace fastbotx {
         // (root uses RichWidget via buildStateFromElement)
         WidgetPtr widget = std::make_shared<Widget>(parentWidget, elem);
         this->_widgets.emplace_back(widget);
+
+        // Debug: log each non-root widget as it is created.
+        if (widget) {
+            BDLOG("DEBUG ReuseState child widget: %s", widget->toString().c_str());
+        }
+
         for (const auto &childElement: elem->getChildren()) {
             buildFromElement(widget, childElement);
         }

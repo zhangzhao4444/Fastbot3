@@ -314,11 +314,18 @@ namespace fastbotx {
         this->ignoreActionsInWebView(rootXML, rootXML ? rootXML->isWebView() : false);
 #endif
 #endif
-        this->pruneInvalidNodes(rootXML);
-        // recursively resolve black widgets
-        this->resolveBlackWidgets(rootXML, activity);
-        // recursively deal all rootXML tree
-        this->resolveElement(rootXML, activity);
+        // this->pruneInvalidNodes(rootXML);
+        // // recursively resolve black widgets
+        // this->resolveBlackWidgets(rootXML, activity);
+        // // recursively deal all rootXML tree
+        // this->resolveElement(rootXML, activity);
+
+        // Debug: after all preference-based tree modifications, print remaining GUI tree size.
+        // if (rootXML) {
+        //     BDLOG("DEBUG Preference resolved tree: directChildren=%zu, descendants=%d",
+        //           rootXML->getChildren().size(),
+        //           rootXML->countDescendants());
+        // }
 
     }
 
@@ -576,6 +583,29 @@ namespace fastbotx {
     void Preference::resolveBlackWidgets(const ElementPtr &rootXML, const std::string &activity) {
         // black widgets
         if (!this->_blackWidgetActions.empty()) {
+            // Helper: disable all interactive capabilities for a node and its subtree,
+            // without deleting nodes from the GUI tree.
+            auto disableActionsRecursively = [](const ElementPtr &elem, const auto &self) -> void {
+                if (!elem) {
+                    return;
+                }
+                if (elem->getClickable()) {
+                    elem->reSetClickable(false);
+                }
+                if (elem->getCheckable()) {
+                    elem->reSetCheckable(false);
+                }
+                if (elem->getLongClickable()) {
+                    elem->reSetLongClickable(false);
+                }
+                if (elem->getScrollable()) {
+                    elem->reSetScrollable(false);
+                }
+                for (const auto &child : elem->getChildren()) {
+                    self(child, self);
+                }
+            };
+
             for (const CustomActionPtr &blackWidgetAction: this->_blackWidgetActions) {
                 if (!activity.empty() && blackWidgetAction->activity != activity)
                     continue;
@@ -609,10 +639,13 @@ namespace fastbotx {
                     BLOG("black widget xpath %s, has no bounds matched %d nodes",
                          xpath->toString().c_str(), (int) xpathElements.size());
                     for (const auto &matchedElement: xpathElements) {
-                        BLOG("black widget, delete node: %s depends xpath",
-                             matchedElement->getResourceID().c_str());
+                        BLOG("black widget, disable actions on node: %s depends xpath",
+                             matchedElement && !matchedElement->getResourceID().empty()
+                             ? matchedElement->getResourceID().c_str()
+                             : "");
                         cachedRects.push_back(matchedElement->getBounds());
-                        matchedElement->deleteElement();
+                        // Disable all interactive capabilities instead of deleting the node.
+                        disableActionsRecursively(matchedElement, disableActionsRecursively);
                     }
                 }
                 else if (xpathExistsInPage || (!xpath && hasBoundingBox)) {
@@ -628,9 +661,12 @@ namespace fastbotx {
                          (int) elementsInRejectRect.size());
                     for (const auto &elementInRejectRect: elementsInRejectRect) {
                         if (elementInRejectRect) {
-                            BLOG("black widget, delete node: %s depends xpath",
-                                 elementInRejectRect->getResourceID().c_str());
-                            elementInRejectRect->deleteElement();
+                            BLOG("black widget, disable actions on node in bounds: %s",
+                                 !elementInRejectRect->getResourceID().empty()
+                                 ? elementInRejectRect->getResourceID().c_str()
+                                 : "");
+                            // Disable interactive capabilities instead of structural deletion.
+                            disableActionsRecursively(elementInRejectRect, disableActionsRecursively);
                         }
                     }
                 }

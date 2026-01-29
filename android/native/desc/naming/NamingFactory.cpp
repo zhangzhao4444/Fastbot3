@@ -1,8 +1,5 @@
-/*
- * This code is licensed under the Fastbot license. You may obtain a copy of this license in the LICENSE.txt file in the root directory of this source tree.
- */
 /**
- * @authors Jianqiang Guo, Yuhui Su, Zhao Zhang
+ * @authors Zhao Zhang, Tianxiao Gu
  */
 #ifndef FASTBOTX_NAMING_FACTORY_CPP_
 #define FASTBOTX_NAMING_FACTORY_CPP_
@@ -13,13 +10,6 @@
 #include <unordered_map>
 
 namespace fastbotx {
-
-    // Forward declaration for helper used later in this translation unit.
-    namespace {
-        StateKeyPtr buildStateKeyForTree(const ElementPtr &tree,
-                                         const stringPtr &activity,
-                                         const NamingPtr &naming);
-    }
 
     NamingFactory::NamingFactory() {
         _base = createBaseNaming();
@@ -160,6 +150,17 @@ namespace fastbotx {
                 if (!checkPredicate(newNaming, affectedTrees)) {
                     continue;
                 }
+                // Structured log for action-driven refinement.
+                int oldFineness = current->getFineness();
+                int newFineness = newNaming->getFineness();
+                BDLOG("[REFINE] cause=aliased_action state=%s targetHash=%llu naming_old=%llu naming_new=%llu fineness_old=%d fineness_new=%d aliasedCount=%d",
+                      state->getId().c_str(),
+                      static_cast<unsigned long long>(target->hash()),
+                      static_cast<unsigned long long>(current->hash()),
+                      static_cast<unsigned long long>(newNaming->hash()),
+                      oldFineness,
+                      newFineness,
+                      aliasedCount);
                 addPredicate(std::make_shared<AssertActionDivergent>(newNaming, affectedTrees,
                                                                      target->hash()));
                 return newNaming;
@@ -183,6 +184,18 @@ namespace fastbotx {
         return current;
     }
 
+    // Helpers for building StateKey / Name used in batchAbstract and refinement.
+    namespace {
+        struct StateKeyCacheKey;
+        struct StateKeyCacheKeyHash;
+        struct NameCacheKey;
+        struct NameCacheKeyHash;
+
+        StateKeyPtr buildStateKeyForTree(const ElementPtr &tree,
+                                         const stringPtr &activity,
+                                         const NamingPtr &naming);
+    }
+
     NamingPtr NamingFactory::batchAbstract(const NamingPtr &targetNaming,
                                            const StatePtr &initialState,
                                            const NamingPtr &targetParentNaming,
@@ -196,27 +209,13 @@ namespace fastbotx {
         if (!initialState->getLatestTree()) {
             return targetNaming;
         }
-
-        // Local helper to build StateKey for a given tree/activity/naming triple.
-        auto buildKeyFor = [](const ElementPtr &tree,
-                              const stringPtr &activity,
-                              const NamingPtr &naming) -> StateKeyPtr {
-            if (!tree || !activity || !naming) {
-                return nullptr;
-            }
-            ReuseStatePtr temp = ReuseState::create(tree, activity, naming);
-            if (!temp) {
-                return nullptr;
-            }
-            return temp->getStateKey();
-        };
         
         // Step 2: Filter targets - find states in the same parent abstract block
         // APE: filterTargets(initialState, targetNaming, targetStates)
         // In parent naming, compute originStateKey for initialState
-        StateKeyPtr originStateKey = buildKeyFor(initialState->getLatestTree(),
-                                                 initialState->getActivityString(),
-                                                 targetParentNaming);
+        StateKeyPtr originStateKey = buildStateKeyForTree(initialState->getLatestTree(),
+                                                         initialState->getActivityString(),
+                                                         targetParentNaming);
         if (!originStateKey) {
             return targetNaming;
         }
@@ -236,18 +235,18 @@ namespace fastbotx {
                 continue;
             }
             // Check if state belongs to the same parent abstract block
-            StateKeyPtr parentKey = buildKeyFor(state->getLatestTree(),
-                                                state->getActivityString(),
-                                                targetParentNaming);
+            StateKeyPtr parentKey = buildStateKeyForTree(state->getLatestTree(),
+                                                         state->getActivityString(),
+                                                         targetParentNaming);
             if (!parentKey || parentKey->hash() != originStateKey->hash()) {
                 continue;
             }
             affectedStates.emplace_back(state);
-                // Collect all trees from affected states
+            // Collect all trees from affected states
             for (const auto &tree : state->getTreeHistory()) {
                 affectedTrees.insert(tree);
                 // Compute StateKey in targetNaming for this tree
-                StateKeyPtr key = buildKeyFor(tree, state->getActivityString(), targetNaming);
+                StateKeyPtr key = buildStateKeyForTree(tree, state->getActivityString(), targetNaming);
                 if (key) {
                     targetKeys.insert(key->hash());
                 }
@@ -269,11 +268,21 @@ namespace fastbotx {
         // - Add AssertStatesFewerThan predicate
         // - Return parent naming
         std::vector<ElementPtr> trees(affectedTrees.begin(), affectedTrees.end());
-        auto *self = const_cast<NamingFactory *>(this);
-        self->blacklistNaming(trees, targetNaming);
-        self->removeConflictingPredicates(targetParentNaming, trees);
-        self->addPredicate(std::make_shared<AssertStatesFewerThan>(targetParentNaming, trees, threshold));
-        
+        blacklistNaming(trees, targetNaming);
+        removeConflictingPredicates(targetParentNaming, trees);
+        addPredicate(std::make_shared<AssertStatesFewerThan>(targetParentNaming, trees, threshold));
+
+        // Structured log for state-driven abstraction.
+        int finenessOld = targetNaming->getFineness();
+        int finenessNew = targetParentNaming->getFineness();
+        BDLOG("[ABSTRACT] naming_old=%llu naming_new=%llu fineness_old=%d fineness_new=%d affectedStates=%zu distinctKeys=%zu",
+              static_cast<unsigned long long>(targetNaming->hash()),
+              static_cast<unsigned long long>(targetParentNaming->hash()),
+              finenessOld,
+              finenessNew,
+              affectedStates.size(),
+              targetKeys.size());
+
         return targetParentNaming;
     }
 
@@ -320,9 +329,7 @@ namespace fastbotx {
             }
         };
 
-        // Memoized helpers for building StateKey / Name. These are meant to be
-        // used with small, function-scope caches to avoid repeated ReuseState
-        // construction in hot loops.
+        // Memoized helpers for building StateKey / Name.
         StateKeyPtr buildStateKeyForTree(const ElementPtr &tree,
                                          const stringPtr &activity,
                                          const NamingPtr &naming) {
@@ -567,8 +574,7 @@ namespace fastbotx {
                 if (skip) {
                     continue;
                 }
-                const_cast<NamingFactory *>(this)
-                        ->addPredicate(std::make_shared<AssertActionDivergent>(newNaming, affectedTrees, targetHash));
+                addPredicate(std::make_shared<AssertActionDivergent>(newNaming, affectedTrees, targetHash));
                 return newNaming;
             }
             return nullptr;
@@ -658,8 +664,7 @@ namespace fastbotx {
                     }
                     std::vector<ElementPtr> group1 = {tree1};
                     std::vector<ElementPtr> group2 = {tree2};
-                    const_cast<NamingFactory *>(this)
-                            ->addPredicate(std::make_shared<AssertSourceDivergent>(newNaming, group1, group2));
+                    addPredicate(std::make_shared<AssertSourceDivergent>(newNaming, group1, group2));
                     return newNaming;
                 }
             }

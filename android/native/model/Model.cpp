@@ -331,6 +331,21 @@ namespace fastbotx {
         // The graph handles deduplication based on state hash
         state = this->_graph->addState(state);
 
+        // Structured, lightweight log for this state snapshot (after dedup).
+        if (state) {
+            uintptr_t namingHash = state->getCurrentNaming() ? state->getCurrentNaming()->hash() : 0;
+            size_t widgetsCount = state->getWidgets().size();
+            size_t actionsCount = state->getActions().size();
+            int fineness = state->getCurrentNaming() ? state->getCurrentNaming()->getFineness() : 0;
+            BDLOG("[STATE] id=%s naming=%llu fineness=%d widgets=%zu actions=%zu trivial=%d",
+                  state->getId().c_str(),
+                  static_cast<unsigned long long>(namingHash),
+                  fineness,
+                  widgetsCount,
+                  actionsCount,
+                  state->isTrivialState());
+        }
+
         // APE alignment: stamp this GUI tree snapshot with graph timestamp
         // (used for rebuild transition sorting via GUITreeTransition::getTimestamp()).
         element->setTimestamp(static_cast<int>(this->_graph->getTimestamp()));
@@ -416,6 +431,10 @@ namespace fastbotx {
         GraphPtr newGraph = std::make_shared<Graph>();
         std::map<ElementPtr, StatePtr> treeToState;
 
+        // Snapshot old graph size for summary logging.
+        size_t oldStateCount = oldGraph ? oldGraph->getStates().size() : 0;
+        size_t oldTransitionCount = oldGraph ? oldGraph->getTransitions().size() : 0;
+
         // Align rebuild state type with current runtime agent, instead of hard-coding Reuse.
         AlgorithmType rebuildAlgo = AlgorithmType::DoubleSarsa;
         if (!this->_deviceIDAgentMap.empty() && this->_deviceIDAgentMap.begin()->second) {
@@ -491,7 +510,13 @@ namespace fastbotx {
         for (const auto &pair : this->_deviceIDAgentMap) {
             newGraph->addListener(pair.second);
         }
-        
+
+        // Summary log for rebuild impact.
+        size_t newStateCount = this->_graph ? this->_graph->getStates().size() : 0;
+        size_t newTransitionCount = this->_graph ? this->_graph->getTransitions().size() : 0;
+        BDLOG("[REBUILD] states_before=%zu states_after=%zu transitions_before=%zu transitions_after=%zu",
+              oldStateCount, newStateCount, oldTransitionCount, newTransitionCount);
+
         // Restore Q-values after rebuild
         restoreQValuesAfterRebuild();
     }
@@ -730,6 +755,14 @@ namespace fastbotx {
                 NamingPtr oldNaming = this->_namingManager->getNaming();
                 NamingPtr newNaming = this->_namingManager->refineForAliasedAction(action);
                 if (newNaming && newNaming != oldNaming) {
+                    int oldFineness = oldNaming ? oldNaming->getFineness() : 0;
+                    int newFineness = newNaming->getFineness();
+                    BDLOG("[NAMING] event=refine_over state=%s old=%llu new=%llu fineness_old=%d fineness_new=%d",
+                          state->getId().c_str(),
+                          static_cast<unsigned long long>(oldNaming ? oldNaming->hash() : 0),
+                          static_cast<unsigned long long>(newNaming->hash()),
+                          oldFineness,
+                          newFineness);
                     this->_namingManager->setCurrentNaming(newNaming);
                     rebuildModel();
                     // Rebuild state with new naming
@@ -873,9 +906,14 @@ namespace fastbotx {
             this->_namingManager->setCurrentNaming(updated);
             int newVersion = this->_namingManager->getVersion();
             if (newVersion != oldVersion) {
-                BLOG("State abstraction: naming updated from %s to %s", 
-                     naming ? std::to_string(naming->hash()).c_str() : "null",
-                     updated ? std::to_string(updated->hash()).c_str() : "null");
+                int oldFineness = naming ? naming->getFineness() : 0;
+                int newFineness = updated->getFineness();
+                BDLOG("[NAMING] event=abstract old=%llu new=%llu fineness_old=%d fineness_new=%d affectedStates=%zu",
+                      static_cast<unsigned long long>(naming ? naming->hash() : 0),
+                      static_cast<unsigned long long>(updated->hash()),
+                      oldFineness,
+                      newFineness,
+                      states.size());
                 return true;
             }
         }
@@ -934,10 +972,17 @@ namespace fastbotx {
                                                                           edge,
                                                                           this->_graph);
         if (newNaming && oldNaming != newNaming) {
+            int oldFineness = oldNaming ? oldNaming->getFineness() : 0;
+            int newFineness = newNaming->getFineness();
+            BDLOG("[NAMING] event=refine_ndet state=%s old=%llu new=%llu fineness_old=%d fineness_new=%d",
+                  source->getId().c_str(),
+                  static_cast<unsigned long long>(oldNaming ? oldNaming->hash() : 0),
+                  static_cast<unsigned long long>(newNaming->hash()),
+                  oldFineness,
+                  newFineness);
             this->_namingManager->setCurrentNaming(newNaming);
             int newVersion = this->_namingManager->getVersion();
             if (newVersion != oldVersion) {
-                BLOG("Eliminating non-deterministic transitions: naming updated");
                 rebuildModel();
                 return true;
             }
