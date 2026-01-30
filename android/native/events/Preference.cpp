@@ -119,7 +119,7 @@ namespace fastbotx {
         double t0 = currentStamp();
         if (nullptr != rootXML)
             this->resolvePage(activity, rootXML);
-        double resolvePageCost = (currentStamp() - t0) / 1000.0;
+        double resolvePageCostMs = currentStamp() - t0;
 
         // resolve action
         double t1 = currentStamp();
@@ -160,15 +160,15 @@ namespace fastbotx {
                 }
                 BLOG("custom action %s happened", customAction->xpath->toString().c_str());
                 BLOG("custom action: %s happened", customAction->toString().c_str());
-                double resolveActionCost = (currentStamp() - t1) / 1000.0;
-                BLOG("preference resolvePage cost: %.3fs resolveAction cost: %.3fs",
-                     resolvePageCost, resolveActionCost);
+                double resolveActionCostMs = currentStamp() - t1;
+                BLOG("preference resolvePage cost: %.3fms resolveAction cost: %.3fms",
+                     resolvePageCostMs, resolveActionCostMs);
                 return customAction;
             }
         }
-        double resolveActionCost = (currentStamp() - t1) / 1000.0;
-        BLOG("preference resolvePage cost: %.3fs resolveAction cost: %.3fs",
-             resolvePageCost, resolveActionCost);
+        double resolveActionCostMs = currentStamp() - t1;
+        BLOG("preference resolvePage cost: %.3fms resolveAction cost: %.3fms",
+             resolvePageCostMs, resolveActionCostMs);
         return returnAction;
     }
 
@@ -237,14 +237,14 @@ namespace fastbotx {
         double t0 = currentStamp();
         // cache page texts
         this->cachePageTexts(rootXML);
-        double cachePageTextsCost = (currentStamp() - t0) / 1000.0;
+        double cachePageTextsCostMs = currentStamp() - t0;
 
         BDLOG("preference resolve page: %s black widget %zu tree pruning %zu", activity.c_str(),
               this->_blackWidgetActions.size(), this->_treePrunings.size());
         // deMixResMapping
         double t1 = currentStamp();
         this->deMixResMapping(rootXML);
-        double deMixResMappingCost = (currentStamp() - t1) / 1000.0;
+        double deMixResMappingCostMs = currentStamp() - t1;
 
         // get root size
         if (nullptr == this->_rootScreenSize
@@ -263,15 +263,15 @@ namespace fastbotx {
         // recursively resolve black widgets
         double t2 = currentStamp();
         this->resolveBlackWidgets(rootXML, activity);
-        double resolveBlackWidgetsCost = (currentStamp() - t2) / 1000.0;
+        double resolveBlackWidgetsCostMs = currentStamp() - t2;
         // recursively deal all rootXML tree
         double t3 = currentStamp();
         this->resolveElement(rootXML, activity);
-        double resolveElementCost = (currentStamp() - t3) / 1000.0;
+        double resolveElementCostMs = currentStamp() - t3;
 
-        double totalResolvePageCost = (currentStamp() - t0) / 1000.0;
-        BLOG("resolvePage cost: %.3fs (cachePageTexts: %.3fs deMixResMapping: %.3fs resolveBlackWidgets: %.3fs resolveElement: %.3fs)",
-             totalResolvePageCost, cachePageTextsCost, deMixResMappingCost, resolveBlackWidgetsCost, resolveElementCost);
+        double totalResolvePageCostMs = currentStamp() - t0;
+        BLOG("resolvePage cost: %.3fms (cachePageTexts: %.3fms deMixResMapping: %.3fms resolveBlackWidgets: %.3fms resolveElement: %.3fms)",
+             totalResolvePageCostMs, cachePageTextsCostMs, deMixResMappingCostMs, resolveBlackWidgetsCostMs, resolveElementCostMs);
     }
 
     void Preference::resolveElement(const ElementPtr &element, const std::string &activity) {

@@ -390,7 +390,7 @@ namespace fastbotx {
      * @param state The current state (may be modified)
      * @param agent The agent to use for action selection (may be modified)
      * @param customAction Custom action from preference, if any
-     * @param actionCost Output parameter: time cost for action generation in seconds
+     * @param actionCost Output parameter: time cost for action generation in ms (currentStamp unit)
      * @return Selected action, or nullptr if selection failed
      */
     ActionPtr Model::selectAction(StatePtr &state, AbstractAgentPtr &agent, ActionPtr customAction, double &actionCost) {
@@ -528,8 +528,10 @@ namespace fastbotx {
         AbstractAgentPtr agent = getOrCreateAgent(deviceID);
         
         // Step 4: Create state from element and add to graph
-        // The graph handles deduplication if a similar state already exists
+        // currentStamp() returns ms; record build-state-only duration for log
+        double buildStateStartTimestamp = currentStamp();
         StatePtr state = createAndAddState(element, agent, activityPtr);
+        double buildStateEndTimestamp = currentStamp();
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
         recordTransition(agent, state);
         recordStateSplitIfRefined(activityPtr ? *activityPtr : "", state);
@@ -538,11 +540,9 @@ namespace fastbotx {
             _activitiesNeedingAlphaRefinement.insert(activityPtr ? *activityPtr : "");
         }
 #endif
-        // Record state generation time for performance tracking
-        double stateGeneratedTimestamp = currentStamp();
         // Step 5: Select action (either custom, restart, or from agent)
-        double actionCost = 0.0;
-        ActionPtr action = selectAction(state, agent, customAction, actionCost);
+        double actionCostMs = 0.0;
+        ActionPtr action = selectAction(state, agent, customAction, actionCostMs);
         
         // Handle null action gracefully
         if (nullptr == action) {
@@ -552,19 +552,21 @@ namespace fastbotx {
         // Step 6: Convert action to operation object and apply patches
         OperatePtr opt = convertActionToOperate(action, state);
         
-        // Record end time and log performance metrics
+        // Log performance metrics in ms (currentStamp returns ms)
         double methodEndTimestamp = currentStamp();
+        double buildStateCostMs = buildStateEndTimestamp - buildStateStartTimestamp;
+        double totalCostMs = methodEndTimestamp - methodStartTimestamp;
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
-        BLOG("build state cost: %.3fs action cost: %.3fs total cost %.3fs dims=[%s]",
-             stateGeneratedTimestamp - methodStartTimestamp,
-             actionCost,
-             methodEndTimestamp - methodStartTimestamp,
+        BLOG("build state cost: %.3fms action cost: %.3fms total cost: %.3fms dims=[%s]",
+             buildStateCostMs,
+             actionCostMs,
+             totalCostMs,
              maskToDimensionString(getActivityKeyMask(activity)).c_str());
 #else
-        BLOG("build state cost: %.3fs action cost: %.3fs total cost %.3fs",
-             stateGeneratedTimestamp - methodStartTimestamp,
-             actionCost,
-             methodEndTimestamp - methodStartTimestamp);
+        BLOG("build state cost: %.3fms action cost: %.3fms total cost: %.3fms",
+             buildStateCostMs,
+             actionCostMs,
+             totalCostMs);
 #endif
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
         _stepCountSinceLastCheck++;
