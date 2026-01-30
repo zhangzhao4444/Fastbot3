@@ -15,6 +15,7 @@
 #include "RichWidget.h"
 #include "ActivityNameAction.h"
 #include "../utils.hpp"
+#include "../Base.h"
 #include "ActionFilter.h"
 
 namespace fastbotx {
@@ -119,10 +120,25 @@ namespace fastbotx {
     }
 
     void ReuseState::buildState(const ElementPtr &element) {
+        double t0 = currentStamp();
         buildStateFromElement(nullptr, element);
+        double guitreeCost = (currentStamp() - t0) / 1000.0;
+
+        double t1 = currentStamp();
         mergeWidgetsInState();
+        double mergeCost = (currentStamp() - t1) / 1000.0;
+
+        double t2 = currentStamp();
         buildHashForState();
+        double hashCost = (currentStamp() - t2) / 1000.0;
+
+        double t3 = currentStamp();
         buildActionForState();
+        double actionCost = (currentStamp() - t3) / 1000.0;
+
+        double totalCost = (currentStamp() - t0) / 1000.0;
+        BLOG("build state cost: %.3fs (guitree: %.3fs merge: %.3fs hash: %.3fs buildAction: %.3fs)",
+             totalCost, guitreeCost, mergeCost, hashCost, actionCost);
     }
 
     /**
