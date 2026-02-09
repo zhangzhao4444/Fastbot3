@@ -314,9 +314,13 @@ namespace fastbotx {
             this->operationAND = true;
         }
         
-        BDLOG(" xpath parsed: res id %s, text %s, index %d, content %s %d",
-              this->resourceID.c_str(), this->text.c_str(), this->index,
-              this->contentDescription.c_str(), this->operationAND);
+        // Human-friendly xpath parse log for debug
+        BDLOG("    xpath parsed: resource-id=\"%s\", text=\"%s\", content-desc=\"%s\", index=%d, useAND=%s",
+              this->resourceID.c_str(),
+              this->text.c_str(),
+              this->contentDescription.c_str(),
+              this->index,
+              this->operationAND ? "true" : "false");
         if (this->text.empty() && this->contentDescription.empty()
             && xpathString.find("contains(") != std::string::npos) {
             size_t maxLen = (xpathString.length() < 120) ? xpathString.length() : 120;
@@ -745,7 +749,7 @@ namespace fastbotx {
             }
         }
         
-        BDLOG("set valid Text: %s ", element->validText.c_str());
+        // BDLOG("set valid Text: %s ", element->validText.c_str());
         
         // Performance optimization: Cache parent lock result to avoid repeated weak_ptr operations
         // if we find valid text from text field or content description field,
@@ -1218,31 +1222,37 @@ namespace fastbotx {
      *       - Reduced logging overhead
      */
     void Preference::loadBaseConfig() {
-        LOGI("pref init checking curr packageName is offset: %s", Preference::PackageName.c_str());
+        // LOGI("pref init checking curr packageName is offset: %s", Preference::PackageName.c_str());
         std::string configContent = loadFileContent(BaseConfigFilePath);
         if (configContent.empty()) {
             return;
         }
         
-        BLOG("max.config:\n %s", configContent.c_str());
+        // Pretty-print max.config without extra blank line, and indent each entry
+        BLOG("max.config:");
         std::vector<std::string> lines;
         splitString(configContent, lines, '\n');
         
         for (const std::string &line: lines) {
-            // Performance: Skip empty lines early
-            if (line.empty()) {
+            // Performance: Skip empty or whitespace-only lines early
+            std::string trimmedLine = line;
+            trimString(trimmedLine);
+            if (trimmedLine.empty()) {
                 continue;
             }
             
+            // Log raw (trimmed) line with indentation for readability; keep comments
+            BLOG("  %s", trimmedLine.c_str());
+            
             // Performance: Manual key-value parsing to avoid splitString overhead
-            size_t eqPos = line.find('=');
+            size_t eqPos = trimmedLine.find('=');
             if (eqPos == std::string::npos || eqPos == 0 || eqPos == line.length() - 1) {
                 continue; // No '=' or '=' at start/end
             }
             
             // Extract key and value
-            std::string key = line.substr(0, eqPos);
-            std::string value = line.substr(eqPos + 1);
+            std::string key = trimmedLine.substr(0, eqPos);
+            std::string value = trimmedLine.substr(eqPos + 1);
             
             // Trim whitespace
             trimString(key);
@@ -1256,7 +1266,8 @@ namespace fastbotx {
                 continue;
             }
             
-            BDLOG("base config key:-%s- value:-%s-", key.c_str(), value.c_str());
+            // Human-friendly config log: max.config parsed: key=value
+            BDLOG("max.config parsed: %s=%s", key.c_str(), value.c_str());
             
             // Performance: Use string comparison with early exit
             // Check most common keys first (if we know the distribution)
@@ -1478,6 +1489,16 @@ namespace fastbotx {
                 if (!c.steps.empty()) {
                     _xpathActionCases.push_back(c);
                     _xpathCaseRemainingTimes.push_back(c.times);
+
+                    // Pretty, human-friendly summary for each xpath action case
+                    BLOG("\nxpath action case:\n  activity=%s\n  prob=%.2f\n  times=%d",
+                         c.activity.c_str(), c.prob, c.times);
+                    for (const auto &step : c.steps) {
+                        BLOG("    action=%s xpath=%s text=%s",
+                             step.actionType.c_str(),
+                             step.xpath.c_str(),
+                             step.text.c_str());
+                    }
                 }
             }
             BLOG("loaded %zu xpath action cases", _xpathActionCases.size());
@@ -1615,7 +1636,12 @@ namespace fastbotx {
             std::vector<std::string> texts;
             splitString(contentBlack, texts, '\n');
             this->_blackList.swap(texts);
-            BLOG("blacklist :\n %s", contentBlack.c_str());
+            BLOG("blacklist:");
+            for (const auto &t : this->_blackList) {
+                if (!t.empty()) {
+                    BLOG("    %s", t.c_str());
+                }
+            }
         }
         
         std::string contentWhite = fastbotx::Preference::loadFileContent(WhiteListFilePath);
@@ -1623,7 +1649,12 @@ namespace fastbotx {
             std::vector<std::string> textsw;
             splitString(contentWhite, textsw, '\n');
             this->_whiteList.swap(textsw);
-            BLOG("whitelist :\n %s", contentWhite.c_str());
+            BLOG("whitelist:");
+            for (const auto &t : this->_whiteList) {
+                if (!t.empty()) {
+                    BLOG("    %s", t.c_str());
+                }
+            }
         }
     }
 
@@ -1721,7 +1752,7 @@ namespace fastbotx {
     std::string Preference::loadFileContent(const std::string &fileAbsolutePath) {
         std::ifstream fileStringReader(fileAbsolutePath, std::ios::binary | std::ios::ate);
         if (!fileStringReader.good()) {
-            LOGW("load file %s not exists!!!", fileAbsolutePath.c_str());
+            LOGW("%s not exists!!!", fileAbsolutePath.c_str());
             return std::string();
         }
         
@@ -1830,17 +1861,18 @@ namespace fastbotx {
                         }
                     }
                 }
-
+                
                 if (!cfg->checkpointXpathString.empty()) {
                     cfg->checkpointXpath = std::make_shared<Xpath>(cfg->checkpointXpathString);
-                    if (cfg->checkpointXpath) {
-                        BLOG("LLM task checkpoint_xpath parsed: text=%s content-desc=%s",
-                             cfg->checkpointXpath->text.c_str(), cfg->checkpointXpath->contentDescription.c_str());
-                    }
                 }
-
+                
                 _llmTasks.push_back(cfg);
-                BLOG("loaded LLM task for activity %s", cfg->activity.c_str());
+
+                // Pretty, human-friendly summary for each LLM task
+                BLOG("\n    LLM task loaded:\n  activity=%s\n  checkpoint_xpath=%s\n  task=%s",
+                     cfg->activity.c_str(),
+                     cfg->checkpointXpathString.c_str(),
+                     cfg->taskDescription.c_str());
             }
             BLOG("loaded max.llm.tasks: %zu tasks", _llmTasks.size());
         } catch (const ::nlohmann::json::exception &ex) {

@@ -7,6 +7,9 @@
 
 ***More detail see at [Fastbot architecture](https://mp.weixin.qq.com/s/QhzqBFZygkIS6C69__smyQ)
 
+We gratefully acknowledge Prof. Ting Su, the SSE Lab at East China Normal University, Dr. Tianxiao Gu（Bytedance）, and Tiesong Liu (OPay) for their valuable support and contributions.
+
+
 ## Features
 
 * Compatible with the latest Android systems (Android 5–14 and beyond), including stock and manufacturer ROMs.
@@ -40,8 +43,6 @@
 * **Performance & security**: FBM loader verifies buffer before deserialization; activity name length is capped when serializing; KeyCompareLessThan and related reuse-model code hardened for null-safety and format.
 * **XXH64**: Introduced xxHash 64-bit for fast state/action hashing in native layer.
 * Support Android 14～16.
-
-* We thank Prof. Ting Su, the SSE Lab at East China Normal University, Dr. Tianxiao Gu, and Tiesong Liu (OPay) for their support and contributions.
 
 **update 2023.9**
 * Add Fastbot code analysis file for quick understanding of the source code. See [fastbot_code_analysis.md](./fastbot_code_analysis.md).

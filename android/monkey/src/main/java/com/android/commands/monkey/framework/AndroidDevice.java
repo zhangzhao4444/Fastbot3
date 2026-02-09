@@ -45,6 +45,7 @@ import android.os.UserHandle;
 import android.provider.MediaStore;
 import android.view.InputEvent;
 import android.view.IWindowManager;
+import android.view.KeyEvent;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
@@ -925,10 +926,36 @@ public class AndroidDevice {
      * <b>enabled</b> in Settings → Languages & input → Keyboards (or: adb shell ime enable
      * com.android.adbkeyboard/.AdbIME). If not enabled, returns false.
      */
+    /**
+     * Send text using clipboard + Ctrl+V when possible; fall back to ADBKeyBoard broadcast
+     * (ADB_INPUT_TEXT / ADB_INPUT_B64) when clipboard or key injection is not available.
+     */
     public static boolean sendText(String text) {
         if (text == null) {
             return false;
         }
+
+        // 0) Special flags handling (YADB-style extensions).
+        final String FLAG_CLEAR = "~CLEAR~";
+        final String FLAG_ENTER = "\\n";
+
+        // If CLEAR flag is present, just clear current input and return.
+        if (text.contains(FLAG_CLEAR)) {
+            return clearCurrentInput();
+        }
+
+        // Replace encoded newlines with real '\n'.
+        if (text.contains(FLAG_ENTER)) {
+            text = text.replace(FLAG_ENTER, "\n");
+        }
+
+        // 1) Preferred path: clipboard + Ctrl+V (YADB-style).
+        boolean clipboardOk = sendTextViaClipboard(text);
+        if (clipboardOk) {
+            return true;
+        }
+
+        // 2) Fallback path: keep existing ADBKeyBoard protocol for robustness.
         if (containsNonAscii(text)) {
             return sendTextViaB64(text);
         }
@@ -945,6 +972,84 @@ public class AndroidDevice {
             }
         }
         return false;
+    }
+
+    /**
+     * Preferred text input implementation: write text to system clipboard and inject Ctrl+V
+     * so that the focused input field pastes the content. Returns true on success.
+     */
+    public static boolean sendTextViaClipboard(String text) {
+        try {
+            if (text == null) {
+                return false;
+            }
+            // Optimization: avoid redundant clipboard writes when content is unchanged.
+            CharSequence current = ClipboardHelper.getText();
+            if (current == null || !text.contentEquals(current)) {
+                if (!ClipboardHelper.setText(text)) {
+                    Logger.warningPrintln("sendTextViaClipboard: failed to write clipboard");
+                    return false;
+                }
+            }
+            // Inject Ctrl+V on the focused display to paste from clipboard.
+            boolean injected = injectCtrlV();
+            if (!injected) {
+                Logger.warningPrintln("sendTextViaClipboard: inject Ctrl+V failed");
+            }
+            return injected;
+        } catch (Throwable t) {
+            Logger.warningPrintln("sendTextViaClipboard: exception: " + t);
+            return false;
+        }
+    }
+
+    private static boolean injectCtrlV() {
+        int displayId = getFocusedDisplayId();
+        int metaCtrl = KeyEvent.META_CTRL_ON | KeyEvent.META_CTRL_LEFT_ON;
+        boolean ok = true;
+        ok &= injectKeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_CTRL_LEFT, metaCtrl, displayId);
+        ok &= injectKeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_V, metaCtrl, displayId);
+        ok &= injectKeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_V, metaCtrl, displayId);
+        ok &= injectKeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_CTRL_LEFT, 0, displayId);
+        return ok;
+    }
+
+    /**
+     * Clear current input field content: Ctrl+A (select all) + Delete.
+     */
+    public static boolean clearCurrentInput() {
+        int displayId = getFocusedDisplayId();
+        int metaCtrl = KeyEvent.META_CTRL_ON | KeyEvent.META_CTRL_LEFT_ON;
+        boolean ok = true;
+        // Ctrl+A to select all
+        ok &= injectKeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_CTRL_LEFT, metaCtrl, displayId);
+        ok &= injectKeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_A, metaCtrl, displayId);
+        ok &= injectKeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_A, metaCtrl, displayId);
+        ok &= injectKeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_CTRL_LEFT, 0, displayId);
+        // Delete selection
+        ok &= injectKeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL, 0, displayId);
+        ok &= injectKeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL, 0, displayId);
+        return ok;
+    }
+
+    private static boolean injectKeyEvent(int action, int keyCode, int metaState, int displayId) {
+        try {
+            long now = android.os.SystemClock.uptimeMillis();
+            KeyEvent event = new KeyEvent(now, now, action, keyCode, 0, metaState);
+            // Attach display id when possible so key goes to the correct display.
+            InputEvent ie = event;
+            setInputEventDisplayId(ie, displayId);
+            // Use hidden InputManager via reflection to inject the event.
+            Class<?> imClass = Class.forName("android.hardware.input.InputManager");
+            Method getInstance = imClass.getMethod("getInstance");
+            Object im = getInstance.invoke(null);
+            Method inject = imClass.getMethod("injectInputEvent", InputEvent.class, int.class);
+            Object result = inject.invoke(im, ie, 0 /*mode*/);
+            return !(result instanceof Boolean) || (Boolean) result;
+        } catch (Throwable t) {
+            Logger.warningPrintln("injectKeyEvent failed: " + t);
+            return false;
+        }
     }
 
     /**
