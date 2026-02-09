@@ -45,6 +45,8 @@ public class Operate extends GsonIface {
     public String target;
     public String jAction;
     public String widget;
+    /** When true, retry getActionFromBuffer with screenshot in the same frame (first-step image for AutodevAgent). */
+    public boolean requestScreenshotRetry;
 
     public static Operate fromJson(String jsonStr) {
         return gson.fromJson(jsonStr, Operate.class);
@@ -69,6 +71,7 @@ public class Operate extends GsonIface {
         o.aid = r.aid != null ? r.aid : "";
         o.jAction = r.jAction != null ? r.jAction : "";
         o.widget = r.widget != null ? r.widget : "";
+        o.requestScreenshotRetry = r.requestScreenshotRetry;
         return o;
     }
 

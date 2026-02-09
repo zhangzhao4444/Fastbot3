@@ -65,6 +65,8 @@ import com.android.commands.monkey.events.base.mutation.MutationAirplaneEvent;
 import com.android.commands.monkey.events.base.mutation.MutationAlwaysFinishActivityEvent;
 import com.android.commands.monkey.events.base.mutation.MutationWifiEvent;
 import com.android.commands.monkey.events.customize.ClickEvent;
+import com.android.commands.monkey.events.customize.DragEvent;
+import com.android.commands.monkey.events.customize.PinchOrZoomEvent;
 import com.android.commands.monkey.events.customize.ShellEvent;
 import com.android.commands.monkey.fastbot.client.ActionType;
 import com.android.commands.monkey.framework.AndroidDevice;
@@ -384,6 +386,13 @@ public abstract class MonkeySourceApeBase {
                 }
             }
         }
+        // All 10 candidates in black: try display center as fallback to avoid clicking black area
+        float cx = displayBounds.exactCenterX();
+        float cy = displayBounds.exactCenterY();
+        boolean[] centerShield = AiClient.checkPointsInShield(this.currentActivity, new float[]{cx}, new float[]{cy});
+        if (centerShield != null && centerShield.length > 0 && !centerShield[0]) {
+            return new PointF(cx, cy);
+        }
         return new PointF(mShieldXCoords[9], mShieldYCoords[9]);
     }
 
@@ -668,6 +677,24 @@ public abstract class MonkeySourceApeBase {
                 PointF point = ((ClickEvent) event).getPoint();
                 point = shieldBlackRect(point);
                 ((ClickEvent) event).setPoint(point);
+            } else if (event instanceof DragEvent) {
+                DragEvent drag = (DragEvent) event;
+                PointF[] pts = drag.getPoints();
+                if (pts != null) {
+                    for (int i = 0; i < pts.length; i++) {
+                        pts[i] = shieldBlackRect(pts[i]);
+                    }
+                    drag.setPoints(pts);
+                }
+            } else if (event instanceof PinchOrZoomEvent) {
+                PinchOrZoomEvent pinch = (PinchOrZoomEvent) event;
+                PointF[] pts = pinch.getPoints();
+                if (pts != null) {
+                    for (int i = 0; i < pts.length; i++) {
+                        pts[i] = shieldBlackRect(pts[i]);
+                    }
+                    pinch.setPoints(pts);
+                }
             }
             for (MonkeyEvent me : event.generateMonkeyEvents()) {
                 if (me == null) throw new RuntimeException();

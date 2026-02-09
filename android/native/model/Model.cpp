@@ -12,6 +12,7 @@
 #include "../Base.h"
 #include "../utils.hpp"
 #include "../thirdpart/json/json.hpp"
+#include "../llm/HttpLlmClient.h"
 #include <algorithm>
 #include <ctime>
 #include <iostream>
@@ -129,10 +130,24 @@ namespace fastbotx {
         #define FASTBOT_VERSION __DATE__ " " __TIME__
     #endif
 #endif
-        BLOG("----Fastbot native version " FASTBOT_VERSION "----\n");
+        BLOG("----Fastbot native build version: " FASTBOT_VERSION "----\n");
         this->_graph = std::make_shared<Graph>();
         this->_preference = Preference::inst();
         this->_netActionParam.netActionTaskid = 0;
+
+        // Initialize AutodevAgent with HTTP LLM client if LLM is enabled in config.
+        LlmRuntimeConfig llmCfg;
+        if (this->_preference) {
+            llmCfg = this->_preference->getLlmRuntimeConfig();
+        }
+        std::shared_ptr<LlmClient> client = nullptr;
+        if (llmCfg.enabled) {
+            client = std::make_shared<HttpLlmClient>(llmCfg);
+            BLOG("AutodevAgent: HTTP LLM client initialized with model %s", llmCfg.model.c_str());
+        } else {
+            BLOG("AutodevAgent: LLM is disabled in config");
+        }
+        this->_autodevAgent = std::make_shared<AutodevAgent>(this->_preference, client);
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
         this->_transitionLog.resize(MaxTransitionLogSize);
         BLOG("state abstraction: enabled (check interval=%d, batch every %d steps)",
@@ -224,7 +239,6 @@ namespace fastbotx {
     std::string Model::getOperate(const ElementPtr &element, const std::string &activity,
                                   const std::string &deviceID) {
         OperatePtr operate = getOperateOpt(element, activity, deviceID);
-        // Convert operation object to JSON string
         std::string operateString = operate->toString();
         return operateString;
     }
@@ -240,14 +254,6 @@ namespace fastbotx {
      * @param element XML Element object of the current page
      * @return Custom action if exists, nullptr otherwise
      */
-    ActionPtr Model::getCustomActionIfExists(const std::string &activity, const ElementPtr &element) const {
-        if (this->_preference) {
-            BLOG("try get custom action from preference");
-            return this->_preference->resolvePageAndGetSpecifiedAction(activity, element);
-        }
-        return nullptr;
-    }
-
     /**
      * @brief Get or create an activity string pointer
      * 
@@ -304,7 +310,7 @@ namespace fastbotx {
      * @note If the device ID is not found, returns the default agent instead of
      *       creating a new one. This ensures all devices have an agent to use.
      */
-    AbstractAgentPtr Model::getOrCreateAgent(const std::string &deviceID) {
+        AbstractAgentPtr Model::getOrCreateAgent(const std::string &deviceID) {
         // Create a default agent if map is empty
         if (this->_deviceIDAgentMap.empty()) {
             BLOG("%s", "use reuseAgent as the default agent");
@@ -517,43 +523,80 @@ namespace fastbotx {
      */
     OperatePtr Model::getOperateOpt(const ElementPtr &element, const std::string &activity,
                                     const std::string &deviceID) {
+        return getOperateOpt(element, activity, deviceID, nullptr);
+    }
+
+    OperatePtr Model::getOperateOpt(const ElementPtr &element, const std::string &activity,
+                                    const std::string &deviceID, bool *requestScreenshotRetry) {
         // Record method start time for performance tracking
         double methodStartTimestamp = currentStamp();
         
-        // Step 1: Get custom action from preference if user specified one
-        ActionPtr customAction = getCustomActionIfExists(activity, element);
+        // Step 0: Match LLM task on raw tree (before resolvePage) so checkpoint matches unmodified UI.
+        LlmTaskConfigPtr preMatchedLlmTask = nullptr;
+        if (this->_preference && element) {
+            preMatchedLlmTask = this->_preference->matchLlmTask(activity, element);
+        }
         
-        // Step 2: Get or create activity pointer (reuses existing pointers for memory efficiency)
+        // Step 1: Resolve page (black widgets, tree pruning, valid texts) before using element.
+        if (this->_preference && element) {
+            this->_preference->resolvePage(activity, element);
+        }
+        // Step 2: Custom action from max.xpath.actions (if any) for this activity and page.
+        ActionPtr customAction = (this->_preference && element)
+            ? this->_preference->getCustomActionFromXpath(activity, element)
+            : nullptr;
+        
+        // Step 3: Get or create activity pointer (reuses existing pointers for memory efficiency)
         stringPtr activityPtr = getOrCreateActivityPtr(activity);
         
-        // Step 3: Get or create agent for this device (creates default if needed)
+        // Step 4: Get or create agent for this device (creates default if needed)
         AbstractAgentPtr agent = getOrCreateAgent(deviceID);
         
-        // Step 4: Create state from element and add to graph
+        // Step 5: Create state from element and add to graph
         // The graph handles deduplication if a similar state already exists
         // currentStamp() returns ms; record build-state-only duration for log
         double buildStateStartTimestamp = currentStamp();
         StatePtr state = createAndAddState(element, agent, activityPtr);
         double buildStateEndTimestamp = currentStamp();
+        bool fromLlm = (_autodevAgent && _autodevAgent->inSession());
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
-        recordTransition(agent, state);
-        recordStateSplitIfRefined(activityPtr ? *activityPtr : "", state);
-        if (state && state->getActivityString() &&
-            state->getMaxWidgetsPerModelAction() > static_cast<size_t>(AlphaMaxGuiActionsPerModelAction)) {
-            _activitiesNeedingAlphaRefinement.insert(activityPtr ? *activityPtr : "");
+        if (!fromLlm) {
+            recordTransition(agent, state);
+            recordStateSplitIfRefined(activityPtr ? *activityPtr : "", state);
+            if (state && state->getActivityString() &&
+                state->getMaxWidgetsPerModelAction() > static_cast<size_t>(AlphaMaxGuiActionsPerModelAction)) {
+                _activitiesNeedingAlphaRefinement.insert(activityPtr ? *activityPtr : "");
+            }
         }
 #endif
-        // Step 5: Select action (either custom, restart, or from agent)
+        // Step 5b: Removed — image now stays in Java (setLastScreenshotForLlm + doLlmHttpPostFromPrompt).
+        // Native no longer returns NOP when screenshotBytes is empty; Java always has the image when needed.
+        // Step 6: Optionally delegate to AutodevAgent before RL (pass pre-matched task from raw tree).
+        ActionPtr llmAction = nullptr;
+        if (this->_autodevAgent) {
+            llmAction = this->_autodevAgent->selectNextAction(element, activity, deviceID, preMatchedLlmTask);
+        }
+
+        // Step 7: Select action (either LLM, custom, restart, or from agent)
         double actionCost = 0.0;
-        ActionPtr action = selectAction(state, agent, customAction, actionCost);
+        ActionPtr action;
+        if (llmAction) {
+            // When AutodevAgent returns an action, we bypass RL for this step.
+            action = llmAction;
+        } else {
+            action = selectAction(state, agent, customAction, actionCost);
+        }
         
         // Handle null action gracefully
         if (nullptr == action) {
             return DeviceOperateWrapper::OperateNop;
         }
         
-        // Step 6: Convert action to operation object and apply patches
+        // Step 8: Convert action to operation object and apply patches
         OperatePtr opt = convertActionToOperate(action, state);
+        if (llmAction) {
+            opt->allowFuzzing = false;
+        }
         
         // Record end time and log performance metrics (currentStamp returns ms, keep ms for log)
         double methodEndTimestamp = currentStamp();
@@ -573,10 +616,12 @@ namespace fastbotx {
              totalCostMs);
 #endif
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
-        _stepCountSinceLastCheck++;
-        if (_stepCountSinceLastCheck >= RefinementCheckInterval) {
-            runRefinementAndCoarseningIfScheduled();
-            _stepCountSinceLastCheck = 0;
+        if (!fromLlm) {
+            _stepCountSinceLastCheck++;
+            if (_stepCountSinceLastCheck >= RefinementCheckInterval) {
+                runRefinementAndCoarseningIfScheduled();
+                _stepCountSinceLastCheck = 0;
+            }
         }
 #endif
         return opt;

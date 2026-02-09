@@ -43,6 +43,18 @@ public class PinchOrZoomEvent extends AbstractCustomEvent {
         this.values = values;
     }
 
+    /** For black-rect shielding: get all trajectory points. */
+    public PointF[] getPoints() {
+        return toPointsArray(values);
+    }
+
+    /** For black-rect shielding: set trajectory points after deflection. */
+    public void setPoints(PointF[] points) {
+        if (points != null && points.length >= 4) {
+            this.values = fromPointsArray(points);
+        }
+    }
+
     public static CustomEvent fromJSONObject(JSONObject jEvent) throws JSONException {
         JSONArray jValues = jEvent.getJSONArray("values");
         float[] values = new float[jValues.length()];

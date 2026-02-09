@@ -150,7 +150,7 @@ namespace fastbotx {
      * The reward is based on the probability that the action can reach unvisited activities
      * and the expectation value of the resulting state.
      * 
-     * Reward calculation formula (same as ModelReusableAgent):
+     * Reward calculation formula:
      * reward = [probabilityOfVisitingNewActivities / sqrt(visitedCount + 1)]
      *        + [getStateActionExpectationValue / sqrt(stateVisitedCount + 1)]
      * 
@@ -399,7 +399,7 @@ namespace fastbotx {
             // where k is the number of steps from i+1 to the end of window
             // 
             // We need to compute: R_i + γR_{i+1} + ... + γ^(k-1)R_{i+k-1} + γ^k * Q_other(s_{i+k}, a_{i+k})
-            // The standard way (like ModelReusableAgent) is to accumulate from back to front
+            // Standard N-step: accumulate from back to front
             // But since each action uses a different Q-function for bootstrapping, we compute independently
             double nStepReturn;
             double bootstrapQValue;

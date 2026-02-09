@@ -8,7 +8,7 @@
 
 本文档详细解释在GUI自动化测试场景下，**on-policy**和**off-policy**强化学习算法的区别、含义和实际影响。
 
-**当前实现**：`ModelReusableAgent`使用**N-step SARSA**，属于**on-policy**算法。
+**当前实现**：默认使用 **DoubleSarsaAgent**（N-step Double SARSA），属于 **off-policy** 算法。文档中部分示例代码曾针对已移除的 on-policy 实现（ModelReusableAgent），仅作概念参考。
 
 ---
 

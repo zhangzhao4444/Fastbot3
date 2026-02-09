@@ -12,8 +12,16 @@ import com.android.commands.monkey.fastbot.client.Operate;
 import com.android.commands.monkey.fastbot.client.OperateResult;
 import com.android.commands.monkey.utils.Logger;
 
-import java.nio.ByteBuffer;
+import android.util.Base64;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -23,6 +31,29 @@ import java.util.concurrent.TimeUnit;
  */
 
 public class AiClient {
+
+    /**
+     * Called when native triggers an LLM HTTP request (doLlmHttpPostFromPrompt). Implementations
+     * should capture the current screen and return PNG bytes so every LLM request has an image
+     * without capturing every step.
+     */
+    public interface LlmScreenshotProvider {
+        byte[] captureForLlm();
+    }
+
+    private static volatile LlmScreenshotProvider sLlmScreenshotProvider;
+
+    /** Set by monkey source so LLM requests capture screenshot on demand (no per-step capture). */
+    public static void setLlmScreenshotProvider(LlmScreenshotProvider provider) {
+        sLlmScreenshotProvider = provider;
+    }
+
+    /** Task output directory for LLM req/resp dumps (same as other task logs). Set by MonkeySourceApeNative. */
+    private static volatile File sLlmDumpDirectory;
+
+    public static void setLlmDumpDirectory(File taskOutputDir) {
+        sLlmDumpDirectory = taskOutputDir;
+    }
 
     private static final AiClient singleton;
 
@@ -36,6 +67,9 @@ public class AiClient {
         long end = SystemClock.elapsedRealtimeNanos();
         Logger.infoFormat("load fastbot_native takes %d ms.", TimeUnit.NANOSECONDS.toMillis(end - begin));
         singleton = new AiClient(success);
+        if (success) {
+            singleton.nativeRegisterLlmHttpRunner();
+        }
     }
 
     public enum AlgorithmType {
@@ -61,6 +95,9 @@ public class AiClient {
     }
 
     private boolean loaded = false;
+
+    /** Fallback when no LlmScreenshotProvider is set (e.g. tests). */
+    private byte[] lastScreenshotForLlm;
 
     protected AiClient(boolean success) {
         loaded = success;
@@ -140,6 +177,179 @@ public class AiClient {
     }
 
     /**
+     * Optional: set a pre-captured screenshot when no LlmScreenshotProvider is registered (e.g. tests).
+     */
+    public static void setLastScreenshotForLlm(byte[] png) {
+        if (singleton != null) {
+            singleton.lastScreenshotForLlm = png;
+        }
+    }
+
+    /**
+     * Build OpenAI-style request body (prompt + optional screenshot as base64) and POST.
+     * Screenshot is taken on demand via LlmScreenshotProvider when native calls back for LLM request,
+     * so we do not capture every step and every LLM request still gets an image.
+     * Called from native via JNI when libcurl is not available.
+     *
+     * @param url       API endpoint
+     * @param apiKey    Bearer token (may be empty)
+     * @param prompt    User prompt text
+     * @param model     Model name
+     * @param maxTokens Max tokens
+     * @return response body string, or null on failure
+     */
+    public String doLlmHttpPostFromPrompt(String url, String apiKey, String prompt, String model, int maxTokens) {
+        if (url == null || url.isEmpty()) {
+            Logger.errorPrintln("doLlmHttpPostFromPrompt: url null or empty");
+            return null;
+        }
+        long tStart = System.currentTimeMillis();
+        String body = buildLlmRequestBody(prompt, model, maxTokens);
+        if (body == null) {
+            Logger.errorPrintln("doLlmHttpPostFromPrompt: buildLlmRequestBody returned null");
+            return null;
+        }
+        long tAfterBuild = System.currentTimeMillis();
+        long ts = System.currentTimeMillis();
+        saveLlmRawToFile(ts + "-req.json", body);
+        String result = doLlmHttpPostBody(url, apiKey, body);
+        long tEnd = System.currentTimeMillis();
+        long buildMs = tAfterBuild - tStart;
+        long requestMs = tEnd - tAfterBuild;
+        long totalMs = tEnd - tStart;
+        Logger.println("// [LLM timing] (ms) buildPrompt+body: " + buildMs + ", request: " + requestMs + ", total: " + totalMs);
+        if (result != null) {
+            saveLlmRawToFile(ts + "-resp.json", result);
+        } else {
+            Logger.errorPrintln("doLlmHttpPostFromPrompt: doLlmHttpPostBody returned null (check HTTP code / network above)");
+        }
+        return result;
+    }
+
+    private static void saveLlmRawToFile(String filename, String content) {
+        if (content == null || sLlmDumpDirectory == null) return;
+        try {
+            if (!sLlmDumpDirectory.exists()) sLlmDumpDirectory.mkdirs();
+            File f = new File(sLlmDumpDirectory, filename);
+            try (FileOutputStream os = new FileOutputStream(f)) {
+                os.write(content.getBytes(StandardCharsets.UTF_8));
+            }
+        } catch (Exception e) {
+            Logger.errorPrintln("saveLlmRawToFile failed: " + filename + " " + e.getMessage());
+        }
+    }
+
+    private String buildLlmRequestBody(String prompt, String model, int maxTokens) {
+        try {
+            long t0 = System.currentTimeMillis();
+            byte[] img = null;
+            if (sLlmScreenshotProvider != null) {
+                img = sLlmScreenshotProvider.captureForLlm();
+            }
+            if (img == null || img.length == 0) {
+                img = lastScreenshotForLlm;
+            }
+            long t1 = System.currentTimeMillis();
+            long screenshotMs = t1 - t0;
+            StringBuilder sb = new StringBuilder();
+            sb.append("{\"model\":");
+            sb.append(escapeJson(model != null ? model : ""));
+            sb.append(",\"max_tokens\":").append(Math.max(0, maxTokens));
+            sb.append(",\"stream\":false,\"messages\":[");
+            sb.append("{\"role\":\"system\",\"content\":\"You are a GUI testing agent that must respond with a strict JSON action object.\"},");
+            sb.append("{\"role\":\"user\",\"content\":");
+            if (img != null && img.length > 0) {
+                String b64 = Base64.encodeToString(img, Base64.NO_WRAP);
+                String mime = isPngBytes(img) ? "image/png" : "image/jpeg";
+                sb.append("[{\"type\":\"text\",\"text\":");
+                sb.append(escapeJson(prompt != null ? prompt : ""));
+                sb.append("},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:");
+                sb.append(mime);
+                sb.append(";base64,");
+                sb.append(b64);
+                sb.append("\"}}]}]}");
+            } else {
+                sb.append(escapeJson(prompt != null ? prompt : ""));
+                sb.append("}]}");
+            }
+            long t2 = System.currentTimeMillis();
+            long buildBodyMs = t2 - t1;
+            Logger.println("// [LLM timing] (ms) screenshot: " + screenshotMs + ", assembleBody: " + buildBodyMs);
+            return sb.toString();
+        } catch (Exception e) {
+            Logger.errorPrintln("buildLlmRequestBody failed: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /** PNG magic: 89 50 4E 47 0D 0A 1A 0A */
+    private static boolean isPngBytes(byte[] img) {
+        return img != null && img.length >= 8
+                && img[0] == (byte) 0x89 && img[1] == 0x50 && img[2] == 0x4E && img[3] == 0x47;
+    }
+
+    private static String escapeJson(String s) {
+        if (s == null) return "\"\"";
+        StringBuilder sb = new StringBuilder(s.length() + 2);
+        sb.append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '"') sb.append("\\\"");
+            else if (c == '\\') sb.append("\\\\");
+            else if (c == '\n') sb.append("\\n");
+            else if (c == '\r') sb.append("\\r");
+            else if (c == '\t') sb.append("\\t");
+            else if (c < ' ') sb.append(String.format("\\u%04x", (int) c));
+            else sb.append(c);
+        }
+        sb.append('"');
+        return sb.toString();
+    }
+
+    private String doLlmHttpPostBody(String url, String apiKey, String body) {
+        if (url == null || url.isEmpty()) return null;
+        HttpURLConnection conn = null;
+        try {
+            URL u = new URL(url);
+            conn = (HttpURLConnection) u.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            if (apiKey != null && !apiKey.isEmpty()) {
+                conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+            }
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(20000);
+            conn.setDoOutput(true);
+            if (body != null && !body.isEmpty()) {
+                byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+                conn.setFixedLengthStreamingMode(bytes.length);
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.write(bytes);
+                }
+            }
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) {
+                Logger.errorPrintln("doLlmHttpPostBody: HTTP " + code + " for url=" + url + " (expected 2xx; 404=wrong path, check max.llm.apiUrl e.g. https://.../v1/chat/completions)");
+                return null;
+            }
+            InputStream in = conn.getInputStream();
+            if (in == null) return null;
+            byte[] buf = new byte[4096];
+            StringBuilder sb = new StringBuilder();
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                sb.append(new String(buf, 0, n, StandardCharsets.UTF_8));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            Logger.errorPrintln("doLlmHttpPostBody failed: " + e.getMessage());
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    /**
      * Report current activity for coverage tracking (performance: coverage in C++, PERF §3.4).
      */
     public static void reportActivity(String activity) {
@@ -169,6 +379,11 @@ public class AiClient {
     /**
      * Get action from XML supplied as Direct ByteBuffer (performance: avoids JNI string copy).
      * Tries structured result first to avoid JSON parse (opt4); falls back to JSON if needed.
+     * Image for LLM is obtained in Java on demand when native triggers HTTP (LlmScreenshotProvider).
+     *
+     * @param activity  current activity name
+     * @param xmlBuffer direct ByteBuffer containing UTF-8 XML bytes
+     * @return Operate object or null on error
      */
     public static Operate getActionFromBuffer(String activity, ByteBuffer xmlBuffer) {
         if (xmlBuffer == null || !xmlBuffer.isDirect() || xmlBuffer.remaining() <= 0) {
@@ -203,10 +418,7 @@ public class AiClient {
 
     /**
      * Get action from XML in Direct ByteBuffer (performance: avoid GetStringUTFChars copy, PERF §3.1).
-     * @param activity current activity name
-     * @param xmlBuffer direct ByteBuffer containing UTF-8 XML bytes; position/limit define the region
-     * @param byteLength number of bytes to read (must be buffer limit/remaining, not capacity)
-     * @return Operate JSON string, or null/empty on error
+     * Image for LLM is obtained in Java on demand when native triggers HTTP (no screenshot param).
      */
     private native String getActionFromBufferNative(String activity, ByteBuffer xmlBuffer, int byteLength);
 
@@ -216,6 +428,9 @@ public class AiClient {
     private native void reportActivityNative(String activity);
     private native String getCoverageJsonNative();
     private native String getNextFuzzActionNative(int displayWidth, int displayHeight, boolean simplify);
+
+    /** Register this instance as the LLM HTTP runner for native when libcurl is not available. */
+    private native void nativeRegisterLlmHttpRunner();
 
     public static native String getNativeVersion();
 

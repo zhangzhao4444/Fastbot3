@@ -21,6 +21,7 @@ package com.android.commands.monkey.framework;
 import android.app.ActivityManager;
 import android.app.ActivityManager.RunningTaskInfo;
 import android.app.ActivityManagerNative;
+import android.content.Context;
 import android.app.IActivityManager;
 import android.app.IApplicationThread;
 import android.app.ProfilerInfo;
@@ -36,11 +37,13 @@ import android.os.IBinder;
 import android.view.IWindowManager;
 import android.view.inputmethod.InputMethodInfo;
 
+import com.android.commands.monkey.utils.ContextUtils;
 import com.android.commands.monkey.utils.Logger;
 import com.android.internal.view.IInputMethodManager;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -71,6 +74,8 @@ public class APIAdapter {
 
     /** Cached Method for getTasks (see getTasks). */
     private static Method getTasksMethod = null;
+    /** When true, IActivityManager.getTasks is unavailable; use ActivityManager.getRunningTasks fallback. */
+    private static boolean getTasksUseFallback = false;
 
     /** Cached Method for getPermissionInfo; 2 = (String,int), 3 = (String,String,int). */
     private static Method getPermissionInfoMethod = null;
@@ -117,15 +122,24 @@ public class APIAdapter {
 
     /** Resolve method; returns null on NoSuchMethodException/NoSuchMethodError (caller may try other signatures). On SecurityException, logs and exits. */
     private static Method findMethod(Class<?> clazz, String name, Class<?>... types) {
+        return findMethod(clazz, name, true, types);
+    }
+
+    /** Same as findMethod; when logOnFailure is false, does not log on NoSuchMethod (for quiet multi-signature probe). */
+    private static Method findMethod(Class<?> clazz, String name, boolean logOnFailure, Class<?>... types) {
         try {
             Method method = clazz.getMethod(name, types);
             method.setAccessible(true);
             return method;
         } catch (NoSuchMethodException e) {
-            Logger.errorPrintln("findMethod() error, NoSuchMethodException happened, there is no such method: " + name);
+            if (logOnFailure) {
+                Logger.errorPrintln("findMethod() error, NoSuchMethodException happened, there is no such method: " + name);
+            }
             return null;
         } catch (java.lang.NoSuchMethodError e) {
-            Logger.errorPrintln("findMethod() error, NoSuchMethodError happened, there is no such method: " + name);
+            if (logOnFailure) {
+                Logger.errorPrintln("findMethod() error, NoSuchMethodError happened, there is no such method: " + name);
+            }
             return null;
         } catch (SecurityException e) {
             e.printStackTrace();
@@ -343,20 +357,23 @@ public class APIAdapter {
 
     @SuppressWarnings("unchecked")
     public static List<RunningTaskInfo> getTasks(IActivityManager iAm, int maxNum) {
+        if (getTasksUseFallback) {
+            return getTasksViaActivityManager(maxNum);
+        }
         Method method = getTasksMethod;
         if (method == null) {
             // Use IActivityManager.class so getMethod() finds the interface method; iAm.getClass()
-            // returns the Binder proxy class and getMethod() may not find getTasks() on it,
-            // causing a spurious NoSuchMethodException on first call (then second signature succeeds).
+            // returns the Binder proxy class and getMethod() may not find getTasks() on it.
             Class<?> clazz = IActivityManager.class;
             String name = "getTasks";
-            method = findMethod(clazz, name, int.class, int.class);
+            method = findMethod(clazz, name, false, int.class, int.class);
             if (method == null) {
-                method = findMethod(clazz, name, int.class);
+                method = findMethod(clazz, name, false, int.class);
             }
             if (method == null) {
-                Logger.println("Cannot resolve method: " + name);
-                System.exit(1);
+                Logger.warningPrintln("IActivityManager.getTasks not available, using ActivityManager.getRunningTasks fallback");
+                getTasksUseFallback = true;
+                return getTasksViaActivityManager(maxNum);
             }
             getTasksMethod = method;
         }
@@ -365,6 +382,28 @@ public class APIAdapter {
             return (List<RunningTaskInfo>) invokej(method, iAm, maxNum, 0 /* flags */);
         } else { // 1
             return (List<RunningTaskInfo>) invokej(method, iAm, maxNum);
+        }
+    }
+
+    /**
+     * Fallback when IActivityManager.getTasks() is not available (e.g. hidden API or vendor ROM).
+     * Uses public ActivityManager.getRunningTasks(int). On API 31+ this may return only the caller's tasks.
+     */
+    private static List<RunningTaskInfo> getTasksViaActivityManager(int maxNum) {
+        try {
+            Context ctx = ContextUtils.getSystemContext();
+            if (ctx == null) {
+                return Collections.emptyList();
+            }
+            ActivityManager am = (ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+            if (am == null) {
+                return Collections.emptyList();
+            }
+            List<ActivityManager.RunningTaskInfo> list = am.getRunningTasks(maxNum);
+            return list != null ? list : Collections.<RunningTaskInfo>emptyList();
+        } catch (Exception e) {
+            Logger.warningPrintln("getTasksViaActivityManager failed: " + e.getMessage());
+            return Collections.emptyList();
         }
     }
 

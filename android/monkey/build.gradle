@@ -29,8 +29,14 @@ configurations {
     }
 }
 
+// 构建时版本戳：3.0.年(26).月日(0208).时分(1533)-git
+def fastbotBuildVersion() {
+    return "3.0." + new Date().format('yy.MMdd.HHmm', TimeZone.getDefault()) + "-git"
+}
+
 android {
     compileSdkVersion 32
+    namespace 'com.android.commands.monkey'
 
     defaultConfig {
         minSdkVersion 22
@@ -42,8 +48,12 @@ android {
         ndk {
             abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
         }
+        buildConfigField "String", "FASTBOT_VERSION", "\"${fastbotBuildVersion()}\""
     }
 
+    buildFeatures {
+        buildConfig true
+    }
     buildTypes {
         debug{
             debuggable true

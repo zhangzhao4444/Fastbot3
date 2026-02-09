@@ -96,6 +96,7 @@ namespace fastbotx {
 
 /// According to given xpath selector, containing text, content, classname, resource id, test if
 /// this current element has the same property value as the given xpath selector.
+/// Text and content-desc use fuzzy (contains) match: element text/desc containing selector value matches.
 /// \param xpathSelector Describe property values of a xml element should have.
 /// \return If this element could be matched to the given xpath selector, return true.
     bool Element::matchXpathSelector(const XpathPtr &xpathSelector) const {
@@ -104,17 +105,18 @@ namespace fastbotx {
         bool match;
         bool isResourceIDEqual = (!xpathSelector->resourceID.empty() &&
                                   this->getResourceID() == xpathSelector->resourceID);
-        bool isTextEqual = (!xpathSelector->text.empty() && this->getText() == xpathSelector->text);
+        // Fuzzy match: element text contains selector text (e.g. selector "登录" matches "新用户登录送会员")
+        const std::string &elText = this->getText();
+        bool isTextEqual = (!xpathSelector->text.empty() &&
+                            elText.size() >= xpathSelector->text.size() &&
+                            elText.find(xpathSelector->text) != std::string::npos);
         
-        // Performance optimization: Early exit for ContentDesc comparison
-        // Most elements don't have ContentDesc, so check emptiness first
+        // Fuzzy match: element content-desc contains selector content-desc
         bool isContentEqual = false;
         if (!xpathSelector->contentDescription.empty()) {
             const std::string &contentDesc = this->getContentDesc();
-            // Performance: Check length first to avoid string comparison if lengths differ
-            if (contentDesc.length() == xpathSelector->contentDescription.length()) {
-                isContentEqual = (contentDesc == xpathSelector->contentDescription);
-            }
+            isContentEqual = (contentDesc.size() >= xpathSelector->contentDescription.size() &&
+                              contentDesc.find(xpathSelector->contentDescription) != std::string::npos);
         }
         bool isClassNameEqual = (!xpathSelector->clazz.empty() &&
                                  this->getClassname() == xpathSelector->clazz);

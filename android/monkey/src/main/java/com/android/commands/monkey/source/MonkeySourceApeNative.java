@@ -32,6 +32,9 @@ import static com.android.commands.monkey.utils.Config.startAfterDoScrollBottomA
 import static com.android.commands.monkey.utils.Config.startAfterNSecondsofsleep;
 import static com.android.commands.monkey.utils.Config.swipeDuration;
 import static com.android.commands.monkey.utils.Config.takeScreenshotForEveryStep;
+import static com.android.commands.monkey.utils.Config.llmEnabled;
+import static com.android.commands.monkey.utils.Config.llmScreenshotJpegQuality;
+import static com.android.commands.monkey.utils.Config.llmScreenshotMaxSize;
 import static com.android.commands.monkey.utils.Config.throttleForExecPreSchema;
 import static com.android.commands.monkey.utils.Config.throttleForExecPreShell;
 import static com.android.commands.monkey.utils.Config.useRandomClick;
@@ -144,10 +147,16 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
     /** Reusable list for generateFuzzingAction simplify path (PERFORMANCE_OPTIMIZATION_ITEMS §8.3). */
     private final List<CustomEvent> mReusableFuzzEvents = new ArrayList<>();
 
+    // Cached screenshot state for LLM-based AutodevAgent (PNG bytes in memory, throttled by time/activity)
+    private long mLastLlmScreenshotTime = 0L;
+    private String mLastLlmScreenshotActivity = "";
+    private byte[] mLastLlmScreenshotPng = null;
+
     public MonkeySourceApeNative(Random random, List<ComponentName> MainApps,
                                  long throttle, boolean randomizeThrottle, boolean permissionTargetSystem,
                                  File outputDirectory) {
         super(random, MainApps, throttle, randomizeThrottle, outputDirectory);
+        AiClient.setLlmDumpDirectory(getOutputDir());
         mImageWriters = new ImageWriterQueue[imageWriterCount];
         for (int i = 0; i < 3; i++) {
             mImageWriters[i] = new ImageWriterQueue();
@@ -206,6 +215,103 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
     }
 
     /**
+     * Capture a screenshot as PNG bytes for LLM-based AutodevAgent, with simple
+     * throttling to avoid taking a screenshot every step.
+     *
+     * Strategy:
+     * - Only active when llmEnabled == true (unless forceRetry is true for native requestScreenshotRetry path)
+     * - If same activity and less than 1000ms since last capture, reuse cached PNG
+     * - Otherwise, call UiAutomation.takeScreenshot(), compress to PNG in-memory,
+     *   recycle the Bitmap and update cache.
+     *
+     * @param activity current activity name
+     * @param forceRetry if true, take screenshot regardless of llmEnabled (used when native requested retry with screenshot)
+     * @return PNG bytes or null if disabled or error
+     */
+    private byte[] captureLlmScreenshotIfNeeded(String activity, boolean forceRetry) {
+        boolean gated = !forceRetry && (!llmEnabled || mUiAutomation == null);
+        if (gated) {
+            if (mVerbose > 0) {
+                Logger.println("// [LLM screenshot] skip: llmEnabled=" + llmEnabled + " mUiAutomation=" + (mUiAutomation != null) + " forceRetry=" + forceRetry);
+            }
+            return null;
+        }
+        if (mUiAutomation == null) {
+            if (mVerbose > 0) Logger.println("// [LLM screenshot] mUiAutomation is null");
+            return null;
+        }
+        if (!forceRetry) {
+            long now = System.currentTimeMillis();
+            if (mLastLlmScreenshotPng != null
+                    && activity != null
+                    && activity.equals(mLastLlmScreenshotActivity)
+                    && (now - mLastLlmScreenshotTime) < 1000L) {
+                return mLastLlmScreenshotPng;
+            }
+        }
+
+        Bitmap map = mUiAutomation.takeScreenshot();
+        if (map == null) {
+            if (mVerbose > 0) Logger.println("// [LLM screenshot] takeScreenshot() returned null");
+            return null;
+        }
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream(64 * 1024);
+        boolean ok = map.compress(Bitmap.CompressFormat.PNG, 100, baos);
+        map.recycle();
+        if (!ok) {
+            if (mVerbose > 0) Logger.println("// [LLM screenshot] compress failed");
+            return null;
+        }
+        byte[] png = baos.toByteArray();
+        if (!forceRetry) {
+            long now = System.currentTimeMillis();
+            mLastLlmScreenshotPng = png;
+            mLastLlmScreenshotTime = now;
+            mLastLlmScreenshotActivity = (activity != null ? activity : "");
+        }
+        if (mVerbose > 0) Logger.println("// [LLM screenshot] captured len=" + png.length + " forceRetry=" + forceRetry);
+        return png;
+    }
+
+    /** @see #captureLlmScreenshotIfNeeded(String, boolean) */
+    private byte[] captureLlmScreenshotIfNeeded(String activity) {
+        return captureLlmScreenshotIfNeeded(activity, false);
+    }
+
+    /**
+     * Capture screenshot when native triggers an LLM request (doLlmHttpPostFromPrompt).
+     * No throttle, no llmEnabled gate — ensures every LLM request gets a fresh image.
+     * Optionally resizes (max.llm.screenshotMaxSize) and compresses as JPEG (max.llm.screenshotJpegQuality)
+     * to reduce tokens and latency; 0 = no resize / PNG.
+     */
+    private byte[] captureScreenshotForLlmRequest() {
+        if (mUiAutomation == null) return null;
+        Bitmap map = mUiAutomation.takeScreenshot();
+        if (map == null) return null;
+        int maxSize = llmScreenshotMaxSize > 0 ? llmScreenshotMaxSize : Integer.MAX_VALUE;
+        int w = map.getWidth();
+        int h = map.getHeight();
+        if (w > maxSize || h > maxSize) {
+            float scale = Math.min((float) maxSize / w, (float) maxSize / h);
+            int nw = Math.max(1, Math.round(w * scale));
+            int nh = Math.max(1, Math.round(h * scale));
+            Bitmap scaled = Bitmap.createScaledBitmap(map, nw, nh, true);
+            map.recycle();
+            map = scaled;
+        }
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream(64 * 1024);
+        int jpegQuality = llmScreenshotJpegQuality;
+        boolean ok;
+        if (jpegQuality > 0 && jpegQuality <= 100) {
+            ok = map.compress(Bitmap.CompressFormat.JPEG, jpegQuality, baos);
+        } else {
+            ok = map.compress(Bitmap.CompressFormat.PNG, 100, baos);
+        }
+        map.recycle();
+        return ok ? baos.toByteArray() : null;
+    }
+
+    /**
      * ActiveWindow may not belong to activity package.
      *
      * @return AccessibilityNodeInfo of the root
@@ -256,12 +362,36 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
             mXmlBuffer.flip();
             return AiClient.getActionFromBuffer(activity, mXmlBuffer);
         } catch (Exception e) {
-            byte[] bytes = stringOfGuiTree.getBytes(StandardCharsets.UTF_8);
-            ensureXmlBufferCapacity(bytes.length);
+            if (mVerbose > 0) Logger.println("// getActionFromXmlBuffer error: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Same as getActionFromXmlBuffer but ensures LLM path can capture screenshot on demand (provider already set).
+     */
+    private Operate getActionFromXmlBufferWithScreenshot(String activity, String stringOfGuiTree) {
+        try {
+            int est = stringOfGuiTree.length() * 4;
+            ensureXmlBufferCapacity(est);
             mXmlBuffer.clear();
-            mXmlBuffer.put(bytes);
+            CharsetEncoder enc = StandardCharsets.UTF_8.newEncoder();
+            CoderResult cr = enc.encode(CharBuffer.wrap(stringOfGuiTree), mXmlBuffer, true);
+            if (cr.isOverflow()) {
+                ensureXmlBufferCapacity(Math.max(mXmlBuffer.capacity() * 2, est * 2));
+                mXmlBuffer.clear();
+                enc.reset();
+                cr = enc.encode(CharBuffer.wrap(stringOfGuiTree), mXmlBuffer, true);
+            }
+            if (cr.isError()) {
+                throw new RuntimeException("UTF-8 encode error");
+            }
+            enc.flush(mXmlBuffer);
             mXmlBuffer.flip();
             return AiClient.getActionFromBuffer(activity, mXmlBuffer);
+        } catch (Exception e) {
+            if (mVerbose > 0) Logger.println("// getActionFromXmlBufferWithScreenshot error: " + e.getMessage());
+            return null;
         }
     }
 
@@ -451,6 +581,8 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
 
         // If node is not null, build tree and recycle this resource.
         if (info!=null){
+            // So when C++ triggers LLM request (doLlmHttpPostFromPrompt), we capture on demand — no per-step screenshot.
+            AiClient.setLlmScreenshotProvider(this::captureScreenshotForLlmRequest);
             boolean useXmlOnly = "xml".equalsIgnoreCase(Config.treeDumpMode);
             if (useXmlOnly) {
                 // max.treeDumpMode=xml: skip binary, always dump XML (e.g. for perf comparison or compatibility).
@@ -472,7 +604,8 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                 if (binaryWritten > 0) {
                     mXmlBuffer.position(0);
                     mXmlBuffer.limit(binaryWritten);
-                    operate = AiClient.getActionFromBuffer(topActivityName != null ? topActivityName.getClassName() : "", mXmlBuffer);
+                    String activityForLlm = topActivityName != null ? topActivityName.getClassName() : "";
+                    operate = AiClient.getActionFromBuffer(activityForLlm, mXmlBuffer);
                 }
                 if (operate == null) {
                     if (mVerbose > 0) {
@@ -501,6 +634,10 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                 }
                 if (operate == null) {
                     operate = AiClient.getAction(topActivityName.getClassName(), stringOfGuiTree);
+                }
+                // Screenshot is now captured on demand when native triggers LLM request; no retry path needed.
+                if (operate != null && operate.requestScreenshotRetry && stringOfGuiTree != null && !stringOfGuiTree.isEmpty()) {
+                    operate = getActionFromXmlBufferWithScreenshot(topActivityName.getClassName(), stringOfGuiTree);
                 }
                 if (operate == null) {
                     generateThrottleEvent(mThrottle);

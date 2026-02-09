@@ -45,6 +45,10 @@ JNIEXPORT jstring JNICALL
 Java_com_bytedance_fastbot_AiClient_getNextFuzzActionNative(JNIEnv *env, jobject, jint displayWidth,
                                                             jint displayHeight, jboolean simplify);
 
+/** Register AiClient instance as LLM HTTP runner for native when libcurl is not available. */
+JNIEXPORT void JNICALL
+Java_com_bytedance_fastbot_AiClient_nativeRegisterLlmHttpRunner(JNIEnv *env, jobject thiz);
+
 #ifdef __cplusplus
 }
 #endif

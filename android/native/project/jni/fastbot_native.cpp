@@ -8,19 +8,25 @@
 #include "Model.h"
 #include "Element.h"
 #include "DeviceOperateWrapper.h"
-// #include "ModelReusableAgent.h"  // Temporarily disabled for DoubleSarsa testing
 #include "DoubleSarsaAgent.h"
 #include "utils.hpp"
+#include "../llm/LlmJavaHttp.h"
 #include "../thirdpart/json/json.hpp"
 #include <random>
 #include <chrono>
 #include <cstring>
+#include <jni.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 static fastbotx::ModelPtr _fastbot_model = nullptr;
+
+// LLM HTTP via Java (when libcurl not available): image stays in Java, native passes prompt only
+static JavaVM *g_jvm = nullptr;
+static jobject g_llmHttpRunner = nullptr;
+static jmethodID g_llmHttpDoPostFromPrompt = nullptr;
 
 // Fuzzer: RNG and one fuzz action JSON (performance §3.3)
 static std::mt19937 &fuzzRng() {
@@ -115,6 +121,7 @@ static fastbotx::ElementPtr parseTreeFromBuffer(const char *addr, size_t byteLen
 
 // getAction from Direct ByteBuffer (performance: avoid GetStringUTFChars copy, PERF §3.1; opt1 binary path).
 // byteLength must be the actual bytes in the buffer (Java limit/remaining), not capacity.
+// Image for LLM is obtained in Java on demand when native triggers HTTP (no screenshot param).
 jstring JNICALL Java_com_bytedance_fastbot_AiClient_getActionFromBufferNative(JNIEnv *env, jobject,
                                                                               jstring activity,
                                                                               jobject xmlBuffer,
@@ -148,6 +155,7 @@ jstring JNICALL Java_com_bytedance_fastbot_AiClient_getActionFromBufferNative(JN
 
 // getAction structured: return OperateResult to avoid JSON parse (SECURITY_AND_OPTIMIZATION §7 opt4).
 // byteLength must be the actual bytes in the buffer (Java limit/remaining), not capacity.
+// Image for LLM is obtained in Java on demand when native triggers HTTP (no screenshot param).
 jobject JNICALL Java_com_bytedance_fastbot_AiClient_getActionFromBufferNativeStructured(JNIEnv *env, jobject,
                                                                                         jstring activity,
                                                                                         jobject xmlBuffer,
@@ -167,8 +175,11 @@ jobject JNICALL Java_com_bytedance_fastbot_AiClient_getActionFromBufferNativeStr
 
     fastbotx::ElementPtr elem = parseTreeFromBuffer(static_cast<const char *>(addr), len);
     if (!elem) return nullptr;
-    fastbotx::OperatePtr opt = _fastbot_model->getOperateOpt(elem, activityString, "");
-    if (!opt || opt == fastbotx::DeviceOperateWrapper::OperateNop) return nullptr;
+    bool requestScreenshotRetry = false;
+    fastbotx::OperatePtr opt = _fastbot_model->getOperateOpt(elem, activityString, "", &requestScreenshotRetry);
+    if (!opt) return nullptr;
+    // When native asks for retry with screenshot (first-step image), return NOP result with flag so Java retries in same frame
+    if (opt == fastbotx::DeviceOperateWrapper::OperateNop && !requestScreenshotRetry) return nullptr;
 
     jclass cls = env->FindClass("com/android/commands/monkey/fastbot/client/OperateResult");
     if (!cls) return nullptr;
@@ -200,6 +211,8 @@ jobject JNICALL Java_com_bytedance_fastbot_AiClient_getActionFromBufferNativeStr
                         opt->getJAction().empty() ? nullptr : env->NewStringUTF(opt->getJAction().c_str()));
     env->SetObjectField(result, env->GetFieldID(cls, "widget", "Ljava/lang/String;"),
                         opt->widget.empty() ? nullptr : env->NewStringUTF(opt->widget.c_str()));
+    env->SetBooleanField(result, env->GetFieldID(cls, "requestScreenshotRetry", "Z"),
+                         requestScreenshotRetry ? JNI_TRUE : JNI_FALSE);
 
     env->DeleteLocalRef(cls);
     if (posArr) env->DeleteLocalRef(posArr);
@@ -221,8 +234,6 @@ void JNICALL Java_com_bytedance_fastbot_AiClient_fgdsaf5d(JNIEnv *env, jobject, 
     _fastbot_model->setPackageName(std::string(packageNameCString));
 
     BLOG("init agent with type %d, %s,  %d", agentType, packageNameCString, deviceType);
-    // Temporarily: Always use DoubleSarsaAgent for testing
-    // ModelReusableAgent has been disabled
     auto doubleSarsaAgentPtr = std::dynamic_pointer_cast<fastbotx::DoubleSarsaAgent>(agentPointer);
     if (doubleSarsaAgentPtr) {
         doubleSarsaAgentPtr->loadReuseModel(std::string(packageNameCString));
@@ -342,6 +353,79 @@ jstring JNICALL Java_com_bytedance_fastbot_AiClient_getNextFuzzActionNative(JNIE
     return env->NewStringUTF(json.c_str());
 }
 
+// Register Java object for LLM HTTP POST when libcurl is not available (see LlmJavaHttp.h).
+// thiz is the AiClient instance (receiver of nativeRegisterLlmHttpRunner()).
+JNIEXPORT void JNICALL Java_com_bytedance_fastbot_AiClient_nativeRegisterLlmHttpRunner(JNIEnv *env, jobject thiz) {
+    if (env->GetJavaVM(&g_jvm) != JNI_OK) return;
+    if (g_llmHttpRunner != nullptr) {
+        env->DeleteGlobalRef(g_llmHttpRunner);
+        g_llmHttpRunner = nullptr;
+    }
+    if (thiz == nullptr) return;
+    g_llmHttpRunner = env->NewGlobalRef(thiz);
+    jclass c = env->GetObjectClass(thiz);
+    g_llmHttpDoPostFromPrompt = env->GetMethodID(c, "doLlmHttpPostFromPrompt",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)Ljava/lang/String;");
+    if (g_llmHttpDoPostFromPrompt == nullptr) {
+        BLOGE("LLM Java HTTP: GetMethodID(doLlmHttpPostFromPrompt) failed; LLM HTTP will fail until runner is registered");
+        env->DeleteGlobalRef(g_llmHttpRunner);
+        g_llmHttpRunner = nullptr;
+    }
+}
+
 #ifdef __cplusplus
 }
 #endif
+
+namespace fastbotx {
+
+bool llmHttpPostViaJavaWithPrompt(const char *url,
+                                  const char *apiKey,
+                                  const char *prompt,
+                                  const char *model,
+                                  int maxTokens,
+                                  std::string *outResponse) {
+    if (!g_jvm || !g_llmHttpRunner || !g_llmHttpDoPostFromPrompt || !outResponse) {
+        BLOGE("LLM Java HTTP: runner not registered (g_jvm=%d g_runner=%d g_method=%d)", !!g_jvm, !!g_llmHttpRunner, !!g_llmHttpDoPostFromPrompt);
+        return false;
+    }
+    JNIEnv *env = nullptr;
+    jint attach = g_jvm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
+    if (attach == JNI_EDETACHED)
+        g_jvm->AttachCurrentThread(&env, nullptr);
+    if (!env) {
+        BLOGE("LLM Java HTTP: GetEnv/AttachCurrentThread failed");
+        return false;
+    }
+    jstring jUrl = env->NewStringUTF(url ? url : "");
+    jstring jKey = env->NewStringUTF(apiKey ? apiKey : "");
+    jstring jPrompt = env->NewStringUTF(prompt ? prompt : "");
+    jstring jModel = env->NewStringUTF(model ? model : "");
+    jstring jResult = (jstring) env->CallObjectMethod(g_llmHttpRunner, g_llmHttpDoPostFromPrompt,
+                                                       jUrl, jKey, jPrompt, jModel, static_cast<jint>(maxTokens));
+    env->DeleteLocalRef(jUrl);
+    env->DeleteLocalRef(jKey);
+    env->DeleteLocalRef(jPrompt);
+    env->DeleteLocalRef(jModel);
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        if (attach == JNI_EDETACHED) g_jvm->DetachCurrentThread();
+        BLOGE("LLM Java HTTP: Java exception in doLlmHttpPostFromPrompt");
+        return false;
+    }
+    if (!jResult) {
+        if (attach == JNI_EDETACHED) g_jvm->DetachCurrentThread();
+        BLOGE("LLM Java HTTP: Java returned null (HTTP non-2xx or network/API error)");
+        return false;
+    }
+    const char *utf = env->GetStringUTFChars(jResult, nullptr);
+    if (utf) {
+        *outResponse = utf;
+        env->ReleaseStringUTFChars(jResult, utf);
+    }
+    env->DeleteLocalRef(jResult);
+    if (attach == JNI_EDETACHED) g_jvm->DetachCurrentThread();
+    return true;
+}
+
+} // namespace fastbotx
