@@ -7,13 +7,16 @@
  * to the clipboard system service via android.content.IClipboard and pass
  * callingPackage "com.android.shell", which matches the shell UID.
  */
+/*
+ * @author Zhao Zhang
+ */
 
 package com.android.commands.monkey.framework;
 
 import android.content.ClipData;
 import android.os.IBinder;
 
-import com.android.commands.monkey.utils.ContextUtils;
+import com.android.commands.monkey.framework.APIAdapter;
 import com.android.commands.monkey.utils.Logger;
 
 import java.lang.reflect.Method;
@@ -54,24 +57,21 @@ public final class ClipboardHelper {
             ClipData clip = ClipData.newPlainText(null, text);
 
             Class<?>[][] sigs = new Class<?>[][]{
-                    // 1) Legacy: setPrimaryClip(ClipData, String)
+                    // 1) Legacy (API 21-28): setPrimaryClip(ClipData, String)
                     {ClipData.class, String.class},
-                    // 2) Q+: setPrimaryClip(ClipData, String, int userId)
+                    // 2) Android Q+ (API 29+): setPrimaryClip(ClipData, String, int userId)
                     {ClipData.class, String.class, int.class},
-                    // 3) T+: setPrimaryClip(ClipData, String, String attributionTag, int userId)
+                    // 3) Android T+ (API 33+): setPrimaryClip(ClipData, String, String attributionTag, int userId)
                     {ClipData.class, String.class, String.class, int.class},
-                    // 4) T+: setPrimaryClip(ClipData, String, String, int, int deviceId)
+                    // 4) Android U+ (API 34+): setPrimaryClip(ClipData, String, String attributionTag, int userId, int deviceId)
                     {ClipData.class, String.class, String.class, int.class, int.class},
-                    // 5) U+: setPrimaryClip(ClipData, String, String, int, int, boolean isUserOperation)
-                    {ClipData.class, String.class, String.class, int.class, int.class, boolean.class},
             };
 
             Object[][] args = new Object[][]{
-                    {clip, SHELL_PACKAGE},
-                    {clip, SHELL_PACKAGE, 0},                      // userId
-                    {clip, SHELL_PACKAGE, null, 0},                // attributionTag, userId
-                    {clip, SHELL_PACKAGE, null, 0, 0},             // attributionTag, userId, deviceId
-                    {clip, SHELL_PACKAGE, null, 0, 0, false},      // attributionTag, userId, deviceId, isUserOperation
+                    {clip, SHELL_PACKAGE},                          // Legacy: callingPackage only
+                    {clip, SHELL_PACKAGE, 0},                       // Q+: callingPackage, userId
+                    {clip, SHELL_PACKAGE, null, 0},                 // T+: callingPackage, attributionTag, userId
+                    {clip, SHELL_PACKAGE, null, 0, 0},              // U+: callingPackage, attributionTag, userId, deviceId
             };
 
             Exception last = null;
@@ -103,21 +103,21 @@ public final class ClipboardHelper {
             }
 
             Class<?>[][] sigs = new Class<?>[][]{
-                    // 1) Legacy: getPrimaryClip(String)
+                    // 1) Legacy (API 21-28): getPrimaryClip(String)
                     {String.class},
-                    // 2) Q+: getPrimaryClip(String, int userId)
+                    // 2) Android Q+ (API 29+): getPrimaryClip(String, int userId)
                     {String.class, int.class},
-                    // 3) T+: getPrimaryClip(String, String attributionTag, int userId)
+                    // 3) Android T+ (API 33+): getPrimaryClip(String, String attributionTag, int userId)
                     {String.class, String.class, int.class},
-                    // 4) T+: getPrimaryClip(String, String, int, int deviceId)
+                    // 4) Android U+ (API 34+): getPrimaryClip(String, String attributionTag, int userId, int deviceId)
                     {String.class, String.class, int.class, int.class},
             };
 
             Object[][] args = new Object[][]{
-                    {SHELL_PACKAGE},
-                    {SHELL_PACKAGE, 0},                   // userId
-                    {SHELL_PACKAGE, null, 0},            // attributionTag, userId
-                    {SHELL_PACKAGE, null, 0, 0},         // attributionTag, userId, deviceId
+                    {SHELL_PACKAGE},                      // Legacy: pkg only
+                    {SHELL_PACKAGE, 0},                   // Q+: pkg, userId
+                    {SHELL_PACKAGE, null, 0},            // T+: pkg, attributionTag, userId
+                    {SHELL_PACKAGE, null, 0, 0},         // U+: pkg, attributionTag, userId, deviceId
             };
 
             ClipData clip = null;
@@ -136,14 +136,14 @@ public final class ClipboardHelper {
 
             if (clip == null) {
                 if (last != null) {
-                    Logger.warningPrintln("ClipboardHelper: getText failed via IClipboard: " + last);
+                    Logger.warningPrintln("ClipboardHelper: getText failed via IClipboard (tried all getPrimaryClip signatures); last error: " + last);
                 }
                 return null;
             }
             if (clip.getItemCount() == 0) {
                 return null;
             }
-            return clip.getItemAt(0).coerceToText(ContextUtils.getSystemContext());
+            return clip.getItemAt(0).coerceToText(APIAdapter.getSystemContext());
         } catch (Throwable t) {
             Logger.warningPrintln("ClipboardHelper: getText failed (outer): " + t);
             return null;

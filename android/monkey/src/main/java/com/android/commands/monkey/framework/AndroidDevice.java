@@ -31,7 +31,6 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageStats;
 import android.content.pm.ResolveInfo;
-import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.graphics.Point;
 import android.graphics.Rect;
@@ -46,12 +45,10 @@ import android.provider.MediaStore;
 import android.view.InputEvent;
 import android.view.IWindowManager;
 import android.view.KeyEvent;
-import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
 
-import com.android.commands.monkey.utils.ContextUtils;
-import com.android.commands.monkey.utils.InputUtils;
+import com.android.commands.monkey.framework.APIAdapter;
 import com.android.commands.monkey.utils.Logger;
 import com.android.commands.monkey.utils.Utils;
 import com.android.commands.monkey.utils.AndroidVersions;
@@ -67,7 +64,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.lang.reflect.Method;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -78,57 +74,65 @@ import static com.android.commands.monkey.utils.Config.grantAllPermission;
 
 
 /**
+ * Central access point for Android framework services and device utilities used by Monkey.
+ * Holds lazy-initialized service references (IActivityManager, IWindowManager, etc.), display
+ * bounds/rotation caches, permission and package helpers, and text input via clipboard + key injection.
+ *
  * @author Zhao Zhang, Tianxiao Gu
- */
-
-/**
- * Android framework utils
  */
 public class AndroidDevice {
 
+    // ----- Core service references (set at startup; others lazy-loaded) -----
+
     public static IActivityManager iActivityManager;
     public static IWindowManager iWindowManager;
+    /** Binder proxy to PackageManagerService; used for hidden APIs (e.g. getPackageSizeInfo). */
     public static IPackageManager iPackageManager;
+    /** Public Context-based PackageManager; used for getPackageInfo, queryIntentActivities, etc. */
     public static PackageManager packageManager;
-    public static IDevicePolicyManager iDevicePolicyManager;
-    public static IStatusBarService iStatusBarService;
-    public static IInputMethodManager iInputMethodManager;
-    public static InputMethodManager inputMethodManager;
-    public static IPowerManager iPowerManager;
-    public static boolean useADBKeyboard;
-    public static Set<String> inputMethodPackages = new HashSet<>();
-    static Pattern DISPLAY_FOCUSED_STACK_PATTERN = Pattern.compile("mLastFocusedStack=Task[{][a-z0-9]+.*StackId=([0-9]+).*");
-    static Pattern FOCUSED_STACK_PATTERN = Pattern.compile("mFocusedStack=ActivityStack[{][a-z0-9]+ stackId=([0-9]+), [0-9]+ tasks[}]");
-    static Pattern DISPLAY_PATTERN = Pattern.compile("^Display #([0-9]+) .*:$");
-    static Pattern STACK_PATTERN = Pattern.compile("^  Stack #([0-9]+):.*$");
-    static Pattern TASK_PATTERN = Pattern.compile("^    \\* Task.*#([0-9]+).*$");
-    static Pattern ACTIVITY_PATTERN = Pattern.compile("^      [*] Hist #[0-9]+: ActivityRecord[{][0-9a-z]+ u[0-9]+ ([^ /]+)/([^ ]+) t[0-9]+[}]$");
-    private static Set<String> blacklistPermissions = new HashSet<String>();
-    /**
-     * https://github.com/senzhk/ADBKeyBoard
-     * ADB_INPUT_TEXT may not pass UTF-8 correctly via adb shell on Oreo/P;
-     * ADB_INPUT_B64 sends Base64(UTF-8(text)) for reliable Chinese/emoji input.
-     */
-    private static String IME_MESSAGE = "ADB_INPUT_TEXT";
-    private static String IME_MESSAGE_B64 = "ADB_INPUT_B64";
-    private static String IME_CHARS = "ADB_INPUT_CHARS";
-    private static String IME_KEYCODE = "ADB_INPUT_CODE";
-    private static String IME_EDITORCODE = "ADB_EDITOR_CODE";
-    private static String IME_ADB_KEYBOARD;
 
-    /** Default path on device for ADBKeyBoard APK when using auto-install (e.g. push via activate_fastbot.sh). */
-    private static final String ADBKEYBOARD_APK_PATH = "/data/local/tmp/ADBKeyBoard.apk";
+    private static IDevicePolicyManager iDevicePolicyManager;
+    private static IStatusBarService iStatusBarService;
+    private static IInputMethodManager iInputMethodManager;
+    private static InputMethodManager inputMethodManager;
+    private static IPowerManager iPowerManager;
 
-    public static void initializeAndroidDevice(IActivityManager mAm, IWindowManager mWm, IPackageManager mPm, String keyboard) {
+    /** Package names of installed IMEs; populated by caller. Used to avoid targeting IME as app. */
+    public static final Set<String> inputMethodPackages = new HashSet<>();
+
+    /** Permissions that failed to grant at least once; skipped on subsequent grant attempts. */
+    private static final Set<String> blacklistPermissions = new HashSet<>();
+
+    /** Regex patterns for parsing "dumpsys activity a" output (Display/Stack/Task/Activity lines). */
+    private static final Pattern DISPLAY_FOCUSED_STACK_PATTERN = Pattern.compile("mLastFocusedStack=Task[{][a-z0-9]+.*StackId=([0-9]+).*");
+    private static final Pattern FOCUSED_STACK_PATTERN = Pattern.compile("mFocusedStack=ActivityStack[{][a-z0-9]+ stackId=([0-9]+), [0-9]+ tasks[}]");
+    private static final Pattern DISPLAY_PATTERN = Pattern.compile("^Display #([0-9]+) .*:$");
+    private static final Pattern STACK_PATTERN = Pattern.compile("^  Stack #([0-9]+):.*$");
+    private static final Pattern TASK_PATTERN = Pattern.compile("^    \\* Task.*#([0-9]+).*$");
+    private static final Pattern ACTIVITY_PATTERN = Pattern.compile("^      [*] Hist #[0-9]+: ActivityRecord[{][0-9a-z]+ u[0-9]+ ([^ /]+)/([^ ]+) t[0-9]+[}]$");
+
+    /** Default display id (primary). Use setInputEventDisplayId when injecting to secondary display (API 29+). */
+    public static final int DEFAULT_DISPLAY_ID = 0;
+
+    private static final int WAIT_FOR_NOTIFY_MS = 5000;
+    private static final int STOP_PACKAGE_RETRY_SLEEP_MS = 1000;
+
+    /** KeyEvent.KEYCODE_WAKEUP (224): wake only, no toggle. Prefer over KEYCODE_POWER (26) to avoid turning screen off. */
+    private static final int KEYCODE_WAKEUP = 224;
+
+    // ----- Initialization -----
+
+    /** Must be called early with system service proxies. PackageManager is obtained from APIAdapter.getSystemContext(). */
+    public static void initializeAndroidDevice(IActivityManager mAm, IWindowManager mWm, IPackageManager mPm) {
         iActivityManager = mAm;
         iWindowManager = mWm;
         iPackageManager = mPm;
-        IME_ADB_KEYBOARD = keyboard;
-        packageManager = ContextUtils.getSystemContext().getPackageManager();
-        // Performance: non-startup services (IStatusBarService, IInputMethodManager, etc.) are lazy-loaded (SCRCPY_VS_FASTBOT_OPTIMIZATION_ANALYSIS §5).
+        packageManager = APIAdapter.getSystemContext().getPackageManager();
+        // Non-startup services (IStatusBarService, IInputMethodManager, etc.) are lazy-loaded on first use.
     }
 
-    /** Lazy-loaded; use this instead of direct field access. */
+    // ----- Lazy-loaded system services (use getters instead of direct field access) -----
+
     public static IDevicePolicyManager getIDevicePolicyManager() {
         if (iDevicePolicyManager == null) {
             iDevicePolicyManager = IDevicePolicyManager.Stub.asInterface(ServiceManager.getService("device_policy"));
@@ -139,7 +143,6 @@ public class AndroidDevice {
         return iDevicePolicyManager;
     }
 
-    /** Lazy-loaded; use this instead of direct field access. */
     public static IStatusBarService getIStatusBarService() {
         if (iStatusBarService == null) {
             iStatusBarService = IStatusBarService.Stub.asInterface(ServiceManager.getService("statusbar"));
@@ -150,7 +153,6 @@ public class AndroidDevice {
         return iStatusBarService;
     }
 
-    /** Lazy-loaded; use this instead of direct field access. */
     public static IInputMethodManager getIInputMethodManager() {
         if (iInputMethodManager == null) {
             iInputMethodManager = IInputMethodManager.Stub.asInterface(ServiceManager.getService("input_method"));
@@ -161,16 +163,13 @@ public class AndroidDevice {
         return iInputMethodManager;
     }
 
-    /** Lazy-loaded; use this instead of direct field access. Sets useADBKeyboard on first call. */
     public static InputMethodManager getInputMethodManager() {
         if (inputMethodManager == null) {
-            inputMethodManager = (InputMethodManager) ContextUtils.getSystemContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-            useADBKeyboard = enableADBKeyboard();
+            inputMethodManager = (InputMethodManager) APIAdapter.getSystemContext().getSystemService(Context.INPUT_METHOD_SERVICE);
         }
         return inputMethodManager;
     }
 
-    /** Lazy-loaded; use this instead of direct field access. */
     public static IPowerManager getIPowerManager() {
         if (iPowerManager == null) {
             iPowerManager = IPowerManager.Stub.asInterface(ServiceManager.getService("power"));
@@ -181,80 +180,7 @@ public class AndroidDevice {
         return iPowerManager;
     }
 
-    /**
-     * Try to get all enabled keyboards, and find ADBKeyboard. If ADBKeyBoard is not installed, tries
-     * to install from {@link #ADBKEYBOARD_APK_PATH} (pm install -r). If installed but not enabled,
-     * tries "ime enable &lt;id&gt;". Requires shell permission (e.g. when monkey runs via adb shell).
-     *
-     * @return If ADBKeyboard IME exists and is enabled (or was auto-installed/enabled), return true.
-     */
-    private static boolean enableADBKeyboard() {
-        InputMethodManager imm = getInputMethodManager();
-        List<InputMethodInfo> enabled = imm.getEnabledInputMethodList();
-        if (enabled != null) {
-            for (InputMethodInfo imi : enabled) {
-                Logger.println("InputMethod ID: " + imi.getId());
-                if (IME_ADB_KEYBOARD.equals(imi.getId())) {
-                    Logger.println("Find Keyboard: " + IME_ADB_KEYBOARD);
-                    return true;
-                }
-            }
-        }
-        List<InputMethodInfo> all = imm.getInputMethodList();
-        boolean installed = false;
-        if (all != null) {
-            for (InputMethodInfo imi : all) {
-                if (IME_ADB_KEYBOARD.equals(imi.getId())) {
-                    installed = true;
-                    break;
-                }
-            }
-        }
-        if (!installed) {
-            Logger.println("ADBKeyBoard not installed, trying: pm install -r " + ADBKEYBOARD_APK_PATH);
-            try {
-                int ret = executeCommandAndWaitFor(new String[]{"pm", "install", "-r", ADBKEYBOARD_APK_PATH});
-                if (ret == 0) {
-                    all = imm.getInputMethodList();
-                    if (all != null) {
-                        for (InputMethodInfo imi : all) {
-                            if (IME_ADB_KEYBOARD.equals(imi.getId())) {
-                                installed = true;
-                                Logger.println("ADBKeyBoard auto-installed successfully.");
-                                break;
-                            }
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                Logger.warningPrintln("Auto-install ADBKeyBoard failed: " + e.getMessage());
-            }
-            if (!installed) {
-                return false;
-            }
-        }
-        // Installed but not enabled: try ime enable
-        Logger.println("ADBKeyBoard installed but not enabled, trying: ime enable " + IME_ADB_KEYBOARD);
-        try {
-            int ret = executeCommandAndWaitFor(new String[]{"ime", "enable", IME_ADB_KEYBOARD});
-            if (ret == 0) {
-                List<InputMethodInfo> enabledAfter = imm.getEnabledInputMethodList();
-                if (enabledAfter != null) {
-                    for (InputMethodInfo imi2 : enabledAfter) {
-                        if (IME_ADB_KEYBOARD.equals(imi2.getId())) {
-                            Logger.println("ADBKeyBoard auto-enabled successfully.");
-                            return true;
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            Logger.warningPrintln("Auto-enable ADBKeyBoard failed: " + e.getMessage());
-        }
-        return false;
-    }
-
-    // Performance: cache display bounds to avoid Binder + allocation on every call (PERFORMANCE_OPTIMIZATION_ITEMS §2.1).
+    // ----- Display bounds and mapping -----
     private static final Rect sDisplayBoundsCache = new Rect();
     private static final Point sDisplaySizeCache = new Point();
     private static boolean sDisplayBoundsCached = false;
@@ -265,18 +191,43 @@ public class AndroidDevice {
     }
 
     /**
-     * Returns display bounds for the given display (SCRCPY_VS_FASTBOT_OPTIMIZATION_ANALYSIS §三.1).
-     * For default display (0) uses cache; for other displays queries DisplayManagerGlobal each time.
-     * Callers must not mutate the returned Rect.
+     * Returns full physical display bounds (real size) for the given display. Use getRealSize() so
+     * bounds match the coordinate space used for input injection across OEMs. Default display (0) is
+     * cached; invalidate with invalidateDisplayBoundsCache() after rotation. On failure, falls back
+     * to DisplayMetrics when possible.
+     * <p>All callers use this for system-level input injection (random click/scroll/drag/pinch
+     * within bounds, or clamping y using statusBarHeight/bottomBarHeight); hence physical screen
+     * is required, not application-visible area (getSize would be wrong).
      */
     public static Rect getDisplayBounds(int displayId) {
         if (displayId == DEFAULT_DISPLAY_ID) {
             if (sDisplayBoundsCached) {
                 return sDisplayBoundsCache;
             }
-            android.view.Display display = DisplayManagerGlobal.getInstance().getRealDisplay(android.view.Display.DEFAULT_DISPLAY);
-            display.getSize(sDisplaySizeCache);
-            sDisplayBoundsCache.set(0, 0, sDisplaySizeCache.x, sDisplaySizeCache.y);
+            try {
+                android.view.Display display = DisplayManagerGlobal.getInstance().getRealDisplay(android.view.Display.DEFAULT_DISPLAY);
+                if (display != null) {
+                    display.getRealSize(sDisplaySizeCache);
+                    sDisplayBoundsCache.set(0, 0, sDisplaySizeCache.x, sDisplaySizeCache.y);
+                    sDisplayBoundsCached = true;
+                    return sDisplayBoundsCache;
+                }
+            } catch (Exception e) {
+                Logger.warningPrintln("getDisplayBounds(default) via DisplayManagerGlobal failed: " + e.getMessage());
+            }
+            // Fallback: DisplayMetrics from system context (works when DisplayManagerGlobal is unavailable on some OEMs).
+            try {
+                android.content.Context ctx = APIAdapter.getSystemContext();
+                if (ctx != null) {
+                    android.util.DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
+                    sDisplayBoundsCache.set(0, 0, dm.widthPixels, dm.heightPixels);
+                    sDisplayBoundsCached = true;
+                    return sDisplayBoundsCache;
+                }
+            } catch (Exception e) {
+                Logger.warningPrintln("getDisplayBounds(default) DisplayMetrics fallback failed: " + e.getMessage());
+            }
+            sDisplayBoundsCache.set(0, 0, 0, 0);
             sDisplayBoundsCached = true;
             return sDisplayBoundsCache;
         }
@@ -284,9 +235,8 @@ public class AndroidDevice {
             android.view.Display display = DisplayManagerGlobal.getInstance().getRealDisplay(displayId);
             if (display != null) {
                 Point size = new Point();
-                display.getSize(size);
-                Rect out = new Rect(0, 0, size.x, size.y);
-                return out;
+                display.getRealSize(size);
+                return new Rect(0, 0, size.x, size.y);
             }
         } catch (Exception e) {
             Logger.warningPrintln("getDisplayBounds(displayId=" + displayId + ") failed: " + e.getMessage());
@@ -300,10 +250,10 @@ public class AndroidDevice {
     }
 
     /**
-     * Maps a point from source coordinate space to target display bounds (SCRCPY_VS_FASTBOT_OPTIMIZATION_ANALYSIS §三.1).
-     * Like scrcpy PositionMapper: when coordinates come from another resolution/rotation (e.g. remote view),
-     * scale and clamp so (x,y) corresponds to the device display space. Returns mapped point; null if source is empty.
+     * Maps (x,y) from source resolution to target display bounds: scale and clamp. Returns null if source or target is empty.
+     * Kept for scrcpy / remote coordinate mapping (e.g. map viewer coordinates to device getDisplayBounds()).
      */
+    @SuppressWarnings("unused")
     public static Point mapPointToDisplay(float x, float y, int sourceWidth, int sourceHeight, Rect targetBounds) {
         if (sourceWidth <= 0 || sourceHeight <= 0 || targetBounds == null) {
             return null;
@@ -322,7 +272,7 @@ public class AndroidDevice {
         return new Point(mx, my);
     }
 
-    // Performance: cache status bar / bottom bar heights; invalidate on rotation (SCRCPY_VS_FASTBOT_OPTIMIZATION_ANALYSIS §4).
+    /** Cached status bar and bottom bar heights; invalidated on rotation. */
     private static int sStatusBarHeight;
     private static int sBottomBarHeight;
     private static boolean sDisplayBarHeightsCached = false;
@@ -347,22 +297,33 @@ public class AndroidDevice {
         android.view.Display display = DisplayManagerGlobal.getInstance().getRealDisplay(0);
         Point size = new Point();
         display.getSize(size);
-        int w = size.x;
         int h = size.y;
+
+        // 1) Prefer explicit config override.
         sStatusBarHeight = bytestStatusBarHeight;
+
+        // 2) If not configured, query system dimen "status_bar_height" (standard cross-device pattern).
+        //    See e.g. https://stackoverflow.com/questions/3407256/height-of-status-bar-in-android
         if (sStatusBarHeight == 0) {
-            DisplayMetrics dm = ContextUtils.getSystemContext().getResources().getDisplayMetrics();
-            if (w == 1080 && h > 2100) {
-                sStatusBarHeight = (int) (40f * dm.density);
-            } else if (w == 1200 && h == 1824) {
-                sStatusBarHeight = (int) (30f * dm.density);
-            } else if (w == 1440 && h == 2696) {
-                sStatusBarHeight = (int) (30f * dm.density);
-            } else {
-                sStatusBarHeight = (int) (24f * dm.density);
+            Context ctx = APIAdapter.getSystemContext();
+            if (ctx != null) {
+                try {
+                    android.content.res.Resources res = ctx.getResources();
+                    int resId = res.getIdentifier("status_bar_height", "dimen", "android");
+                    if (resId > 0) {
+                        sStatusBarHeight = res.getDimensionPixelSize(resId);
+                    }
+                    // 3) Fallback: approximate 24dp if system dimen is not available.
+                    if (sStatusBarHeight == 0) {
+                        DisplayMetrics dm = res.getDisplayMetrics();
+                        sStatusBarHeight = (int) (24f * dm.density + 0.5f);
+                    }
+                } catch (Exception ignored) {
+                    // Keep 0; caller will treat as no status bar.
+                }
             }
-            sStatusBarHeight += 15;
         }
+
         sBottomBarHeight = h - sStatusBarHeight;
         sDisplayBarHeightsCached = true;
     }
@@ -372,18 +333,13 @@ public class AndroidDevice {
         sDisplayBarHeightsCached = false;
     }
 
-    /** Default display id (primary display). Multi-display: use setInputEventDisplayId when displayId != 0 (API 29+). */
-    public static final int DEFAULT_DISPLAY_ID = 0;
+    // ----- Focused display (multi-display) -----
 
     /** Cached focused display id from top task; invalidate on demand. */
     private static int sFocusedDisplayIdCache = DEFAULT_DISPLAY_ID;
     private static boolean sFocusedDisplayIdCached = false;
 
-    /**
-     * Returns the display id of the top/focused task (SCRCPY_VS_FASTBOT_OPTIMIZATION_ANALYSIS §三.1).
-     * Used so touch/key events are injected to the correct display in multi-display.
-     * Uses RunningTaskInfo.displayId (API 24+) via reflection; falls back to DEFAULT_DISPLAY_ID.
-     */
+    /** Display id of the top task (API 24+ via APIAdapter). Used to inject input to the correct display. Falls back to DEFAULT_DISPLAY_ID on API 21–23 or when reflection fails. */
     public static int getFocusedDisplayId() {
         if (sFocusedDisplayIdCached) {
             return sFocusedDisplayIdCache;
@@ -391,19 +347,9 @@ public class AndroidDevice {
         try {
             List<RunningTaskInfo> taskInfo = APIAdapter.getTasks(AndroidDevice.iActivityManager, Integer.MAX_VALUE);
             if (taskInfo != null && !taskInfo.isEmpty()) {
-                RunningTaskInfo task = taskInfo.get(0);
-                for (Class<?> c = task.getClass(); c != null; c = c.getSuperclass()) {
-                    try {
-                        java.lang.reflect.Field field = c.getDeclaredField("displayId");
-                        field.setAccessible(true);
-                        int displayId = field.getInt(task);
-                        if (displayId >= 0) {
-                            sFocusedDisplayIdCache = displayId;
-                        }
-                        break;
-                    } catch (NoSuchFieldException e) {
-                        // try superclass (e.g. TaskInfo)
-                    }
+                int displayId = APIAdapter.getTaskDisplayId(taskInfo.get(0));
+                if (displayId >= 0) {
+                    sFocusedDisplayIdCache = displayId;
                 }
             }
         } catch (Exception e) {
@@ -419,18 +365,12 @@ public class AndroidDevice {
         sFocusedDisplayIdCached = false;
     }
 
-    /**
-     * Whether input events are supported for the given display (SCRCPY_VS_FASTBOT_OPTIMIZATION_ANALYSIS §二.1).
-     * Primary display (0) always; secondary displays only on API 29+.
-     */
+    /** True if the display accepts input: primary (0) always; secondary only on API 29+. */
     public static boolean supportsInputEvents(int displayId) {
         return displayId == DEFAULT_DISPLAY_ID || Build.VERSION.SDK_INT >= AndroidVersions.API_29_ANDROID_10;
     }
 
-    /**
-     * Set display id on input event for multi-display (API 29+). No-op for primary (0).
-     * Returns false if displayId != 0 and SDK &lt; 29 or reflection fails.
-     */
+    /** Sets display id on the event for multi-display (API 29+). No-op for display 0. Returns false if SDK < 29 or reflection fails. */
     public static boolean setInputEventDisplayId(InputEvent event, int displayId) {
         if (event == null || displayId == DEFAULT_DISPLAY_ID) {
             return true;
@@ -438,33 +378,18 @@ public class AndroidDevice {
         if (Build.VERSION.SDK_INT < AndroidVersions.API_29_ANDROID_10 || !supportsInputEvents(displayId)) {
             return false;
         }
-        try {
-            Method setDisplayId = event.getClass().getMethod("setDisplayId", int.class);
-            setDisplayId.invoke(event, displayId);
-            return true;
-        } catch (Exception e) {
-            Logger.warningPrintln("setInputEventDisplayId failed: " + e.getMessage());
-            return false;
-        }
+        return APIAdapter.applyDisplayIdToInputEvent(event, displayId);
     }
 
-    /**
-     * Whether the given display is interactive (SCRCPY_VS_FASTBOT_OPTIMIZATION_ANALYSIS §二.3).
-     * API 34+ uses isDisplayInteractive(displayId); otherwise isInteractive().
-     */
+    /** True if the display is interactive. API 34+ uses isDisplayInteractive(displayId) via APIAdapter; else isInteractive(). */
     public static boolean isDisplayInteractive(int displayId) {
         IPowerManager pm = getIPowerManager();
         if (pm == null) {
             return false;
         }
-        if (Build.VERSION.SDK_INT >= AndroidVersions.API_34_ANDROID_14) {
-            try {
-                Method m = pm.getClass().getMethod("isDisplayInteractive", int.class);
-                Object r = m.invoke(pm, displayId);
-                return Boolean.TRUE.equals(r);
-            } catch (Exception e) {
-                Logger.warningPrintln("isDisplayInteractive(displayId) failed, fallback to isInteractive: " + e.getMessage());
-            }
+        Boolean r = APIAdapter.isDisplayInteractive(pm, displayId);
+        if (r != null) {
+            return r;
         }
         try {
             return pm.isInteractive();
@@ -474,15 +399,13 @@ public class AndroidDevice {
         }
     }
 
-    /**
-     * Placeholder for display power on/off (SCRCPY_VS_FASTBOT_OPTIMIZATION_ANALYSIS §二.4).
-     * Full implementation would use SurfaceControl/setDisplayPowerMode per API and vendor.
-     */
+    /** Placeholder: not implemented. Use {@code input keyevent 26} to wake. */
     public static boolean setDisplayPower(int displayId, boolean on) {
         Logger.println("setDisplayPower(displayId=" + displayId + ", on=" + on + ") not implemented; use 'input keyevent 26' to wake.");
         return false;
     }
 
+    /** Returns the top activity component of the focused task, or null if unavailable. */
     public static ComponentName getTopActivityComponentName() {
         try {
             List<RunningTaskInfo> taskInfo = APIAdapter.getTasks(AndroidDevice.iActivityManager, Integer.MAX_VALUE);
@@ -497,6 +420,12 @@ public class AndroidDevice {
         return null;
     }
 
+    /**
+     * Returns the full activity back stack (all activities in the top task). Kept for scrcpy / full-stack
+     * scenarios (e.g. back-stack analysis, reporting). Uses {@link #getFocusedStack()} (dumpsys); format
+     * may vary across Android/OEM. For only the top activity use {@link #getTopActivityComponentName()}.
+     */
+    @SuppressWarnings("unused")
     public static List<ActivityName> getCurrentTaskActivityStack() {
         StackInfo stackInfo = getFocusedStack();
         if (stackInfo != null && !stackInfo.getTasks().isEmpty()) {
@@ -505,18 +434,7 @@ public class AndroidDevice {
         return null;
     }
 
-    /**
-     * Best-effort check: whether the soft keyboard (IME) is currently visible.
-     * Uses only InputMethodManager.getInputMethodWindowVisibleHeight() to avoid
-     * dumpsys format differences across Android versions and OEMs.
-     * When the process has no IME client (e.g. monkey run as app_process), this
-     * throws on the server side and we return false.
-     * <p>
-     * There is no other reliable cross-process API: getInputMethodWindowVisibleHeight
-     * requires an IME client; dumpsys output format varies by OS/OEM. Prefer
-     * {@code action.isEditText()} from the model (GUI tree / native) when available—
-     * that is the only stable signal for "focus is on an input field" from monkey.
-     */
+    /** Best-effort: true if IME window height is non-zero. May be false when run as app_process (no IME client). Prefer model isEditText when available. */
     public static boolean isVirtualKeyboardOpened() {
         try {
             int height = getInputMethodManager().getInputMethodWindowVisibleHeight();
@@ -528,34 +446,30 @@ public class AndroidDevice {
         }
     }
 
+    /** If the display is not interactive, sends KEYCODE_WAKEUP to wake the device (no toggle); then rechecks and logs. */
     public static void checkInteractive() {
         try {
             if (!isDisplayInteractive(DEFAULT_DISPLAY_ID)) {
                 Logger.format("Power Manager says we are NOT interactive");
-                int ret = Runtime.getRuntime().exec(new String[]{"input", "keyevent", "26"}).waitFor();
+                int ret = Runtime.getRuntime().exec(new String[]{"input", "keyevent", String.valueOf(KEYCODE_WAKEUP)}).waitFor();
                 Logger.format("Wakeup ret code %d %s", ret, (isDisplayInteractive(DEFAULT_DISPLAY_ID) ? "Interactive" : "Not interactive"));
             } else {
                 Logger.format("Power Manager says we are interactive");
             }
         } catch (Exception e) {
-            // TODO Auto-generated catch block
             e.printStackTrace();
         }
     }
 
-    public static boolean checkAndSetInputMethod() {
-        try {
-            if (!useADBKeyboard) {
-                return false;
-            }
-            InputUtils.switchToIme(IME_ADB_KEYBOARD);
-            return true;
-        } catch (SecurityException e) {
-            e.printStackTrace();
-        }
-        return false;
-    }
+    // ----- Permissions -----
 
+    /**
+     * Returns the list of permissions declared (requested) by the package in its manifest.
+     * Note: this is not the list of currently granted runtime permissions.
+     *
+     * @param packageName package to query
+     * @return requested permission names, or empty array / null on error
+     */
     public static String[] getGrantedPermissions(String packageName) {
         PackageInfo packageInfo = null;
         try {
@@ -568,7 +482,7 @@ public class AndroidDevice {
                 return new String[0];
             }
             for (String s : packageInfo.requestedPermissions) {
-                Logger.debugFormat("%s requrested permission %s", packageName, s);
+                Logger.debugFormat("%s requested permission %s", packageName, s);
             }
 
             return packageInfo.requestedPermissions;
@@ -578,6 +492,7 @@ public class AndroidDevice {
         return null;
     }
 
+    /** Grants a single runtime permission via {@code pm grant}. */
     public static boolean grantRuntimePermission(String packageName, String permission) {
         try {
             int ret = executeCommandAndWaitFor(new String[]{"pm", "grant", packageName, permission});
@@ -588,6 +503,7 @@ public class AndroidDevice {
         return false;
     }
 
+    /** Grants multiple runtime permissions via {@code pm grant}; skips permissions that previously failed (blacklist). */
     public static boolean grantRuntimePermissions(String packageName, String[] savedPermissions, String reason) {
         try {
             Logger.infoFormat("Try to grant saved permission to %s for %s... ", packageName, reason);
@@ -614,22 +530,28 @@ public class AndroidDevice {
         return true;
     }
 
+    // ----- Package lifecycle (stop / clear) -----
+
     private static void waitForNotify(Object lock) {
         synchronized (lock) {
             try {
-                lock.wait(5000);
+                lock.wait(WAIT_FOR_NOTIFY_MS);
             } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
                 e.printStackTrace();
-            } // at most wait for 5s
+            }
         }
     }
 
     /**
-     * Used for getting package size, but could only be used when API version is no more than 26,
-     * otherwise it will throw exceptions.
-     * @param packageName The name of package of which you want to check size
-     * @return If the query is successful, return true.
+     * Legacy: gets package size via IPackageManager.getPackageSizeInfo. Only works on API 26 and below;
+     * throws UnsupportedOperationException on API 27+. Always returns false; kept for compatibility.
+     *
+     * @param packageName package to query
+     * @return false (result is only logged)
+     * @deprecated API 27+; use StorageStatsManager or similar instead.
      */
+    @Deprecated
     public static boolean checkNativeApp(String packageName) {
         final PackageStats[] result = new PackageStats[1];
         try {
@@ -661,20 +583,18 @@ public class AndroidDevice {
         } catch (RemoteException e) {
             e.printStackTrace();
         } catch (java.lang.UnsupportedOperationException e){
-            Logger.errorPrintln("Operation of getting package size is not support above api 26.");
+            Logger.errorPrintln("Operation of getting package size is not supported above API 26.");
         }
         return false;
     }
 
+    /** Runs a shell command and returns its exit code. */
+    /** Returns exit code of the shell command. */
     public static int executeCommandAndWaitFor(String[] cmd) throws InterruptedException, IOException {
         return Runtime.getRuntime().exec(cmd).waitFor();
     }
 
-    /**
-     * Get all the pid of running app
-     * @param packageName Package name of the running app
-     * @return List of pid-s
-     */
+    /** Returns PIDs of all running processes that belong to the given package. */
     public static List<Integer> getPIDs(String packageName) {
         List<Integer> pids = new ArrayList<Integer>(3);
         try {
@@ -693,12 +613,7 @@ public class AndroidDevice {
         return pids;
     }
 
-    /**
-     * Check if a crashed app is among applications we can switch to.
-     * @param processName name of the crashed app
-     * @param apps applications we are allowed to switch to
-     * @return If this crashed app is among applications we can switch to, return true.
-     */
+    /** Returns true if the crashed process name matches the package of any of the allowed app components. */
     public static boolean isAppCrash(String processName, ArrayList<ComponentName> apps) {
         for (ComponentName cn : apps) {
             if (processName.contains(cn.getPackageName())) {
@@ -709,6 +624,7 @@ public class AndroidDevice {
         return false;
     }
 
+    /** Force-stops the package (when enableStopPackage is true) with retries until no PIDs remain. */
     public static boolean stopPackage(String packageName) {
         if (enableStopPackage) {
             int retryCount = 10;
@@ -725,8 +641,9 @@ public class AndroidDevice {
                     e.printStackTrace();
                 }
                 try {
-                    Thread.sleep(1000);
+                    Thread.sleep(STOP_PACKAGE_RETRY_SLEEP_MS);
                 } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                     e.printStackTrace();
                 }
             }
@@ -734,11 +651,7 @@ public class AndroidDevice {
         return false;
     }
 
-    /**
-     * Clear android application user data
-     * @param packageName The package name of which data to delete.
-     * @return If succeed, return true.
-     */
+    /** Clears application data via {@code pm clear} when clearPackage config is true. */
     private static boolean clearPackage(String packageName) {
         try {
             if (!clearPackage) {
@@ -752,21 +665,19 @@ public class AndroidDevice {
         return false;
     }
 
-    /**
-     * Clear android application user data, if succeed and all requested permissions are
-     * granted, revoke them.
-     * @param packageName The package name of which data to delete.
-     * @param savedPermissions The package name of which permission to revoke.
-     * @return If succeed, return true.
-     */
+    /** Clears package data; if grantAllPermission is true, re-grants the given permissions after clear. */
     public static boolean clearPackage(String packageName, String[] savedPermissions) {
         return clearPackage(packageName) && grantAllPermission && grantRuntimePermissions(packageName, savedPermissions, "clearing package");
     }
 
+    /** Returns true if the package is one of the registered IME packages (see inputMethodPackages). */
     public static boolean isInputMethod(String packageName) {
         return inputMethodPackages.contains(packageName);
     }
 
+    /** Switches to the last used IME; used e.g. after closing a custom IME. */
+    /** Switches to the last used IME. Kept for switching back to previous input method (e.g. after closing custom IME). */
+    @SuppressWarnings("unused")
     public static boolean switchToLastInputMethod() {
         try {
             getIInputMethodManager().switchToLastInputMethod(null);
@@ -778,164 +689,118 @@ public class AndroidDevice {
         return false;
     }
 
+    // ----- Activity / intent helpers -----
+
+    /** Returns true if the given top activity class name is a home/launcher activity. */
     public static boolean isAtPhoneLauncher(String topActivity) {
+        if (topActivity == null) return false;
         Intent intent = new Intent(Intent.ACTION_MAIN);
         intent.addCategory(Intent.CATEGORY_HOME);
         List<ResolveInfo> homeApps = APIAdapter.queryIntentActivities(packageManager, intent);
-        final int NA = homeApps.size();
-        for (int a = 0; a < NA; a++) {
+        if (homeApps == null) return false;
+        for (int a = 0; a < homeApps.size(); a++) {
             ResolveInfo r = homeApps.get(a);
             String activity = r.activityInfo.name;
+            if (activity != null && activity.startsWith(".")) {
+                activity = r.activityInfo.packageName + activity;
+            }
             //Logger.println("// the top activity is " + topActivity + ", phone launcher activity is " + activity);
-            if (topActivity.equals(activity)) {
-                return true;
-            }
+            if (topActivity.equals(activity)) return true;
         }
         return false;
     }
 
-    public static boolean isAtPhoneCapture(String topActivity){
+    /** Returns true if the given top activity is a camera capture activity. */
+    public static boolean isAtPhoneCapture(String topActivity) {
+        if (topActivity == null) return false;
         Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-        List<ResolveInfo> homeApps = APIAdapter.queryIntentActivities(packageManager, intent);
-        final int NA = homeApps.size();
-        for (int a = 0; a < NA; a++) {
-            ResolveInfo r = homeApps.get(a);
+        List<ResolveInfo> list = APIAdapter.queryIntentActivities(packageManager, intent);
+        if (list == null) return false;
+        for (int a = 0; a < list.size(); a++) {
+            ResolveInfo r = list.get(a);
             String activity = r.activityInfo.name;
-            Logger.println("// the top activity is " + topActivity + ", phone capture activity is " + activity);
-
-            if (topActivity.equals(activity)){
-                return true;
+            if (activity != null && activity.startsWith(".")) {
+                activity = r.activityInfo.packageName + activity;
             }
+            //Logger.println("// the top activity is " + topActivity + ", phone capture activity is " + activity);
+            if (topActivity.equals(activity)) return true;
         }
         return false;
     }
 
+    /** Returns true if the given top activity is the main/launcher activity of the given package. */
     public static boolean isAtAppMain(String topActivityClassName, String topActivityPackageName) {
+        if (topActivityClassName == null || topActivityPackageName == null) return false;
         Intent intent = new Intent(Intent.ACTION_MAIN);
-        List<ResolveInfo> homeApps = APIAdapter.queryIntentActivities(packageManager, intent);
-        final int NA = homeApps.size();
-        for (int a = 0; a < NA; a++) {
-            ResolveInfo r = homeApps.get(a);
+        List<ResolveInfo> list = APIAdapter.queryIntentActivities(packageManager, intent);
+        if (list == null) return false;
+        for (int a = 0; a < list.size(); a++) {
+            ResolveInfo r = list.get(a);
             String packageName = r.activityInfo.applicationInfo.packageName;
             String activity = r.activityInfo.name;
-            if (topActivityClassName.equals(activity) && packageName.equals(topActivityPackageName)) {
-                return true;
+            if (activity != null && activity.startsWith(".")) {
+                activity = packageName + activity;
             }
+            if (topActivityClassName.equals(activity) && packageName.equals(topActivityPackageName)) return true;
         }
         return false;
     }
 
-    public static void sendIMEActionGo() {
-        sendIMEAction(EditorInfo.IME_ACTION_GO);
-    }
 
-    public static void sendIMEAction(int actionId) {
-        // adb shell am broadcast -a ADB_EDITOR_CODE --ei code 2
-        Intent intent = new Intent();
-        intent.setAction(IME_EDITORCODE);
-        intent.putExtra("code", actionId);
-        sendIMEIntent(intent);
-    }
-
-    /** Package part of {@link #IME_ADB_KEYBOARD} (e.g. com.android.adbkeyboard) for explicit broadcast. */
-    private static String getImePackage() {
-        if (IME_ADB_KEYBOARD == null) {
-            return null;
-        }
-        int slash = IME_ADB_KEYBOARD.indexOf('/');
-        return slash > 0 ? IME_ADB_KEYBOARD.substring(0, slash) : null;
-    }
-
-    public static boolean sendIMEIntent(Intent intent) {
+    /** Returns true if IActivityManager.startActivity succeeded (non-null result). */
+    private static boolean tryStartActivityViaAm(Intent intent) {
         try {
-            if (checkAndSetInputMethod()) {
-                String pkg = getImePackage();
-                if (pkg != null) {
-                    intent.setPackage(pkg);
-                }
-                return broadcastIntent(intent);
-            }
+            return APIAdapter.startActivity(iActivityManager, intent) != null;
+        } catch (Exception e) {
+            Logger.println("Start Activity error: " + e);
             return false;
-        } finally {
         }
     }
 
+    /** Starts an activity via IActivityManager or falls back to {@code am start -n}. Returns 1 on success, 0 on failure. */
     public static int startActivity(Intent intent) {
-        try {
-            Object object = APIAdapter.startActivity(iActivityManager, intent);
-            if (object == null) {
-                if (null != intent && null != intent.getComponent()) {
-                    Logger.println("IActivityManager.startActivity failed, execute am start activity");
-                    String activity = intent.getComponent().flattenToShortString();
-                    executeCommandAndWaitFor(new String[]{"am", "start", "-n", activity});
-                }
+        if (tryStartActivityViaAm(intent)) return 1;
+        if (intent != null && intent.getComponent() != null) {
+            try {
+                Logger.println("IActivityManager.startActivity failed, execute am start activity");
+                int ret = executeCommandAndWaitFor(new String[]{"am", "start", "-n", intent.getComponent().flattenToShortString()});
+                return ret == 0 ? 1 : 0;
+            } catch (Exception e) {
+                Logger.println("am start activity failed: " + e.getMessage());
+                return 0;
             }
-        } catch (Exception e) {
-            Logger.println("Start Activity error: " + e);
-            return 0;
         }
-        return 1;
+        return 0;
     }
 
+    /** Starts an activity by URI via IActivityManager or falls back to {@code am start -d}. Returns 1 on success, 0 on failure. */
     public static int startUri(Intent intent) {
-        try {
-            Object object = APIAdapter.startActivity(iActivityManager, intent);
-            if (object == null) {
-                if (null != intent && null != intent.getData()) {
-                    Logger.println("IActivityManager.startActivity failed, execute am start uri");
-                    String uri = intent.getData().toString();
-                    executeCommandAndWaitFor(new String[]{"am", "start", "-d", uri});
-                }
+        if (tryStartActivityViaAm(intent)) return 1;
+        if (intent != null && intent.getData() != null) {
+            try {
+                Logger.println("IActivityManager.startActivity failed, execute am start uri");
+                int ret = executeCommandAndWaitFor(new String[]{"am", "start", "-d", intent.getData().toString()});
+                return ret == 0 ? 1 : 0;
+            } catch (Exception e) {
+                Logger.println("am start uri failed: " + e.getMessage());
+                return 0;
             }
-        } catch (Exception e) {
-            Logger.println("Start Activity error: " + e);
-            return 0;
         }
-        return 1;
+        return 0;
     }
 
-    public static boolean sendChars(int[] chars) {
-        Intent intent = new Intent();
-        intent.setAction(IME_CHARS);
-        intent.putExtra("chars", chars);
-        return sendIMEIntent(intent);
-    }
 
-    public static boolean sendInputKeyCode(int keycode) {
-        Intent intent = new Intent();
-        intent.setAction(IME_KEYCODE);
-        intent.putExtra("code", keycode);
-        return sendIMEIntent(intent);
-    }
-
-    private static boolean broadcastIntent(Intent intent) {
-        boolean ret = false;
-        try {
-            APIAdapter.broadcastIntent(iActivityManager, intent);
-            ret = true;
-        } catch (Exception e) {
-            Logger.println("Broadcast Intent error: " + e);
-        }
-        return ret;
-    }
+    // ----- Text input (clipboard + key injection) -----
 
     /**
-     * Send text via ADBKeyBoard IME. Uses ADB_INPUT_B64 for any non-ASCII character
-     * (Chinese, emoji, etc.) so that Unicode is reliably delivered; uses ADB_INPUT_TEXT
-     * for pure ASCII. Requires ADBKeyBoard (senzhk/ADBKeyBoard) to be installed and
-     * <b>enabled</b> in Settings → Languages & input → Keyboards (or: adb shell ime enable
-     * com.android.adbkeyboard/.AdbIME). If not enabled, returns false.
-     */
-    /**
-     * Send text using clipboard + Ctrl+V when possible; fall back to ADBKeyBoard broadcast
-     * (ADB_INPUT_TEXT / ADB_INPUT_B64) when clipboard or key injection is not available.
+     * Sends text by writing to clipboard and injecting Ctrl+V. Supports ~CLEAR~ (clear field) and \\n (newline).
      */
     public static boolean sendText(String text) {
         if (text == null) {
             return false;
         }
 
-        // 0) Special flags handling (YADB-style extensions).
+        // Special flags handling (YADB-style extensions).
         final String FLAG_CLEAR = "~CLEAR~";
         final String FLAG_ENTER = "\\n";
 
@@ -949,29 +814,8 @@ public class AndroidDevice {
             text = text.replace(FLAG_ENTER, "\n");
         }
 
-        // 1) Preferred path: clipboard + Ctrl+V (YADB-style).
-        boolean clipboardOk = sendTextViaClipboard(text);
-        if (clipboardOk) {
-            return true;
-        }
-
-        // 2) Fallback path: keep existing ADBKeyBoard protocol for robustness.
-        if (containsNonAscii(text)) {
-            return sendTextViaB64(text);
-        }
-        Intent intent = new Intent();
-        intent.setAction(IME_MESSAGE);
-        intent.putExtra("msg", text);
-        return sendIMEIntent(intent);
-    }
-
-    private static boolean containsNonAscii(CharSequence text) {
-        for (int i = 0; i < text.length(); i++) {
-            if (text.charAt(i) > 127) {
-                return true;
-            }
-        }
-        return false;
+        // Use clipboard + Ctrl+V path.
+        return sendTextViaClipboard(text);
     }
 
     /**
@@ -1033,61 +877,30 @@ public class AndroidDevice {
     }
 
     private static boolean injectKeyEvent(int action, int keyCode, int metaState, int displayId) {
-        try {
-            long now = android.os.SystemClock.uptimeMillis();
-            KeyEvent event = new KeyEvent(now, now, action, keyCode, 0, metaState);
-            // Attach display id when possible so key goes to the correct display.
-            InputEvent ie = event;
-            setInputEventDisplayId(ie, displayId);
-            // Use hidden InputManager via reflection to inject the event.
-            Class<?> imClass = Class.forName("android.hardware.input.InputManager");
-            Method getInstance = imClass.getMethod("getInstance");
-            Object im = getInstance.invoke(null);
-            Method inject = imClass.getMethod("injectInputEvent", InputEvent.class, int.class);
-            Object result = inject.invoke(im, ie, 0 /*mode*/);
-            return !(result instanceof Boolean) || (Boolean) result;
-        } catch (Throwable t) {
-            Logger.warningPrintln("injectKeyEvent failed: " + t);
-            return false;
-        }
+        long now = android.os.SystemClock.uptimeMillis();
+        KeyEvent event = new KeyEvent(now, now, action, keyCode, 0, metaState);
+        setInputEventDisplayId(event, displayId);
+        return APIAdapter.injectInputEvent(event, 0);
     }
 
-    /**
-     * Send text via ADBKeyBoard ADB_INPUT_B64 (Base64-encoded UTF-8). Use this for
-     * Chinese, emoji, and any Unicode when ADB_INPUT_TEXT might not preserve encoding.
-     */
-    public static boolean sendTextViaB64(String text) {
-        if (text == null) {
-            return false;
-        }
-        try {
-            byte[] utf8 = text.getBytes("UTF-8");
-            String b64 = Base64.encodeToString(utf8, Base64.NO_WRAP);
-            Intent intent = new Intent();
-            intent.setAction(IME_MESSAGE_B64);
-            intent.putExtra("msg", b64);
-            return sendIMEIntent(intent);
-        } catch (java.io.UnsupportedEncodingException e) {
-            return false;
-        }
-    }
 
     /**
-     * Get activity stack through dumpsys
-     * @return StackInfo object containing current activity stack
+     * Parses "dumpsys activity a" to build the current activity stack for the focused display.
+     * Hierarchy: Display -> Stack -> Task -> Activity (Hist). Focus lines (mFocusedStack etc.) set
+     * which stack is focused per display; we return the first display that has a matching stack
+     * (prefer primary display when multiple match). Output format may vary across Android/OEM.
+     *
+     * @return StackInfo for the focused stack, or null on parse failure or IO error
      */
     public static StackInfo getFocusedStack() {
-        String[] cmd = new String[]{
-                "dumpsys", "activity", "a"
-        };
+        String[] cmd = new String[]{"dumpsys", "activity", "a"};
 
         try {
             String output = Utils.getProcessOutput(cmd);
-            String line = null;
+            String line;
             Display currentDisplay = null;
             StackInfo currentStackInfo = null;
             Task currentTask = null;
-            ActivityName currentActivityName = null;
             List<Display> displays = new ArrayList<>();
             BufferedReader br = new BufferedReader(new StringReader(output));
             while ((line = br.readLine()) != null) {
@@ -1095,19 +908,20 @@ public class AndroidDevice {
                 if (m.matches()) {
                     currentDisplay = new Display(Integer.parseInt(m.group(1)));
                     displays.add(currentDisplay);
+                    currentStackInfo = null;
+                    currentTask = null;
                     continue;
                 }
                 m = STACK_PATTERN.matcher(line);
                 if (m.matches() && currentDisplay != null) {
                     currentStackInfo = new StackInfo(Integer.parseInt(m.group(1)));
-
                     currentDisplay.stackInfos.add(currentStackInfo);
+                    currentTask = null;
                     continue;
                 }
                 m = TASK_PATTERN.matcher(line);
                 if (m.matches() && currentStackInfo != null) {
                     currentTask = new Task(Integer.parseInt(m.group(1)));
-                    //Logger.println("// zhangzhao stack.id=" + currentStack.id + ", task.id=" + currentTask.id);
                     currentStackInfo.tasks.add(currentTask);
                     continue;
                 }
@@ -1118,10 +932,7 @@ public class AndroidDevice {
                     if (className.startsWith(".")) {
                         className = packageName + className;
                     }
-                    ComponentName comp = new ComponentName(packageName, className);
-                    currentActivityName = new ActivityName(comp);
-                    currentTask.activityNames.add(currentActivityName);
-                    //Logger.println("// zhangzhao stack.id=" + currentStack.id + ", task.id=" + currentTask.id + ", act=" + currentActivity);
+                    currentTask.activityNames.add(new ActivityName(new ComponentName(packageName, className)));
                     continue;
                 }
                 m = FOCUSED_STACK_PATTERN.matcher(line);
@@ -1134,11 +945,17 @@ public class AndroidDevice {
                     currentDisplay.focusedStackId = Integer.parseInt(m.group(1));
                 }
             }
+            // Prefer primary display (0) when multiple displays have a matching focused stack.
             for (Display d : displays) {
+                if (d.id != DEFAULT_DISPLAY_ID) continue;
                 for (StackInfo s : d.stackInfos) {
-                    if (s.id == d.focusedStackId) {
-                        return s;
-                    }
+                    if (s.id == d.focusedStackId) return s;
+                }
+            }
+            for (Display d : displays) {
+                if (d.id == DEFAULT_DISPLAY_ID) continue;
+                for (StackInfo s : d.stackInfos) {
+                    if (s.id == d.focusedStackId) return s;
                 }
             }
         } catch (IOException ignore) {
@@ -1148,10 +965,9 @@ public class AndroidDevice {
     }
 
 
-    public static void main(String[] args) {
-        getFocusedStack();
-    }
+    // ----- Dumpsys stack / display model (inner types below) -----
 
+    /** One display from dumpsys; holds stacks and the focused stack id. */
     public static class Display {
         int id;
         int focusedStackId;
@@ -1162,6 +978,7 @@ public class AndroidDevice {
         }
     }
 
+    /** One stack on a display; holds tasks (list of activities). */
     public static class StackInfo {
         int id;
         List<Task> tasks = new ArrayList<>();
@@ -1174,6 +991,7 @@ public class AndroidDevice {
             return tasks;
         }
 
+        /** Logs stack and task structure for debugging. */
         public void dump() {
             Logger.infoFormat("Stack #%d, sz=%d", id, tasks.size());
             for (Task task : tasks) {
@@ -1185,6 +1003,7 @@ public class AndroidDevice {
         }
     }
 
+    /** One task in a stack; holds the list of activities in the back stack. */
     public static class Task {
         int id;
         List<ActivityName> activityNames = new ArrayList<>();
@@ -1198,6 +1017,7 @@ public class AndroidDevice {
         }
     }
 
+    /** Wrapper for a single activity component in the task. */
     public static class ActivityName {
         public final ComponentName activity;
 

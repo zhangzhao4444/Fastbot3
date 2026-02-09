@@ -44,14 +44,13 @@ public class MonkeyIMEEvent extends MonkeyEvent {
         try {
             // No reliable cross-process API for "focus on input" (getInputMethodWindowVisibleHeight
             // requires IME client; dumpsys format varies). Optimistically: wait a short time for
-            // focus and soft keyboard to settle, then send text (clipboard first, ADBKeyBoard
-            // as fallback inside AndroidDevice.sendText).
+            // focus and soft keyboard to settle, then send text via clipboard + Ctrl+V.
             Thread.sleep(600);
             Logger.println(":Trying to send Input (" + text + ")");
             boolean sent = AndroidDevice.sendText(text);
             Logger.println(":Input (" + text + ") is successfully sent: " + sent);
             if (!sent) {
-                Logger.println(":Input (" + text + ") is not sent. Please check clipboard/IME availability (e.g. ADBKeyBoard).");
+                Logger.println(":Input (" + text + ") is not sent. Please check clipboard availability.");
             }
         } catch (InterruptedException e) {
             Logger.warningPrintln("sendText Fail.");

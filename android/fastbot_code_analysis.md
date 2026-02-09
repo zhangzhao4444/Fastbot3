@@ -56,7 +56,7 @@ Model对象的`getOperate`方法是能够让其他cpp代码调用强化学习模
 Model使用了Graph对象来记录活动转移图（Activity Transition Graph）信息。一个Activity被视为一个State，一个State中包含了一定数量的组件，通过在组件上执行不同类型的动作，即Action后，可以跳转到新的State。
 4. 各种决策代码文件
   1. AbstractAgent.cpp：此文件是所有Agent的基类，规定了做决策的基本通用逻辑。
-  2. ReuseAgent.cpp：此文件实现了强化学习的sarsa n-step的agent，并且支持模型重用。
+  2. DoubleSarsaAgent.cpp：此文件实现了强化学习的 N-step Double SARSA agent，并支持模型重用（FBM）。
 ## 数据结构
 Fastbot中的几个关键的数据结构，Action，Operate，State，Graph，Agent和Model。
 - Action表示模型中的动作，每个Action都有一个ActionType表示动作的类型。
@@ -136,7 +136,7 @@ The `getOperate` method of the Model object allows other CPP code to invoke the 
 The Model utilizes the Graph object to record activity transition graph information. An activity is treated as a state, and a state contains a certain number of components. By performing different types of actions on the components, transitions to new states can be made.
 4. Various decision code files:
   1. AbstractAgent.cpp: This file serves as the base class for all Agents and defines the basic common logic for decision-making.
-  2. ReuseAgent.cpp: This file implements the sarsa n-step agent for reinforcement learning and supports model reuse.
+  2. DoubleSarsaAgent.cpp: This file implements the N-step Double SARSA agent for reinforcement learning and supports model reuse (FBM).
 ## Data Structures
 Fastbot utilizes several key data structures: Action, Operate, State, Graph, Agent, and Model.
 - Action represents actions within the model, where each Action has an ActionType that denotes the type of action.
