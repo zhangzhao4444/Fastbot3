@@ -15,6 +15,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/*
+ * @author Zhao Zhang
+ */
 
 package com.android.commands.monkey.utils;
 
@@ -28,21 +31,25 @@ import java.util.LinkedList;
 
 public class ImageWriterQueue implements Runnable {
 
-    protected LinkedList<Req> requestQueue = new LinkedList<Req>();
-    public String lastImage = "";
+    private final LinkedList<Req> requestQueue = new LinkedList<Req>();
+    // Name of the last enqueued image file; volatile to allow lock-free reads.
+    private volatile String lastImage = "";
 
     @Override
     public void run() {
-        while (!Thread.currentThread().isInterrupted()) {
-            Req req = null;
-            try {
-                req = read();
-            } catch (InterruptedException e) {
-                continue;
+        try {
+            while (!Thread.currentThread().isInterrupted()) {
+                Req req = read();
+                if (req != null) {
+                    writePNG(req);
+                }
             }
-            if (req != null) {
-                writePNG(req);
-            }
+        } catch (InterruptedException e) {
+            // Restore interrupt status and fall through to final flush.
+            Thread.currentThread().interrupt();
+        } finally {
+            // Best-effort flush of remaining queued requests on shutdown.
+            flush();
         }
     }
 
@@ -56,20 +63,26 @@ public class ImageWriterQueue implements Runnable {
         try (FileOutputStream fos = new FileOutputStream(dst)) {
             map.compress(Bitmap.CompressFormat.PNG, 75, fos);
         } catch (IOException e) {
-            e.printStackTrace();
-            Logger.format("Fail to save screen shot to %s", dst.getAbsolutePath());
+            Logger.errorPrintln("Fail to save screen shot to " + dst.getAbsolutePath() + ": " + e.getMessage());
         } finally {
             map.recycle();
         }
     }
 
     public synchronized void add(Bitmap map, File dst) {
-        lastImage = dst.getName();
-//        Logger.println("[ImageWriterQueue] Last image: " + lastImage);
-        requestQueue.add(new Req(map, dst));
-        if (requestQueue.size() > Config.flushImagesThreshold) {
-            Logger.format("ImageQueue is too full (%d)! Try to flush it.", requestQueue.size());
-            flush();
+        lastImage = (dst != null ? dst.getName() : "");
+        requestQueue.addLast(new Req(map, dst));
+
+        int maxSize = Config.flushImagesThreshold;
+        if (maxSize > 0 && requestQueue.size() > maxSize) {
+            // When the queue is too large, drop the oldest screenshots instead of blocking the producer with a synchronous flush.
+            Logger.format("ImageQueue is too full (%d > %d), dropping oldest screenshots.", requestQueue.size(), maxSize);
+            while (requestQueue.size() > maxSize) {
+                Req dropped = requestQueue.removeFirst();
+                if (dropped.map != null && !dropped.map.isRecycled()) {
+                    dropped.map.recycle();
+                }
+            }
         }
         notifyAll();
     }
@@ -91,6 +104,10 @@ public class ImageWriterQueue implements Runnable {
 
     public synchronized void tearDown() {
         flush();
+    }
+
+    public String getLastImage() {
+        return lastImage;
     }
 
     static class Req {
