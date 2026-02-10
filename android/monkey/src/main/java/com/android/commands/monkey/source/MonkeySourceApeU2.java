@@ -87,10 +87,8 @@ import com.android.commands.monkey.utils.MonkeyUtils;
 import com.android.commands.monkey.utils.OkHttpClient;
 import com.android.commands.monkey.utils.ProxyServer;
 import com.android.commands.monkey.utils.RandomHelper;
-import com.android.commands.monkey.utils.StoneUtils;
 import com.android.commands.monkey.utils.U2Client;
 import com.android.commands.monkey.utils.UUIDHelper;
-import com.android.commands.monkey.utils.Utils;
 import com.bytedance.fastbot.AiClient;
 import com.google.gson.Gson;
 
@@ -216,10 +214,8 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
             if (!this.currentActivity.equals(className)) {
                 this.currentActivity = className;
                 activityHistory.add(this.currentActivity);
-                activityCountHistory.put(
-                        currentActivity,
-                        StoneUtils.getOrDefaultFromHashMap(activityCountHistory, this.currentActivity, 0) + 1
-                );
+                Integer count = activityCountHistory.get(this.currentActivity);
+                activityCountHistory.put(currentActivity, (count != null ? count : 0) + 1);
                 Logger.println("// [Monkey] current activity is " + this.currentActivity);
                 timestamp++;
             }
@@ -237,10 +233,8 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
         if (!this.currentActivity.equals(className)) {
             this.currentActivity = className;
             activityHistory.add(this.currentActivity);
-            activityCountHistory.put(
-                    currentActivity,
-                    StoneUtils.getOrDefaultFromHashMap(activityCountHistory, this.currentActivity, 0) + 1
-            );
+            Integer count = activityCountHistory.get(this.currentActivity);
+            activityCountHistory.put(currentActivity, (count != null ? count : 0) + 1);
             Logger.println("// [Script] current activity is " + this.currentActivity);
             timestamp++;
         }

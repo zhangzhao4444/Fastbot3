@@ -50,7 +50,7 @@ import android.view.inputmethod.InputMethodManager;
 
 import com.android.commands.monkey.framework.APIAdapter;
 import com.android.commands.monkey.utils.Logger;
-import com.android.commands.monkey.utils.Utils;
+import com.android.commands.monkey.utils.ProcessUtils;
 import com.android.commands.monkey.utils.AndroidVersions;
 import com.android.internal.statusbar.IStatusBarService;
 import com.android.internal.view.IInputMethodManager;
@@ -896,7 +896,7 @@ public class AndroidDevice {
         String[] cmd = new String[]{"dumpsys", "activity", "a"};
 
         try {
-            String output = Utils.getProcessOutput(cmd);
+            String output = ProcessUtils.getProcessOutput(cmd);
             String line;
             Display currentDisplay = null;
             StackInfo currentStackInfo = null;

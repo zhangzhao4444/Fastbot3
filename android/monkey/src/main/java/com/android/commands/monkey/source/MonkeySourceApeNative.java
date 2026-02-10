@@ -99,7 +99,6 @@ import com.android.commands.monkey.utils.Logger;
 import com.android.commands.monkey.utils.MonkeyUtils;
 import com.android.commands.monkey.utils.RandomHelper;
 import com.android.commands.monkey.utils.UUIDHelper;
-import com.android.commands.monkey.utils.Utils;
 import com.bytedance.fastbot.AiClient;
 
 import java.io.BufferedWriter;
@@ -754,7 +753,7 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
             long total = System.currentTimeMillis() - start;
             Logger.println(" event time:" + Long.toString(total));
             if (tGetRootSlow > 0 || tDumpXml > 50 || total > 200) {
-                Logger.println("// event time breakdown: getTop=" + tGetTop + " getRoot=" + tGetRoot
+                Logger.println("// event time: getTop=" + tGetTop + " getRoot=" + tGetRoot
                         + (usedGetRootSlow ? " getRootSlow=" + tGetRootSlow : "")
                         + " dumpBinary=" + tDumpBinary + " dumpXml=" + tDumpXml + " ms");
             }

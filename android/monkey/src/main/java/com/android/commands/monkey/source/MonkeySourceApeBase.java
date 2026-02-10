@@ -77,7 +77,7 @@ import com.android.commands.monkey.utils.Logger;
 import com.android.commands.monkey.utils.MonkeyUtils;
 import com.android.commands.monkey.utils.RandomHelper;
 import com.android.commands.monkey.utils.UUIDHelper;
-import com.android.commands.monkey.utils.Utils;
+import com.android.commands.monkey.utils.CoverageUtils;
 import com.android.commands.monkey.utils.AndroidVersions;
 import com.bytedance.fastbot.AiClient;
 
@@ -765,7 +765,7 @@ public abstract class MonkeySourceApeBase {
         }
         String[] totalActivities = set.toArray(new String[0]);
         Arrays.sort(totalActivities);
-        Utils.activityStatistics(mOutputDirectory, testedActivities, totalActivities, new ArrayList<Map<String, String>>(), f, new HashMap<String, Integer>());
+        CoverageUtils.activityStatistics(mOutputDirectory, testedActivities, totalActivities, new ArrayList<Map<String, String>>(), f, new HashMap<String, Integer>());
     }
 
     /** Subclasses implement to return a fuzzing action (e.g. from native or simplified list). */

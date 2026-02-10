@@ -21,7 +21,7 @@ import android.view.IWindowManager;
 
 import com.android.commands.monkey.events.MonkeyEvent;
 import com.android.commands.monkey.utils.Logger;
-import com.android.commands.monkey.utils.StoneUtils;
+import com.android.commands.monkey.utils.ProcessUtils;
 
 /**
  * @author Dingchun Wang
@@ -38,7 +38,7 @@ public class MutationAlwaysFinishActivityEvent extends MonkeyEvent {
     }
 
     private boolean isAlwaysFinishActivitysOpen() {
-        String result = StoneUtils.executeShellCommand("settings get global always_finish_activities").trim();
+        String result = ProcessUtils.executeShellCommand("settings get global always_finish_activities").trim();
         return !result.contains("0");
     }
 

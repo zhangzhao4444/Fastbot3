@@ -31,9 +31,10 @@ import java.util.LinkedList;
 
 public class ImageWriterQueue implements Runnable {
 
-    private final LinkedList<Req> requestQueue = new LinkedList<Req>();
-    // Name of the last enqueued image file; volatile to allow lock-free reads.
-    private volatile String lastImage = "";
+    // Visible to subclasses (e.g. CacheImageWriterQueue) for direct queue manipulation.
+    protected final LinkedList<Req> requestQueue = new LinkedList<Req>();
+    // Last enqueued image file name, accessed from ProxyServer and subclasses.
+    public volatile String lastImage = "";
 
     @Override
     public void run() {

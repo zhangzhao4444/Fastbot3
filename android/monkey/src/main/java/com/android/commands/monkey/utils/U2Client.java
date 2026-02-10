@@ -36,7 +36,12 @@ public class U2Client extends ScriptDriverClient {
             } catch (IOException e) {
                 lastEx = e;
                 if (i < maxRetries - 1) {
-                    StoneUtils.sleep(1000);
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
                 }
             }
         }
