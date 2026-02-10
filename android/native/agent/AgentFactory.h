@@ -36,8 +36,7 @@ namespace fastbotx {
      * Uses factory pattern to create different types of Agent instances.
      * 
      * Note: In current implementation, regardless of algorithm type (agentT) passed,
-     * ModelReusableAgent instance is always created (SARSA reinforcement learning
-     * based reusable model agent).
+     * DoubleSarsaAgent instance is always created (Double SARSA reinforcement learning).
      * 
      * Advantages of factory pattern:
      * 1. Encapsulates object creation logic
@@ -53,7 +52,7 @@ namespace fastbotx {
          * Creates corresponding Agent instance based on algorithm type and device type.
          * 
          * Current implementation:
-         * - Always creates ModelReusableAgent regardless of algorithm type
+         * - Always creates DoubleSarsaAgent regardless of algorithm type
          * - After creating Agent, starts a background thread to periodically save model
          * 
          * @param agentT Algorithm type (currently unused, reserved interface)

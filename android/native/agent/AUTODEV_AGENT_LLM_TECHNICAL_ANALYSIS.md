@@ -42,9 +42,9 @@
     |                              v         |                     v          |
     |  +------------------+   selectAction   |   +--------------------------------+
     |  | StateFactory     |   (RL / custom)  |   | LlmClient (e.g. HttpLlmClient) |
-    |  | Graph / Agent    |                  |   | predict(prompt, images, out)   |
-    |  +------------------+                  |   | 无 libcurl 时经 JNI 回调 Java    |
-    |                                        |   | 发 HTTP，图在 Java 按需截屏       |
+    |  | Graph / Agent    |                  |   | predictWithPayload(type,payload)|
+    |  +------------------+                  |   | 无 libcurl 时经 JNI 传 payload   |
+    |                                        |   | Java 拼 prompt+截屏后发 HTTP      |
     |  convertActionToOperate(action, state) |   +----------------+---------------+
     |                                        |                    |
     |  +------------------+                  |                    | HTTP
@@ -62,8 +62,9 @@
 
 1. Java 传入当前 Activity、UI 树（Buffer）；**不传截图**（图在 C++ 回调 Java 发 LLM 请求时由 Java 按需截屏）。JNI 调用 `Model::getOperateOpt(elem, activity, deviceID, &requestScreenshotRetry)`。
 2. Model 先建状态、再问 **AutodevAgent** 是否在本步给出动作：`selectNextAction(element, activity, deviceID, preMatchedLlmTask)`（无 screenshot 参数）。
-3. 若 AutodevAgent 返回非空 `ActionPtr`，本步用该动作，跳过 RL；否则走原有 `selectAction(state, agent, ...)`。
-4. 最终 `convertActionToOperate(action, state)` 得到 `Operate`，经 JNI 转成 `OperateResult` 返回 Java 执行。
+3. AutodevAgent 内采用 **Payload 路径**：C++ 用 `buildExecutorPayload` / `buildPlannerPayload` / `buildStepSummaryPayload` 生成 JSON，经 `predictWithPayload(promptType, payloadJson, ...)` 调 JNI；Java `doLlmHttpPostFromPayload` 按 8.3 契约拼出与 C++ 原 prompt 等价的字符串，再截屏、拼 body、发 HTTP。会话状态与 historySummaries 仍在 C++，仅「拼好的 prompt 文本」在 Java 侧生成。
+4. 若 AutodevAgent 返回非空 `ActionPtr`，本步用该动作，跳过 RL；否则走原有 `selectAction(state, agent, ...)`。
+5. 最终 `convertActionToOperate(action, state)` 得到 `Operate`，经 JNI 转成 `OperateResult` 返回 Java 执行。
 
 **AutodevAgent 内部分工**：内部维护 `_preference`、`_llmClient`、`_session`（LlmSessionState）。`selectNextAction` 依次：判断是否在会话、是否过期 → 可选 Planner 出一步子任务 → Executor 根据当前 UI 出动作 → 解析 JSON → `convertToAction` → 记录历史并返回。详细分支与条件见**第 3 节**，算法细节见**第 4 节**。
 
@@ -108,15 +109,15 @@
         +--------+-----------------------+
                  | Yes
                  v
-        buildPlannerPrompt() --> predict() --> parsePlannerResponse()
+        buildPlannerPayload() --> predictWithPayload("planner", payload, ...) --> parsePlannerResponse()
                  |
                  +-- finish_task? --> completed; resetSession(); return nullptr
                  +-- 否则保存 currentPlannerStep
                  v
-              buildPrompt() --> 可选注入 EXECUTOR SUB-TASK
+              buildExecutorPayload() --> 可选注入 EXECUTOR SUB-TASK 数据
                          |
                          v
-              _llmClient->predict(prompt, images, rawResponse)
+              _llmClient->predictWithPayload("executor", payload, images, rawResponse)
                          |
                     +----+----+
                     | ok?     |--No--> 连续失败+1; Planner 步失败+1; 可能 resetSession; return nullptr
@@ -165,14 +166,15 @@
 
 - **作用**：将高层任务拆成**单步语义子任务**，避免 Executor 一次收到整段任务导致目标不清。
 - **触发条件**：`taskConfig->usePlannerLayer == true` 且当前 `currentPlannerStep.tool` 为空（即需要“下一步子任务”时）。
-- **Prompt**：`buildPlannerPrompt()` 只给任务描述、当前 todos、scratchpad 键、已执行步骤摘要，**不给完整 UI 树**，要求输出**一个**语义步骤。
+- **Prompt**：由 C++ `buildPlannerPayload()` 产出 JSON payload，经 JNI 传 Java，Java 按模板拼出与原 `buildPlannerPrompt()` 等价的 prompt：任务描述、当前 todos、scratchpad 键、已执行步骤摘要（**不给完整 UI 树**），要求输出**一个**语义步骤。详见 **8.3**。
 - **工具集（语义）**：`tap`、`scroll`、`type_text`、`answer`、`finish_task`、`go_back`。输出格式为单 JSON：`tool`、`intent`、`text`（type_text/answer 用），并可带 `todo_updates`。
 - **解析**：`parsePlannerResponse()` 得到 `PlannerStep { tool, intent, text }`。若 `tool == "finish_task"` 则标记任务完成并 `resetSession()`。
-- **与 Executor 的衔接**：Planner 得到的一步会写入 `currentPlannerStep`。`buildPrompt()` 中若存在 `currentPlannerStep`，会在 Executor 的 prompt 前插入 “EXECUTOR SUB-TASK” 段落（如 “Locate and tap on the …”、“Perform a scroll to …”、“Locate … then type: …”），使 Executor 只专注完成这一步。本步执行成功后清空 `currentPlannerStep`，下一轮再向 Planner 要下一步。
+- **与 Executor 的衔接**：Planner 得到的一步会写入 `currentPlannerStep`。`buildExecutorPayload()` 中若存在 `currentPlannerStep`，会在 payload 中带上 `planner_step`，Java 拼 Executor prompt 时在开头插入 “EXECUTOR SUB-TASK” 段落（如 “Locate and tap on the …”、“Perform a scroll to …”、“Locate … then type: …”），使 Executor 只专注完成这一步。本步执行成功后清空 `currentPlannerStep`，下一轮再向 Planner 要下一步。
 
 ### 4.3 Executor 层（动作决策）
 
-- **输入**：当前 Activity、由 `getScreenFingerprint(rootXml)` 得到的可交互元素轻量列表（index、class、resource-id、text、content-desc）、任务描述、近期步骤摘要、todos、scratchpad、以及（若启用 Planner）当前子任务描述。可选：当前屏 hash 用于防循环提示。
+- **输入**：当前 Activity、由 `getScreenFingerprint(rootXml)` 得到的可交互元素轻量列表（index、class、resource-id、text、content-desc）、任务描述、近期步骤摘要（**historySummaries**）、todos、scratchpad、以及（若启用 Planner）当前子任务描述。可选：当前屏 hash 用于防循环提示（**nav_hint**）。
+- **Prompt 来源**：C++ `buildExecutorPayload()` 将上述数据打成 JSON payload，经 JNI 传 Java；Java `buildExecutorPrompt(payload)` 按与原 `buildPrompt()` 一致的模板拼出完整 prompt。详见 **8.3**。
 - **Prompt 设计**：  
   - 说明角色与 JSON 输出格式。  
   - 要求 `task_status` 为 ONGOING / COMPLETED / ABORT。  
@@ -236,7 +238,7 @@
 ### 4.6 历史与摘要
 
 - **history**：每步成功执行后追加 `StepHistoryEntry`（stepIndex、actionType、targetBy、targetValue、actionReason、actionOutputJson），用于调试与可选摘要，长度有上限（如 kMaxHistoryEntries）。
-- **historySummaries**：短句摘要列表，注入到下一次 `buildPrompt()` 的 “Recent steps summary”。若 `useLlmForStepSummary` 为 true，会调用 `requestStepSummaryFromLlm(entry)` 用 LLM 生成一句摘要；否则用 `appendLocalSummary(spec)` 本地拼接。长度有上限（如 kMaxHistory）。
+- **historySummaries**：短句摘要列表，注入到下一次 Executor/Planner prompt 的 “Recent steps summary” / “Steps done so far”。若 `useLlmForStepSummary` 为 true，会调用 `requestStepSummaryFromLlm(entry)`（内部用 `predictWithPayload("step_summary", payload, ...)`）用 LLM 生成一句摘要；否则用 `appendLocalSummary(spec)` 本地拼接。长度有上限（如 kMaxHistory）。
 
 ### 4.7 Todo 与 Scratchpad
 
@@ -323,6 +325,8 @@
 
 ### 8.1 整体链路（Java path，无 libcurl）
 
+当前采用 **Payload 路径**：C++ 只传「组装 prompt 所需的结构化数据」（JSON），Java 按模板拼出完整 prompt，再组 body 发 HTTP，以减少 JNI 长字符串拷贝。
+
 ```
 Java: getNextEvent
   → setLlmScreenshotProvider(this::captureScreenshotForLlmRequest)
@@ -333,16 +337,18 @@ Java: getNextEvent
         → resolvePage(activity, element)
         → AutodevAgent::selectNextAction(element, activity, deviceId, preMatchedLlmTask)
           → maybeStartSession(...)  // 若未在会话且 preMatchedLlmTask 非空则启动会话
-          → [可选] Planner: buildPlannerPrompt() → _llmClient->predict(plannerPrompt, noImages, plannerResponse)
-          → buildPrompt() → 构造 Executor prompt
+          → [可选] Planner: buildPlannerPayload() → _llmClient->predictWithPayload("planner", payload, noImages, plannerResponse)
+          → buildExecutorPayload() → 构造 Executor payload（含 screen_fingerprint、history_summaries、todos、scratchpad、planner_step 等）
           → images 恒为空；图由 Java 在 HTTP 回调时按需截屏
-          → _llmClient->predict(prompt, images, rawResponse)
-            → HttpLlmClient::predict(prompt, images, outResponse)
+          → _llmClient->predictWithPayload("executor", payload, images, rawResponse)
+            → HttpLlmClient::predictWithPayload(promptType, payloadJson, images, outResponse)
               #if !FASTBOTX_HAS_CURL:
-              → llmHttpPostViaJavaWithPrompt(url, apiKey, prompt, model, maxTokens, &outResponse)
-                → JNI CallObjectMethod(doLlmHttpPostFromPrompt)
-                  → Java AiClient.doLlmHttpPostFromPrompt(url, apiKey, prompt, model, maxTokens)
-                    → buildLlmRequestBody(): sLlmScreenshotProvider.captureForLlm() 按需截屏 → 拼 JSON body
+              → llmHttpPostViaJavaWithPayload(url, apiKey, promptType, payloadJson, model, maxTokens, &outResponse)
+                → JNI CallObjectMethod(doLlmHttpPostFromPayload)
+                  → Java AiClient.doLlmHttpPostFromPayload(url, apiKey, promptType, payloadJson, model, maxTokens)
+                    → buildPromptFromPayload(promptType, payloadJson)  // 按 8.3 契约拼出与 C++ 原 buildPrompt/buildPlannerPrompt 等价的 prompt
+                    → doLlmHttpPostFromPrompt(url, apiKey, prompt, model, maxTokens)  // 复用原有：截屏 + 拼 body + POST
+                    → buildLlmRequestBody(): captureForLlm() 按需截屏 → 拼 JSON body
                     → doLlmHttpPostBody(url, apiKey, body)  // HttpURLConnection POST
                     → return 完整 HTTP response body（OpenAI 格式）
               ← outResponse = 完整 response body
@@ -356,9 +362,67 @@ Java: getNextEvent
   ← Operate
 ```
 
+StepSummary（`useLlmForStepSummary == true` 时）：C++ `buildStepSummaryPayload(entry)` → `predictWithPayload("step_summary", payload, ...)` → Java 同路径 `doLlmHttpPostFromPayload`，拼出与原 `requestStepSummaryFromLlm` 内 prompt 等价的文案。
+
 ### 8.2 要点补充
 
 - **入口与图**：`getOperateOpt` / `selectNextAction` 均无 screenshot 入参；C++ 侧 `images` 恒为空，图在 Java 回调 `doLlmHttpPostFromPrompt` 时由 `buildLlmRequestBody` 内 `captureForLlm()` 按需截屏并写入 body（见 8.1）。
 - **API 响应**：Java 返回完整 HTTP body；C++ 取 `choices[0].message.content` 作为 `outResponse`，Planner/Executor 收到的即为该 content 字符串。Planner/Executor 的 JSON 格式与解析见 **4.2、4.3**；`convertToAction` 与 `convertActionToOperate` 见 **4.4**。JNI 产出 `OperateResult`，当前 `requestScreenshotRetry` 恒为 false。
 - **容错**：`parsePlannerResponse` / `parseLlmResponse` 对「被 markdown 包裹的 JSON」做容错：若直接 `json::parse` 失败，用 `extractJsonObjectString` 取首 `{` 到末 `}` 再解析，支持 `` ```json\n{...}\n``` `` 等形式。
+
+### 8.3 Prompt Payload 与 Java 侧组装
+
+为减少「长 prompt 从 C++ 经 JNI 拷贝到 Java」的开销，当前实现采用 **Payload 路径**：C++ 只生成「组装 prompt 所需的结构化数据」（JSON），经 JNI 传 `promptType` + `payloadJson`；Java 根据 `promptType` 选模板、从 payload 取字段，拼出与原先 C++ `buildPrompt` / `buildPlannerPrompt` / StepSummary 内 prompt **内容一致**的字符串，再走原有 `doLlmHttpPostFromPrompt`（截屏 + 拼 body + POST）。会话状态（historySummaries、todos、scratchpad、currentPlannerStep 等）仍在 C++，payload 仅携带当次请求需要注入 prompt 的数据。
+
+#### 8.3.1 promptType
+
+| 取值 | 用途 | C++ 侧构建函数 | Java 侧拼装方法 |
+|------|------|----------------|-----------------|
+| `"executor"` | Executor 单步动作决策 | `buildExecutorPayload(rootXml, activity, ...)` | `buildExecutorPrompt(payload)` |
+| `"planner"` | Planner 单步语义子任务 | `buildPlannerPayload()` | `buildPlannerPrompt(payload)` |
+| `"step_summary"` | 单步执行后的自然语言摘要（useLlmForStepSummary 时） | `buildStepSummaryPayload(entry)` | `buildStepSummaryPrompt(payload)` |
+
+#### 8.3.2 Payload 契约（C++ → Java）
+
+**Executor payload**（`buildExecutorPayload` 产出）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `nav_hint` | bool | 当前屏是否在 recentScreenHashes 中，用于“此屏最近已见过”提示 |
+| `activity` | string | 当前 Activity 名 |
+| `screen_fingerprint` | string | `getScreenFingerprint(rootXml)` 结果（可交互元素列表） |
+| `task_description` | string | 任务描述 |
+| `history_summaries` | array of string | 近期步骤短句摘要，注入 “Recent steps summary” |
+| `todos` | array of { id, content, status } | 当前 todo 列表 |
+| `scratchpad` | object: key → { title, text } | 当前 scratchpad，注入 “Scratchpad (stored items...)” |
+| `planner_step` | object \| null | 当前 Planner 子任务：{ tool, intent, text }；无则为 null |
+
+**Planner payload**（`buildPlannerPayload` 产出）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `task_description` | string | 任务描述 |
+| `todos` | array of { id, content, status } | 当前 todo 列表 |
+| `scratchpad_keys` | array of string | scratchpad 的键列表（仅键，供 “Scratchpad keys (stored data):” 用） |
+| `history_summaries` | array of string | 已执行步骤摘要，注入 “Steps done so far (Executor reports)” |
+
+**StepSummary payload**（`buildStepSummaryPayload` 产出）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `step_index` | int | 步序号 |
+| `action_type` | string | 动作类型（如 CLICK、INPUT） |
+| `target_by` | string | 目标选择方式（如 INDEX） |
+| `target_value` | string | 目标值 |
+| `action_reason` | string | 该步原因说明 |
+
+#### 8.3.3 与 C++ 原 prompt 的对齐
+
+Java 侧三套模板（`buildExecutorPrompt` / `buildPlannerPrompt` / `buildStepSummaryPrompt`）的**顺序、措辞与占位**与 C++ 原 `buildPrompt()`、`buildPlannerPrompt()`、`requestStepSummaryFromLlm()` 内拼出的 prompt 保持一致，包括：
+
+- Executor：Navigation hint（nav_hint）→ EXECUTOR SUB-TASK（planner_step）→ 角色说明 → Task → Current activity → Visible interactive elements（screen_fingerprint）→ **Recent steps summary**（history_summaries）→ Current todos → Scratchpad → JSON 格式与示例。
+- Planner：角色与 CRITICAL 说明 → Task → Current todos → todo_updates 说明 → Scratchpad keys → **Steps done so far (Executor reports)**（history_summaries）→ Tools 与回复格式。
+- StepSummary：单句说明 + step_index / action_type / target_by / target_value / action_reason + 回复要求。
+
+修改 prompt 文案或增减字段时，需同时更新 C++ 的 `build*Payload` 与 Java 的 `build*Prompt`，以保持行为一致。
 
