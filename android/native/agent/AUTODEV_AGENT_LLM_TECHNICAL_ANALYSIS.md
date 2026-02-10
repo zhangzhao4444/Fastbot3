@@ -44,7 +44,7 @@
     |  | StateFactory     |   (RL / custom)  |   | LlmClient (e.g. HttpLlmClient) |
     |  | Graph / Agent    |                  |   | predictWithPayload(type,payload)|
     |  +------------------+                  |   | 无 libcurl 时经 JNI 传 payload   |
-    |                                        |   | Java 拼 prompt+截屏后发 HTTP      |
+    |                                        |   | Java 拼 prompt+截屏后发 HTTP     |
     |  convertActionToOperate(action, state) |   +----------------+---------------+
     |                                        |                    |
     |  +------------------+                  |                    | HTTP

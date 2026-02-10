@@ -47,43 +47,59 @@ public class Logger {
         return sDateFormat.get().format(new Date());
     }
 
+    private static String safeToString(Object message) {
+        return String.valueOf(message);
+    }
+
     public static void println(Object message) {
+        String text = safeToString(message);
         try {
-            System.out.format(TAG + "[" + getCurrentTimeStamp() + "] %s\n", message);
-            Log.i(TAG, message.toString());
-        } catch (java.lang.NumberFormatException e) {} catch (Exception e) {}
+            System.out.format("%s[%s] %s%n", TAG, getCurrentTimeStamp(), text);
+            Log.i(TAG, text);
+        } catch (Exception ignored) {
+            // Swallow logging exceptions to avoid impacting caller.
+        }
     }
 
     public static void format(String format, Object... args) {
-        if (debug) System.out.format(TAG + format + "\n", args);
+        if (debug) {
+            System.out.format("%s%s%n", TAG, String.format(format, args));
+        }
     }
 
     public static void debugFormat(String format, Object... args) {
-        if (debug) System.out.format(TAG + "*** DEBUG *** " + format + "\n", args);
+        if (debug) {
+            System.out.format("%s*** DEBUG *** %s%n", TAG, String.format(format, args));
+        }
     }
 
     public static void warningFormat(String format, Object... args) {
-        System.out.format(TAG + "*** WARNING *** " + format + "\n", args);
+        System.out.format("%s*** WARNING *** %s%n", TAG, String.format(format, args));
     }
 
     public static void infoFormat(String format, Object... args) {
-        if (debug) System.out.format(TAG + "*** INFO *** " + format + "\n", args);
+        if (debug) {
+            System.out.format("%s*** INFO *** %s%n", TAG, String.format(format, args));
+        }
     }
 
     public static void warningPrintln(Object message) {
-        System.out.format(TAG + "*** WARNING *** %s\n", message);
-        Log.w(TAG, "*** WARNING *** %s" + message);
+        String text = safeToString(message);
+        System.out.format("%s*** WARNING *** %s%n", TAG, text);
+        Log.w(TAG, "*** WARNING *** " + text);
     }
 
     public static void infoPrintln(Object message) {
         if (debug) {
-            System.out.format(TAG + "*** INFO *** %s\n", message);
-            Log.i(TAG, "*** INFO *** "+ message);
+            String text = safeToString(message);
+            System.out.format("%s*** INFO *** %s%n", TAG, text);
+            Log.i(TAG, "*** INFO *** " + text);
         }
     }
 
     public static void errorPrintln(Object message) {
-        System.err.format(TAG + "*** ERROR *** %s\n", message);
-        Log.e(TAG, "*** ERROR *** "+ message);
+        String text = safeToString(message);
+        System.err.format("%s*** ERROR *** %s%n", TAG, text);
+        Log.e(TAG, "*** ERROR *** " + text);
     }
 }
