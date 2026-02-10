@@ -52,6 +52,21 @@ namespace fastbotx {
         virtual bool predict(const std::string &prompt,
                              const std::vector<ImageData> &images,
                              std::string &outResponse) = 0;
+
+        /**
+         * Predict using payload JSON; Java assembles the prompt (reduces JNI copy).
+         * promptType: "executor" | "planner" | "step_summary".
+         */
+        virtual bool predictWithPayload(const std::string &promptType,
+                                        const std::string &payloadJson,
+                                        const std::vector<ImageData> &images,
+                                        std::string &outResponse) {
+            (void) promptType;
+            (void) payloadJson;
+            (void) images;
+            (void) outResponse;
+            return false;
+        }
     };
 
     /**
@@ -220,6 +235,16 @@ namespace fastbotx {
         // --- v3 Planner + Executor ---
         /** Build prompt for Planner LLM (task, todos, scratchpad, history; no full UI tree). */
         std::string buildPlannerPrompt() const;
+
+        /** Build payload JSON for Java to assemble Executor prompt. Sets outCurrentScreenHash if non-null. */
+        std::string buildExecutorPayload(const ElementPtr &rootXml,
+                                         const std::string &activity,
+                                         std::string *outCurrentScreenHash = nullptr,
+                                         const std::string *precomputedFingerprint = nullptr) const;
+        /** Build payload JSON for Java to assemble Planner prompt. */
+        std::string buildPlannerPayload() const;
+        /** Build payload JSON for Java to assemble StepSummary prompt. */
+        std::string buildStepSummaryPayload(const StepHistoryEntry &entry) const;
         /** Parse Planner LLM response into one semantic step (tool, intent, text). Returns true if valid. */
         bool parsePlannerResponse(const std::string &response, PlannerStep &outStep) const;
         /** Fill PlannerStep from already-parsed JSON (avoids second parse when applying todo_updates). */

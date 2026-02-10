@@ -306,5 +306,71 @@ namespace fastbotx {
         }
     }
 
+    bool HttpLlmClient::predictWithPayload(const std::string &promptType,
+                                            const std::string &payloadJson,
+                                            const std::vector<ImageData> &images,
+                                            std::string &outResponse) {
+        (void) images; // Java path: image captured in Java on demand
+        if (!isEnabled()) {
+            BLOGE("HttpLlmClient: LLM is disabled or misconfigured");
+            return false;
+        }
+        outResponse.clear();
+#if FASTBOTX_HAS_CURL
+        (void) promptType;
+        (void) payloadJson;
+        BLOGE("HttpLlmClient: predictWithPayload not implemented for CURL path; use prompt assembly in Java only");
+        return false;
+#else
+        bool ok = llmHttpPostViaJavaWithPayload(_config.apiUrl.c_str(),
+                                                _config.apiKey.c_str(),
+                                                promptType.c_str(),
+                                                payloadJson.c_str(),
+                                                _config.model.c_str(),
+                                                _config.maxTokens,
+                                                &outResponse);
+        if (!ok) {
+            BLOGE("HttpLlmClient: Java HTTP POST (payload) failed");
+            return false;
+        }
+        try {
+            using nlohmann::json;
+            if (outResponse.empty()) {
+                BDLOGE("HttpLlmClient: response body is empty");
+                return false;
+            }
+            json j = json::parse(outResponse);
+            if (!j.is_object()) {
+                BDLOGE("HttpLlmClient: response root is not a JSON object");
+                return false;
+            }
+            if (j.contains("error") && j["error"].is_object()) {
+                std::string errMsg = j["error"].value("message", "unknown error");
+                BDLOGE("HttpLlmClient: API error: %s", errMsg.c_str());
+                return false;
+            }
+            if (!j.contains("choices") || !j["choices"].is_array() || j["choices"].empty()) {
+                BDLOGE("HttpLlmClient: response missing or empty 'choices' array");
+                return false;
+            }
+            const auto &choice = j["choices"][0];
+            if (!choice.contains("message") || !choice["message"].is_object()) {
+                BDLOGE("HttpLlmClient: response choices[0] missing 'message' object");
+                return false;
+            }
+            std::string content = choice["message"].value("content", "");
+            if (content.empty()) {
+                BDLOGE("HttpLlmClient: assistant message content is empty");
+                return false;
+            }
+            outResponse = std::move(content);
+            return true;
+        } catch (const std::exception &ex) {
+            BDLOGE("HttpLlmClient: invalid response JSON: %s", ex.what());
+            return false;
+        }
+#endif
+    }
+
 } // namespace fastbotx
 

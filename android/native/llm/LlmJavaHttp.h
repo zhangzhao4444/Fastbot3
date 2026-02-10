@@ -31,6 +31,18 @@ bool llmHttpPostViaJavaWithPrompt(const char *url,
                                   int maxTokens,
                                   std::string *outResponse);
 
+/**
+ * Same as above but prompt is assembled in Java from payload JSON (reduces JNI string copy).
+ * promptType is one of: "executor", "planner", "step_summary".
+ */
+bool llmHttpPostViaJavaWithPayload(const char *url,
+                                   const char *apiKey,
+                                   const char *promptType,
+                                   const char *payloadJson,
+                                   const char *model,
+                                   int maxTokens,
+                                   std::string *outResponse);
+
 } // namespace fastbotx
 
 #endif // FASTBOTX_LLM_JAVA_HTTP_H

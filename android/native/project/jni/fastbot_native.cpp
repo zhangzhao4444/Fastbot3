@@ -23,10 +23,11 @@ extern "C" {
 
 static fastbotx::ModelPtr _fastbot_model = nullptr;
 
-// LLM HTTP via Java (when libcurl not available): image stays in Java, native passes prompt only
+// LLM HTTP via Java (when libcurl not available): image stays in Java, native passes prompt or payload
 static JavaVM *g_jvm = nullptr;
 static jobject g_llmHttpRunner = nullptr;
 static jmethodID g_llmHttpDoPostFromPrompt = nullptr;
+static jmethodID g_llmHttpDoPostFromPayload = nullptr;
 
 // Fuzzer: RNG and one fuzz action JSON (performance §3.3)
 static std::mt19937 &fuzzRng() {
@@ -366,8 +367,10 @@ JNIEXPORT void JNICALL Java_com_bytedance_fastbot_AiClient_nativeRegisterLlmHttp
     jclass c = env->GetObjectClass(thiz);
     g_llmHttpDoPostFromPrompt = env->GetMethodID(c, "doLlmHttpPostFromPrompt",
         "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)Ljava/lang/String;");
-    if (g_llmHttpDoPostFromPrompt == nullptr) {
-        BLOGE("LLM Java HTTP: GetMethodID(doLlmHttpPostFromPrompt) failed; LLM HTTP will fail until runner is registered");
+    g_llmHttpDoPostFromPayload = env->GetMethodID(c, "doLlmHttpPostFromPayload",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)Ljava/lang/String;");
+    if (g_llmHttpDoPostFromPrompt == nullptr || g_llmHttpDoPostFromPayload == nullptr) {
+        BLOGE("LLM Java HTTP: GetMethodID failed; LLM HTTP will fail until runner is registered");
         env->DeleteGlobalRef(g_llmHttpRunner);
         g_llmHttpRunner = nullptr;
     }
@@ -416,6 +419,58 @@ bool llmHttpPostViaJavaWithPrompt(const char *url,
     if (!jResult) {
         if (attach == JNI_EDETACHED) g_jvm->DetachCurrentThread();
         BLOGE("LLM Java HTTP: Java returned null (HTTP non-2xx or network/API error)");
+        return false;
+    }
+    const char *utf = env->GetStringUTFChars(jResult, nullptr);
+    if (utf) {
+        *outResponse = utf;
+        env->ReleaseStringUTFChars(jResult, utf);
+    }
+    env->DeleteLocalRef(jResult);
+    if (attach == JNI_EDETACHED) g_jvm->DetachCurrentThread();
+    return true;
+}
+
+bool llmHttpPostViaJavaWithPayload(const char *url,
+                                    const char *apiKey,
+                                    const char *promptType,
+                                    const char *payloadJson,
+                                    const char *model,
+                                    int maxTokens,
+                                    std::string *outResponse) {
+    if (!g_jvm || !g_llmHttpRunner || !g_llmHttpDoPostFromPayload || !outResponse) {
+        BLOGE("LLM Java HTTP: runner not registered");
+        return false;
+    }
+    JNIEnv *env = nullptr;
+    jint attach = g_jvm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
+    if (attach == JNI_EDETACHED)
+        g_jvm->AttachCurrentThread(&env, nullptr);
+    if (!env) {
+        BLOGE("LLM Java HTTP: GetEnv/AttachCurrentThread failed");
+        return false;
+    }
+    jstring jUrl = env->NewStringUTF(url ? url : "");
+    jstring jKey = env->NewStringUTF(apiKey ? apiKey : "");
+    jstring jPromptType = env->NewStringUTF(promptType ? promptType : "");
+    jstring jPayload = env->NewStringUTF(payloadJson ? payloadJson : "{}");
+    jstring jModel = env->NewStringUTF(model ? model : "");
+    jstring jResult = (jstring) env->CallObjectMethod(g_llmHttpRunner, g_llmHttpDoPostFromPayload,
+                                                     jUrl, jKey, jPromptType, jPayload, jModel, static_cast<jint>(maxTokens));
+    env->DeleteLocalRef(jUrl);
+    env->DeleteLocalRef(jKey);
+    env->DeleteLocalRef(jPromptType);
+    env->DeleteLocalRef(jPayload);
+    env->DeleteLocalRef(jModel);
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        if (attach == JNI_EDETACHED) g_jvm->DetachCurrentThread();
+        BLOGE("LLM Java HTTP: Java exception in doLlmHttpPostFromPayload");
+        return false;
+    }
+    if (!jResult) {
+        if (attach == JNI_EDETACHED) g_jvm->DetachCurrentThread();
+        BLOGE("LLM Java HTTP: Java returned null");
         return false;
     }
     const char *utf = env->GetStringUTFChars(jResult, nullptr);

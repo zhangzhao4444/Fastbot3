@@ -22,7 +22,12 @@ import java.nio.charset.StandardCharsets;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.ByteBuffer;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -224,6 +229,188 @@ public class AiClient {
             Logger.errorPrintln("doLlmHttpPostFromPrompt: doLlmHttpPostBody returned null (check HTTP code / network above)");
         }
         return result;
+    }
+
+    /**
+     * LLM HTTP POST with prompt assembled in Java from payload JSON (reduces JNI string copy).
+     * promptType: "executor" | "planner" | "step_summary".
+     * Called from native via JNI when using predictWithPayload.
+     */
+    public String doLlmHttpPostFromPayload(String url, String apiKey, String promptType, String payloadJson, String model, int maxTokens) {
+        if (url == null || url.isEmpty()) {
+            Logger.errorPrintln("doLlmHttpPostFromPayload: url null or empty");
+            return null;
+        }
+        String prompt = buildPromptFromPayload(promptType, payloadJson);
+        if (prompt == null) {
+            Logger.errorPrintln("doLlmHttpPostFromPayload: buildPromptFromPayload returned null");
+            return null;
+        }
+        return doLlmHttpPostFromPrompt(url, apiKey, prompt, model, maxTokens);
+    }
+
+    /**
+     * Build full prompt string from payload JSON (matches C++ AutodevAgent prompt content).
+     */
+    private static String buildPromptFromPayload(String promptType, String payloadJson) {
+        try {
+            JSONObject payload = new JSONObject(payloadJson != null && !payloadJson.isEmpty() ? payloadJson : "{}");
+            if ("executor".equals(promptType)) {
+                return buildExecutorPrompt(payload);
+            }
+            if ("planner".equals(promptType)) {
+                return buildPlannerPrompt(payload);
+            }
+            if ("step_summary".equals(promptType)) {
+                return buildStepSummaryPrompt(payload);
+            }
+            Logger.errorPrintln("buildPromptFromPayload: unknown promptType=" + promptType);
+            return null;
+        } catch (JSONException e) {
+            Logger.errorPrintln("buildPromptFromPayload: JSON parse failed " + e.getMessage());
+            return null;
+        }
+    }
+
+    private static String buildExecutorPrompt(JSONObject j) throws JSONException {
+        StringBuilder sb = new StringBuilder();
+        if (j.optBoolean("nav_hint", false)) {
+            sb.append("Navigation hint: this screen was already seen recently; avoid repeating the same scroll or try a different strategy.\n\n");
+        }
+        JSONObject plannerStep = j.optJSONObject("planner_step");
+        if (plannerStep != null && !plannerStep.optString("tool", "").isEmpty()) {
+            String tool = plannerStep.optString("tool", "");
+            String intent = plannerStep.optString("intent", "");
+            String text = plannerStep.optString("text", "");
+            sb.append("=== EXECUTOR SUB-TASK (complete this fully) ===\n");
+            if ("tap".equals(tool)) {
+                sb.append("Locate and tap on the \"").append(intent).append("\" on the current screen. Choose the correct element index and perform CLICK.\n");
+            } else if ("scroll".equals(tool)) {
+                sb.append("Perform a scroll to \"").append(intent).append("\". Choose direction (UP/DOWN/LEFT/RIGHT) and optional target index. Use SCROLL action.\n");
+            } else if ("type_text".equals(tool)) {
+                sb.append("Locate the \"").append(intent).append("\" input field, then type the following text exactly: \"").append(text).append("\". Use INPUT with the chosen index and text.\n");
+            } else if ("go_back".equals(tool)) {
+                sb.append("Navigate back to the previous screen. Use BACK action.\n");
+            } else if ("answer".equals(tool)) {
+                sb.append("Provide the answer (no UI action): \"").append(text).append("\". Use task_status COMPLETED and optionally STATUS action.\n");
+            } else {
+                sb.append("Planner step: ").append(tool);
+                if (!intent.isEmpty()) sb.append(" intent=\"").append(intent).append("\"");
+                if (!text.isEmpty()) sb.append(" text=\"").append(text).append("\"");
+                sb.append(". Execute this single step (choose the right element index / action).\n");
+            }
+            sb.append("Your action will be executed; the result is summarized for the Planner.\n\n");
+        }
+        sb.append("You are an Android GUI testing agent. ");
+        sb.append("Given the current screen description and a task, you must output the next GUI action ");
+        sb.append("in JSON format.\n\n");
+        String taskDesc = j.optString("task_description", "");
+        if (!taskDesc.isEmpty()) {
+            sb.append("Task:\n").append(taskDesc).append("\n\n");
+        }
+        sb.append("Current activity: ").append(j.optString("activity", "")).append("\n\n");
+        String screenFingerprint = j.optString("screen_fingerprint", "");
+        if (!screenFingerprint.isEmpty()) {
+            sb.append("Visible interactive elements (index, class, resource-id, text, content-desc):\n");
+            sb.append(screenFingerprint).append("\n");
+        }
+        JSONArray historySummaries = j.optJSONArray("history_summaries");
+        if (historySummaries != null && historySummaries.length() > 0) {
+            sb.append("Recent steps summary:\n");
+            for (int i = 0; i < historySummaries.length(); i++) {
+                sb.append("- ").append(historySummaries.optString(i, "")).append("\n");
+            }
+            sb.append("\n");
+        }
+        JSONArray todos = j.optJSONArray("todos");
+        if (todos != null && todos.length() > 0) {
+            sb.append("Current todos:\n");
+            for (int i = 0; i < todos.length(); i++) {
+                JSONObject t = todos.optJSONObject(i);
+                if (t != null) {
+                    sb.append("  ").append(i + 1).append(". [").append(t.optString("status", "")).append("] ").append(t.optString("content", ""));
+                    String id = t.optString("id", "");
+                    if (!id.isEmpty()) sb.append(" (id=").append(id).append(")");
+                    sb.append("\n");
+                }
+            }
+            sb.append("You may update todos by including \"todo_updates\" in your JSON: [{\"id\":\"...\",\"content\":\"...\",\"status\":\"pending|in_progress|done\"}].\n\n");
+        }
+        JSONObject scratchpad = j.optJSONObject("scratchpad");
+        if (scratchpad != null && scratchpad.length() > 0) {
+            sb.append("Scratchpad (stored items, key -> title / content):\n");
+            Iterator<String> keys = scratchpad.keys();
+            while (keys.hasNext()) {
+                String key = keys.next();
+                JSONObject item = scratchpad.optJSONObject(key);
+                if (item != null) {
+                    sb.append("  ").append(key).append(" | title: ").append(item.optString("title", "")).append("\n  content: ").append(item.optString("text", "")).append("\n");
+                }
+            }
+            sb.append("You may create/update items with \"scratchpad_updates\" in your JSON: [{\"key\":\"...\",\"title\":\"...\",\"text\":\"...\"}].\n\n");
+        }
+        sb.append("You must respond with a single valid JSON object. No extra text.\n");
+        sb.append("task_status must be exactly one of: ONGOING, COMPLETED, ABORT.\n");
+        sb.append("You may use either (1) action object or (2) tool_calls. Tool names: click(index), input_text(index,text), scroll(direction[,index]), back, wait([duration_ms]), status.\n");
+        sb.append("action_type must be exactly one of: CLICK, INPUT, SCROLL, BACK, WAIT, STATUS.\n");
+        sb.append("Example (action format):\n");
+        sb.append("{\n  \"task_status\": \"ONGOING\",\n  \"action\": {\n    \"action_type\": \"CLICK\",\n    \"target\": { \"by\": \"INDEX\", \"value\": \"0\" },\n    \"text\": \"\",\n    \"reason\": \"short explanation\"\n  }\n}\n");
+        sb.append("Example (tool_calls format): {\"task_status\":\"ONGOING\",\"tool_calls\":[{\"name\":\"click\",\"arguments\":{\"index\":0,\"reason\":\"...\"}}]}\n");
+        return sb.toString();
+    }
+
+    private static String buildPlannerPrompt(JSONObject j) throws JSONException {
+        StringBuilder sb = new StringBuilder();
+        sb.append("You are an expert PLANNER for Android GUI automation. You output ONE semantic step per response. ");
+        sb.append("You NEVER output coordinates or element indices; the Executor will choose the concrete action.\n\n");
+        sb.append("**CRITICAL**: Give COMPLETE, DETAILED subgoals. The Executor has NO MEMORY - every instruction must be self-contained.\n\n");
+        sb.append("Task: ").append(j.optString("task_description", "")).append("\n\n");
+        JSONArray todos = j.optJSONArray("todos");
+        if (todos != null && todos.length() > 0) {
+            sb.append("Current todos:\n");
+            for (int i = 0; i < todos.length(); i++) {
+                JSONObject t = todos.optJSONObject(i);
+                if (t != null) {
+                    sb.append("  ").append(i + 1).append(". [").append(t.optString("status", "")).append("] ").append(t.optString("content", "")).append("\n");
+                }
+            }
+            sb.append("You may include \"todo_updates\" in your JSON to replace/update the todo list: [{\"id\":\"...\",\"content\":\"...\",\"status\":\"pending|in_progress|completed\"}].\n\n");
+        }
+        JSONArray scratchpadKeys = j.optJSONArray("scratchpad_keys");
+        if (scratchpadKeys != null && scratchpadKeys.length() > 0) {
+            sb.append("Scratchpad keys (stored data): ");
+            for (int i = 0; i < scratchpadKeys.length(); i++) {
+                if (i > 0) sb.append(" ");
+                sb.append(scratchpadKeys.optString(i, ""));
+            }
+            sb.append("\n\n");
+        }
+        JSONArray historySummaries = j.optJSONArray("history_summaries");
+        if (historySummaries != null && historySummaries.length() > 0) {
+            sb.append("Steps done so far (Executor reports):\n");
+            for (int i = 0; i < historySummaries.length(); i++) {
+                sb.append("- ").append(historySummaries.optString(i, "")).append("\n");
+            }
+            sb.append("\n");
+        }
+        sb.append("Tools (semantic only): tap(intent), scroll(intent), type_text(text,intent), answer(text), finish_task(), go_back().\n");
+        sb.append("Respond with ONE JSON object: {\"tool\": \"tap\"|\"scroll\"|\"type_text\"|\"answer\"|\"finish_task\"|\"go_back\", ");
+        sb.append("\"intent\": \"e.g. login button or scroll down to find X\", \"text\": \"for type_text/answer only\"}. ");
+        sb.append("Optional: \"todo_updates\": [...] to update the todo list. Use finish_task when the task is complete.");
+        return sb.toString();
+    }
+
+    private static String buildStepSummaryPrompt(JSONObject j) throws JSONException {
+        StringBuilder sb = new StringBuilder();
+        sb.append("You are summarizing a single GUI automation step. ");
+        sb.append("Step index: ").append(j.optInt("step_index", 0)).append(". ");
+        sb.append("Action: ").append(j.optString("action_type", "")).append(" target(").append(j.optString("target_by", "")).append(")=\"").append(j.optString("target_value", "")).append("\". ");
+        String reason = j.optString("action_reason", "");
+        if (!reason.isEmpty()) {
+            sb.append("Reason: ").append(reason).append(". ");
+        }
+        sb.append("Reply with exactly one short sentence summarizing what was done, in the same language as the reason. No JSON.");
+        return sb.toString();
     }
 
     private static void saveLlmRawToFile(String filename, String content) {

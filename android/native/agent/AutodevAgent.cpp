@@ -303,6 +303,121 @@ namespace fastbotx {
         return oss.str();
     }
 
+    std::string AutodevAgent::buildExecutorPayload(const ElementPtr &rootXml,
+                                                   const std::string &activity,
+                                                   std::string *outCurrentScreenHash,
+                                                   const std::string *precomputedFingerprint) const {
+        using nlohmann::json;
+        json j;
+        std::string screenFingerprint;
+        if (precomputedFingerprint && !precomputedFingerprint->empty()) {
+            screenFingerprint = *precomputedFingerprint;
+        } else if (rootXml) {
+            screenFingerprint = getScreenFingerprint(rootXml);
+        }
+        bool navHint = false;
+        if (_session && !screenFingerprint.empty()) {
+            std::string hashStr = std::to_string(std::hash<std::string>{}(screenFingerprint));
+            if (outCurrentScreenHash) *outCurrentScreenHash = hashStr;
+            const auto &seen = _session->recentScreenHashes;
+            navHint = (std::find(seen.begin(), seen.end(), hashStr) != seen.end());
+        }
+        j["nav_hint"] = navHint;
+        j["activity"] = activity;
+        j["screen_fingerprint"] = screenFingerprint;
+        if (_session && _session->taskConfig) {
+            j["task_description"] = _session->taskConfig->taskDescription;
+        } else {
+            j["task_description"] = "";
+        }
+        if (_session && !_session->historySummaries.empty()) {
+            j["history_summaries"] = _session->historySummaries;
+        } else {
+            j["history_summaries"] = json::array();
+        }
+        if (_session && !_session->todos.empty()) {
+            json todosArr = json::array();
+            for (const auto &t : _session->todos) {
+                json o;
+                o["id"] = t.id;
+                o["content"] = t.content;
+                o["status"] = t.status;
+                todosArr.push_back(o);
+            }
+            j["todos"] = todosArr;
+        } else {
+            j["todos"] = json::array();
+        }
+        if (_session && !_session->scratchpad.empty()) {
+            json scratch = json::object();
+            for (const auto &kv : _session->scratchpad) {
+                json item;
+                item["title"] = kv.second.title;
+                item["text"] = kv.second.text;
+                scratch[kv.first] = item;
+            }
+            j["scratchpad"] = scratch;
+        } else {
+            j["scratchpad"] = json::object();
+        }
+        if (_session && _session->taskConfig && _session->taskConfig->usePlannerLayer &&
+            !_session->currentPlannerStep.tool.empty()) {
+            const auto &p = _session->currentPlannerStep;
+            json ps;
+            ps["tool"] = p.tool;
+            ps["intent"] = p.intent;
+            ps["text"] = p.text;
+            j["planner_step"] = ps;
+        } else {
+            j["planner_step"] = nullptr;
+        }
+        return j.dump();
+    }
+
+    std::string AutodevAgent::buildPlannerPayload() const {
+        using nlohmann::json;
+        if (!_session || !_session->taskConfig) return "{}";
+        json j;
+        j["task_description"] = _session->taskConfig->taskDescription;
+        if (!_session->todos.empty()) {
+            json todosArr = json::array();
+            for (const auto &t : _session->todos) {
+                json o;
+                o["id"] = t.id;
+                o["content"] = t.content;
+                o["status"] = t.status;
+                todosArr.push_back(o);
+            }
+            j["todos"] = todosArr;
+        } else {
+            j["todos"] = json::array();
+        }
+        if (!_session->scratchpad.empty()) {
+            json keys = json::array();
+            for (const auto &kv : _session->scratchpad) keys.push_back(kv.first);
+            j["scratchpad_keys"] = keys;
+        } else {
+            j["scratchpad_keys"] = json::array();
+        }
+        if (!_session->historySummaries.empty()) {
+            j["history_summaries"] = _session->historySummaries;
+        } else {
+            j["history_summaries"] = json::array();
+        }
+        return j.dump();
+    }
+
+    std::string AutodevAgent::buildStepSummaryPayload(const StepHistoryEntry &entry) const {
+        using nlohmann::json;
+        json j;
+        j["step_index"] = entry.stepIndex;
+        j["action_type"] = entry.actionType;
+        j["target_by"] = entry.targetBy;
+        j["target_value"] = entry.targetValue;
+        j["action_reason"] = entry.actionReason;
+        return j.dump();
+    }
+
     namespace {
         /** Try to get a single JSON object string from content that may be wrapped in markdown/code fence. */
         std::string extractJsonObjectString(const std::string &s) {
@@ -806,20 +921,11 @@ namespace fastbotx {
         if (!_session->taskConfig->useLlmForStepSummary) {
             return {};
         }
-        std::ostringstream prompt;
-        prompt << "You are summarizing a single GUI automation step. "
-               << "Step index: " << entry.stepIndex
-               << ". Action: " << entry.actionType
-               << " target(" << entry.targetBy << ")=\"" << entry.targetValue << "\". ";
-        if (!entry.actionReason.empty()) {
-            prompt << "Reason: " << entry.actionReason << ". ";
-        }
-        prompt << "Reply with exactly one short sentence summarizing what was done, in the same language as the reason. No JSON.";
-        std::string promptStr = prompt.str();
-        BDLOG("AutodevAgent: [StepSummary] raw prompt:\n%s", formatPromptForLog(promptStr, {}).c_str());
+        std::string payload = buildStepSummaryPayload(entry);
+        BDLOG("AutodevAgent: [StepSummary] payload len=%zu", payload.size());
         std::string response;
         std::vector<ImageData> noImages;
-        if (!_llmClient->predict(promptStr, noImages, response)) {
+        if (!_llmClient->predictWithPayload("step_summary", payload, noImages, response)) {
             BDLOGE("AutodevAgent: LLM step summary request failed");
             return {};
         }
@@ -952,15 +1058,15 @@ namespace fastbotx {
 
         // 2b) v3 Planner: if enabled and no current sub-task, ask Planner for one semantic step.
         if (_session->taskConfig->usePlannerLayer && _session->currentPlannerStep.tool.empty()) {
-            std::string plannerPrompt = buildPlannerPrompt();
-            if (plannerPrompt.empty()) {
-                BDLOGE("AutodevAgent: buildPlannerPrompt failed");
+            std::string plannerPayload = buildPlannerPayload();
+            if (plannerPayload.empty()) {
+                BDLOGE("AutodevAgent: buildPlannerPayload failed");
                 return nullptr;
             }
-            BDLOG("AutodevAgent: [Planner] raw prompt:\n%s", formatPromptForLog(plannerPrompt, {}).c_str());
+            BDLOG("AutodevAgent: [Planner] payload len=%zu", plannerPayload.size());
             std::string plannerResponse;
             std::vector<ImageData> noImages;
-            if (!_llmClient->predict(plannerPrompt, noImages, plannerResponse)) {
+            if (!_llmClient->predictWithPayload("planner", plannerPayload, noImages, plannerResponse)) {
                 _session->consecutiveFailures += 1;
                 BDLOGE("AutodevAgent: Planner LLM predict failed (consecutiveFailures=%d); check HttpLlmClient/LLM Java HTTP logs for cause (disabled? runner not registered? Java null? response parse?)", _session->consecutiveFailures);
                 if (isSessionExpired()) {
@@ -1005,11 +1111,10 @@ namespace fastbotx {
             BDLOG("AutodevAgent: Planner step: %s intent=%s text=%.40s", step.tool.c_str(), step.intent.c_str(), step.text.c_str());
         }
 
-        // 3) Build prompt and call LLM (Executor: with optional Planner sub-task in prompt).
-        // Single tree walk: fingerprint + element list for INDEX lookup (avoid second DFS in convertToAction).
+        // 3) Build payload and call LLM (Executor); Java assembles prompt from payload to reduce JNI copy.
         InteractiveElementsResult interactive = getScreenFingerprintWithElements(rootXml);
         std::string currentScreenHash;
-        std::string prompt = buildPrompt(rootXml, activity, &currentScreenHash, &interactive.fingerprint);
+        std::string executorPayload = buildExecutorPayload(rootXml, activity, &currentScreenHash, &interactive.fingerprint);
         if (_session && !currentScreenHash.empty()) {
             _session->recentScreenHashes.push_back(currentScreenHash);
             if (_session->recentScreenHashes.size() > kMaxScreenHashes) {
@@ -1017,10 +1122,10 @@ namespace fastbotx {
             }
         }
         std::string rawResponse;
-        std::vector<ImageData> images;  // Empty on Java path; image obtained in Java on demand when predict() triggers HTTP.
+        std::vector<ImageData> images;  // Empty on Java path; image obtained in Java on demand.
 
-        BDLOG("AutodevAgent: [Executor] raw prompt (image truncated):\n%s", formatPromptForLog(prompt, images).c_str());
-        bool ok = _llmClient->predict(prompt, images, rawResponse);
+        BDLOG("AutodevAgent: [Executor] payload len=%zu", executorPayload.size());
+        bool ok = _llmClient->predictWithPayload("executor", executorPayload, images, rawResponse);
         if (!ok) {
             _session->consecutiveFailures += 1;
             if (_session->taskConfig->usePlannerLayer && !_session->currentPlannerStep.tool.empty()) {

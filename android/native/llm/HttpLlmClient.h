@@ -35,6 +35,11 @@ namespace fastbotx {
                      const std::vector<ImageData> &images,
                      std::string &outResponse) override;
 
+        bool predictWithPayload(const std::string &promptType,
+                                const std::string &payloadJson,
+                                const std::vector<ImageData> &images,
+                                std::string &outResponse) override;
+
     private:
         LlmRuntimeConfig _config;
 
