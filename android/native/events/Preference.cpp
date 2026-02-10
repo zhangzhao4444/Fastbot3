@@ -1267,7 +1267,7 @@ namespace fastbotx {
             }
             
             // Human-friendly config log: max.config parsed: key=value
-            BDLOG("max.config parsed: %s=%s", key.c_str(), value.c_str());
+            //BDLOG("max.config parsed: %s=%s", key.c_str(), value.c_str());
             
             // Performance: Use string comparison with early exit
             // Check most common keys first (if we know the distribution)
@@ -1869,7 +1869,7 @@ namespace fastbotx {
                 _llmTasks.push_back(cfg);
 
                 // Pretty, human-friendly summary for each LLM task
-                BLOG("\n    LLM task loaded:\n  activity=%s\n  checkpoint_xpath=%s\n  task=%s",
+                BLOG("\n  LLM task loaded:\n  activity=%s\n  checkpoint_xpath=%s\n  task=%s",
                      cfg->activity.c_str(),
                      cfg->checkpointXpathString.c_str(),
                      cfg->taskDescription.c_str());
