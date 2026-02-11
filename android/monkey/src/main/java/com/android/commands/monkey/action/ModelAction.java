@@ -24,12 +24,7 @@ import android.graphics.Rect;
 
 import com.android.commands.monkey.fastbot.client.ActionType;
 
-import org.json.JSONException;
-import org.json.JSONObject;
-
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * @author Zhao Zhang
@@ -40,11 +35,6 @@ import java.util.regex.Pattern;
  */
 public class ModelAction extends Action {
 
-    /**
-     *
-     */
-    private static final long serialVersionUID = 1L;
-    static Pattern BOUNDS_RECT = Pattern.compile("\\[([0-9]+),([0-9]+)]\\[([0-9]+),([0-9]+)]");
     public final String packageName;
     public final String className;
     public final Rect boundingBox;
@@ -83,74 +73,7 @@ public class ModelAction extends Action {
         this.boundingBox = rect;
     }
 
-    public static Action fromJSON(JSONObject jAction) throws JSONException {
-        ActionType actionType = ActionType.valueOf(jAction.getString("actionType"));
-        String packageName = jAction.getString("packageName");
-        String className = jAction.getString("className");
-        Rect bounds = parseRect(jAction.getString("bounds"));
-        Action action = new ModelAction(actionType, packageName, className, bounds);
-        int throttle = jAction.getInt("throttle");
-        action.setThrottle(throttle);
-        return action;
-    }
-
-    static Rect parseRect(String bounds) {
-        Matcher m = BOUNDS_RECT.matcher(bounds);
-        if (m.matches()) {
-            return new Rect(
-                Integer.parseInt(m.group(1)),
-                Integer.parseInt(m.group(2)),
-                Integer.parseInt(m.group(3)),
-                Integer.parseInt(m.group(4))
-            );
-        }
-        return null;
-    }
-
     @Override
-    public int hashCode() {
-        final int prime = 31;
-        int result = super.hashCode();
-        result = prime * result + ((className == null) ? 0 : className.hashCode());
-        result = prime * result + ((packageName == null) ? 0 : packageName.hashCode());
-        result = prime * result + ((boundingBox == null) ? 0 : boundingBox.hashCode());
-        return result;
-    }
-
-    @Override
-    public boolean equals(Object obj) {
-        if (this == obj)
-            return true;
-        if (!super.equals(obj))
-            return false;
-        if (getClass() != obj.getClass())
-            return false;
-        ModelAction other = (ModelAction) obj;
-        if (className == null) {
-            if (other.className != null)
-                return false;
-        } else if (!className.equals(other.className))
-            return false;
-        if (packageName == null) {
-            if (other.packageName != null)
-                return false;
-        } else if (!packageName.equals(other.packageName))
-            return false;
-
-        if (boundingBox == null) {
-            return other.boundingBox == null;
-        } else
-            return boundingBox.equals(other.boundingBox);
-
-    }
-
-    public JSONObject toJSONObject() throws JSONException {
-        JSONObject jAction = super.toJSONObject();
-        jAction.put("packageName", packageName);
-        jAction.put("className", className);
-        jAction.put("bounds", "[" + boundingBox.left + "," + boundingBox.top + "][" + boundingBox.right + "," + boundingBox.right + "]");
-        return jAction;
-    }
     public String toString() {
         return super.toString() + "@" + this.className;
     }
