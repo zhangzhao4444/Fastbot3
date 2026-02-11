@@ -225,6 +225,7 @@ public class AiClient {
         Logger.println("// [LLM timing] (ms) buildPrompt+body: " + buildMs + ", request: " + requestMs + ", total: " + totalMs);
         if (result != null) {
             saveLlmRawToFile(ts + "-resp.json", result);
+            logLlmResponseMessage(result);
         } else {
             Logger.errorPrintln("doLlmHttpPostFromPrompt: doLlmHttpPostBody returned null (check HTTP code / network above)");
         }
@@ -466,6 +467,99 @@ public class AiClient {
         } catch (Exception e) {
             Logger.errorPrintln("buildLlmRequestBody failed: " + e.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * Log key info from LLM chat response.
+     * For executor responses, prefer printing the action.reason.
+     * For planner responses, prefer intent/text.
+     * Falls back to logging the inner content string if schema is unknown.
+     */
+    private void logLlmResponseMessage(String response) {
+        if (response == null || response.isEmpty()) {
+            return;
+        }
+        try {
+            JSONObject root = new JSONObject(response);
+            JSONArray choices = root.optJSONArray("choices");
+            if (choices == null || choices.length() == 0) return;
+            JSONObject choice0 = choices.optJSONObject(0);
+            if (choice0 == null) return;
+            JSONObject message = choice0.optJSONObject("message");
+            String content = null;
+            if (message != null) {
+                content = message.optString("content", null);
+            }
+            if (content == null || content.isEmpty()) {
+                // Some providers may put text directly under "message" or "content"
+                content = choice0.optString("content",
+                        choice0.optString("message", ""));
+            }
+            if (content == null || content.isEmpty()) return;
+
+            // Try to parse inner content as JSON to extract task_status / reason / planner fields
+            try {
+                JSONObject inner = new JSONObject(content);
+
+                // Task-level status, if provided by LLM: ONGOING / COMPLETED / ABORT
+                String taskStatus = inner.optString("task_status", "");
+                if (!taskStatus.isEmpty()) {
+                    Logger.println("// [LLM task_status] " + taskStatus);
+                }
+
+                // Executor style: {"task_status": "...", "action": {..., "reason": "..."}}
+                JSONObject action = inner.optJSONObject("action");
+                if (action != null) {
+                    String reason = action.optString("reason", "");
+                    if (!reason.isEmpty()) {
+                        Logger.println("// [LLM executor reason] " + reason);
+                        return;
+                    }
+                }
+
+                // Tool-calls style: {"tool_calls":[{"arguments":{"reason":"..."}}], ...}
+                JSONArray toolCalls = inner.optJSONArray("tool_calls");
+                if (toolCalls != null && toolCalls.length() > 0) {
+                    JSONObject tc0 = toolCalls.optJSONObject(0);
+                    if (tc0 != null) {
+                        JSONObject args = tc0.optJSONObject("arguments");
+                        if (args != null) {
+                            String reason = args.optString("reason", "");
+                            if (!reason.isEmpty()) {
+                                Logger.println("// [LLM executor reason] " + reason);
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // Planner style: {"tool":"tap|scroll|type_text|answer|finish_task|go_back", "intent":"...", "text":"..."}
+                String tool = inner.optString("tool", "");
+                if (!tool.isEmpty()) {
+                    String intent = inner.optString("intent", "");
+                    String text = inner.optString("text", "");
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("// [LLM planner] tool=").append(tool);
+                    if (!intent.isEmpty()) {
+                        sb.append(", intent=").append(intent);
+                    }
+                    if (!text.isEmpty()) {
+                        sb.append(", text=").append(text);
+                    }
+                    Logger.println(sb.toString());
+                    return;
+                }
+
+                // Fallback: schema known是 JSON 但没有 reason/intent，就少量打印一行，避免整段 JSON 噪音
+                Logger.println("// [LLM content JSON] " + inner.toString());
+            } catch (JSONException ignore) {
+                // inner content 不是 JSON，就直接打一行文本，避免多行噪音
+                Logger.println("// [LLM content text] " + content);
+            }
+        } catch (JSONException e) {
+            // Logger.errorPrintln("logLlmResponseMessage: JSON parse failed " + e.getMessage());
+            // Logger.println("// [LLM raw response]\n" + response);
         }
     }
 
