@@ -20,8 +20,8 @@ import static com.android.commands.monkey.utils.Config.historyRestartRate;
 import static com.android.commands.monkey.utils.Config.homeAfterNSecondsofsleep;
 import static com.android.commands.monkey.utils.Config.homingRate;
 import static com.android.commands.monkey.utils.Config.imageWriterCount;
-import static com.android.commands.monkey.utils.Config.refectchInfoCount;
-import static com.android.commands.monkey.utils.Config.refectchInfoWaitingInterval;
+import static com.android.commands.monkey.utils.Config.refetchInfoCount;
+import static com.android.commands.monkey.utils.Config.refetchInfoWaitingInterval;
 import static com.android.commands.monkey.utils.Config.saveGUITreeToXmlEveryStep;
 import static com.android.commands.monkey.utils.Config.schemaTraversalMode;
 import static com.android.commands.monkey.utils.Config.scrollAfterNSecondsofsleep;
@@ -156,7 +156,7 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
         super(random, MainApps, throttle, randomizeThrottle, outputDirectory);
         AiClient.setLlmDumpDirectory(getOutputDir());
         mImageWriters = new ImageWriterQueue[imageWriterCount];
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < imageWriterCount; i++) {
             mImageWriters[i] = new ImageWriterQueue();
             Thread imageThread = new Thread(mImageWriters[i]);
             imageThread.start();
@@ -366,31 +366,10 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
     }
 
     /**
-     * Same as getActionFromXmlBuffer but ensures LLM path can capture screenshot on demand (provider already set).
+     * Same as getActionFromXmlBuffer; LLM screenshot provider is already set before tree dump.
      */
     private Operate getActionFromXmlBufferWithScreenshot(String activity, String stringOfGuiTree) {
-        try {
-            int est = stringOfGuiTree.length() * 4;
-            ensureXmlBufferCapacity(est);
-            mXmlBuffer.clear();
-            CharsetEncoder enc = StandardCharsets.UTF_8.newEncoder();
-            CoderResult cr = enc.encode(CharBuffer.wrap(stringOfGuiTree), mXmlBuffer, true);
-            if (cr.isOverflow()) {
-                ensureXmlBufferCapacity(Math.max(mXmlBuffer.capacity() * 2, est * 2));
-                mXmlBuffer.clear();
-                enc.reset();
-                cr = enc.encode(CharBuffer.wrap(stringOfGuiTree), mXmlBuffer, true);
-            }
-            if (cr.isError()) {
-                throw new RuntimeException("UTF-8 encode error");
-            }
-            enc.flush(mXmlBuffer);
-            mXmlBuffer.flip();
-            return AiClient.getActionFromBuffer(activity, mXmlBuffer);
-        } catch (Exception e) {
-            if (mVerbose > 0) Logger.println("// getActionFromXmlBufferWithScreenshot error: " + e.getMessage());
-            return null;
-        }
+        return getActionFromXmlBuffer(activity, stringOfGuiTree);
     }
 
     void resetRotation() {
@@ -409,7 +388,7 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                 generateEvents();
             } catch (RuntimeException e) {
                 Logger.errorPrintln(e.getMessage());
-                e.printStackTrace();
+                if (mVerbose > 0) Logger.println("// getNextEvent: " + e.toString());
                 clearEvent();
                 return null;
             }
@@ -427,12 +406,8 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
     }
 
     /**
-     * Get the top Activity info from the Activity stack
-     * @return Component name of the top activity
-     */
-    /**
      * If the given component is not allowed to interact with, start a random app or
-     * generating a fuzzing action
+     * generating a fuzzing action.
      * @param cn Component that is not allowed to interact with
      */
     private void dealWithBlockedActivity(ComponentName cn) {
@@ -485,8 +460,9 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                 if (mVerbose > 0) Logger.println("// current activity is " + this.currentActivity);
                 timestamp++;
             }
-        }else
+        } else {
             dealWithBlockedActivity(cn);
+        }
     }
 
     public Bitmap captureBitmap() {
@@ -498,15 +474,13 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
      * @param info AccessibilityNodeInfo of the root of this current window
      * @return If this window belongs to system UI, return true
      */
-    public boolean dealWithSystemUI(AccessibilityNodeInfo info)
-    {
-        if(info == null || info.getPackageName() == null)
-        {
+    public boolean dealWithSystemUI(AccessibilityNodeInfo info) {
+        if (info == null || info.getPackageName() == null) {
             if (mVerbose > 0) Logger.println("get null accessibility node");
             return false;
         }
         String packageName = info.getPackageName().toString();
-        if(packageName.equals("com.android.systemui")) {
+        if (packageName.equals("com.android.systemui")) {
 
             if (mVerbose > 0) Logger.println("get notification window or other system windows");
             Rect bounds = AndroidDevice.getDisplayBounds(AndroidDevice.getFocusedDisplayId());
@@ -538,7 +512,7 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
         Operate operate = null;
         Action fuzzingAction = null;
         AccessibilityNodeInfo info = null;
-        int repeat = refectchInfoCount;
+        int repeat = refetchInfoCount;
         long tGetTop = 0, tGetRoot = 0, tGetRootSlow = 0, tDumpBinary = 0, tDumpXml = 0;
         boolean usedGetRootSlow = false;
 
@@ -552,13 +526,12 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
         while (repeat-- > 0) {
             info = getRootInActiveWindow();
             if (info == null || topActivityName == null) {
-                sleep(refectchInfoWaitingInterval);
+                sleep(refetchInfoWaitingInterval);
                 continue;
             }
 
             if (mVerbose > 0) Logger.println("// Event id: " + mEventId);
-            if(dealWithSystemUI(info))
-                return;
+            if (dealWithSystemUI(info)) return;
             break;
         }
         tGetRoot = System.currentTimeMillis() - t1;
@@ -572,8 +545,7 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
             usedGetRootSlow = true;
             if (info != null) {
                 if (mVerbose > 0) Logger.println("// Event id: " + mEventId);
-                if(dealWithSystemUI(info))
-                    return;
+                if (dealWithSystemUI(info)) return;
             }
         }
 
@@ -671,8 +643,8 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                         out.write(stringOfGuiTree);
                         out.flush();
                         out.close();
-                    } catch (java.io.FileNotFoundException e) {
                     } catch (java.io.IOException e) {
+                        if (mVerbose > 0) Logger.println("// saveGUITreeToXml: " + e.getMessage());
                     }
                 }
 
@@ -752,18 +724,6 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                         + " dumpBinary=" + tDumpBinary + " dumpXml=" + tDumpXml + " ms");
             }
         }
-    }
-
-    private File checkOutputDir() {
-        if (mCachedOutputDir != null && mCachedOutputDir.exists()) {
-            return mCachedOutputDir;
-        }
-        File dir = getOutputDir();
-        if (!dir.exists()) {
-            dir.mkdirs();
-        }
-        mCachedOutputDir = dir;
-        return dir;
     }
 
     private ImageWriterQueue nextImageWriter() {

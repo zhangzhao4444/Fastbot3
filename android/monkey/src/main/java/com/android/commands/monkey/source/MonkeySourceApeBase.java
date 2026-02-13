@@ -256,6 +256,21 @@ public abstract class MonkeySourceApeBase {
         return mOutputDirectory;
     }
 
+    /**
+     * Returns the output directory, creating it if necessary. Caches the result in mCachedOutputDir.
+     */
+    protected File checkOutputDir() {
+        if (mCachedOutputDir != null && mCachedOutputDir.exists()) {
+            return mCachedOutputDir;
+        }
+        File dir = getOutputDir();
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        mCachedOutputDir = dir;
+        return dir;
+    }
+
     public void clearPackage(String packageName) {
         String[] permissions = this.packagePermissions.get(packageName);
         if (permissions == null) {
@@ -498,7 +513,7 @@ public abstract class MonkeySourceApeBase {
         // Only send IME/text input when the action target is an editable widget (EditText).
         // Otherwise e.g. clicking a button ("获取短信验证码") would focus the button and
         // commitText() would go nowhere, so nothing appears in the UI.
-        if (inputText != null && !inputText.equals("") && action.isEditText()) {
+        if (inputText != null && !inputText.isEmpty() && action.isEditText()) {
             if (mVerbose > 0) Logger.println("Input text is " + inputText);
             if (action.isClearText()) {
                 generateClearEvent(action.getBoundingBox());
@@ -511,7 +526,7 @@ public abstract class MonkeySourceApeBase {
             }
             if (mVerbose > 0) Logger.println("MonkeyIMEEvent added " + inputText);
             addEvent(new MonkeyIMEEvent(inputText));
-        } else if (inputText != null && !inputText.equals("")) {
+        } else if (inputText != null && !inputText.isEmpty()) {
             if (mVerbose > 0) Logger.println("Skip IME input for non-edit widget: " + inputText);
         } else {
             if (lastInputTimestamp == timestamp) {
@@ -554,14 +569,14 @@ public abstract class MonkeySourceApeBase {
     protected void generateShellEvents() {
         if (execPreShell) {
             String command = ShellProvider.randomNext();
-            if (!"".equals(command) && (firstExecShell || execPreShellEveryStartup)) {
+            if (!command.isEmpty() && (firstExecShell || execPreShellEveryStartup)) {
                 if (mVerbose > 0) Logger.println("shell: " + command);
                 try {
                     AndroidDevice.executeCommandAndWaitFor(command.split(" "));
                     sleep(throttleForExecPreShell);
                     this.firstExecShell = false;
                 } catch (Exception e) {
-                    // ignore
+                    if (mVerbose > 0) Logger.println("// execPreShell failed: " + e.getMessage());
                 }
             }
         }
@@ -573,13 +588,13 @@ public abstract class MonkeySourceApeBase {
                 String schema = SchemaProvider.randomNext();
                 if (schemaTraversalMode) {
                     if (schemaStack.empty()) {
-                        ArrayList<String> strings = SchemaProvider.getStrings();
+                        List<String> strings = SchemaProvider.getStrings();
                         for (String s : strings) schemaStack.push(s);
                     }
                     if (schemaStack.empty()) return;
                     schema = schemaStack.pop();
                 }
-                if ("".equals(schema)) return;
+                if (schema.isEmpty()) return;
                 if (mVerbose > 0) Logger.println("fastbot exec schema: " + schema);
                 addEvent(new MonkeySchemaEvent(schema));
                 generateThrottleEvent(throttleForExecPreSchema);

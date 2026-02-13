@@ -14,8 +14,8 @@ import static com.android.commands.monkey.utils.Config.execSchemaEveryStartup;
 import static com.android.commands.monkey.utils.Config.historyRestartRate;
 import static com.android.commands.monkey.utils.Config.homeAfterNSecondsofsleep;
 import static com.android.commands.monkey.utils.Config.homingRate;
-import static com.android.commands.monkey.utils.Config.refectchInfoCount;
-import static com.android.commands.monkey.utils.Config.refectchInfoWaitingInterval;
+import static com.android.commands.monkey.utils.Config.refetchInfoCount;
+import static com.android.commands.monkey.utils.Config.refetchInfoWaitingInterval;
 import static com.android.commands.monkey.utils.Config.saveGUITreeToXmlEveryStep;
 import static com.android.commands.monkey.utils.Config.schemaTraversalMode;
 import static com.android.commands.monkey.utils.Config.scrollAfterNSecondsofsleep;
@@ -165,7 +165,7 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
             server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false);
             Logger.println("[MonkeySourceApeU2] proxyServer started. Listening tcp:8090");
         } catch (IOException e) {
-            Logger.println("[MonkeySourceApeU2] Error when trying to start the proxy server：" + e.getMessage());
+            Logger.println("[MonkeySourceApeU2] Error when trying to start the proxy server: " + e.getMessage());
             e.printStackTrace();
             throw new RuntimeException(e);
         }
@@ -383,8 +383,8 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
         }
         else {
             try {
-                Response hierachyResponse = u2Client.dumpHierarchy();
-                res = hierachyResponse.body().string();
+                Response hierarchyResponse = u2Client.dumpHierarchy();
+                res = hierarchyResponse.body().string();
             } catch (IOException e)
             {
                 throw new RuntimeException(e);
@@ -561,7 +561,7 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
         Action fuzzingAction = null;
         Element info = null;
 
-        int repeat = refectchInfoCount;
+        int repeat = refetchInfoCount;
 
         int retry = 2;
         while ("".equals(stringOfGuiTree) && retry-- > 0){
@@ -575,7 +575,7 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
             info = getRootInActiveWindow();
             // this two operations may not be the same
             if (info == null || topActivityName == null) {
-                sleep(refectchInfoWaitingInterval);
+                sleep(refetchInfoWaitingInterval);
                 continue;
             }
 
@@ -723,22 +723,6 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
         dumpHierarchy();
         sleep(1000);
         return getRootInActiveWindow();
-    }
-
-    /**
-     * Get the top Activity info from the Activity stack
-     * @return Component name of the top activity
-     */
-    protected File checkOutputDir() {
-        if (mCachedOutputDir != null && mCachedOutputDir.exists()) {
-            return mCachedOutputDir;
-        }
-        File dir = getOutputDir();
-        if (!dir.exists()) {
-            dir.mkdirs();
-        }
-        mCachedOutputDir = dir;
-        return dir;
     }
 
     /**

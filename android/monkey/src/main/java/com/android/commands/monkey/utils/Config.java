@@ -96,9 +96,10 @@ public class Config {
     public static final long swipeDuration = Config.getLong("max.swipeDuration", 200);
     /**
      * get retry settings for guitree (SECURITY_AND_OPTIMIZATION §7: fewer retries = less Binder/blocking)
+     * Config keys kept as max.refectchInfo* for backward compatibility.
      */
-    public static final long refectchInfoWaitingInterval = Config.getLong("max.refectchInfoWaitingInterval", 50);
-    public static final int refectchInfoCount = Config.getInteger("max.refectchInfoCount", 2);
+    public static final long refetchInfoWaitingInterval = Config.getLong("max.refectchInfoWaitingInterval", 50);
+    public static final int refetchInfoCount = Config.getInteger("max.refectchInfoCount", 2);
     /**
      * tree dump mode: "binary" (default, try binary then fallback to XML) or "xml" (always dump XML, skip binary).
      * Config: max.treeDumpMode = binary | xml
