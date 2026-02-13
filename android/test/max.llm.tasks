@@ -1,0 +1,13 @@
+[
+  {
+    "activity": "com.bytedance.account.sdk.login.ui.XAccountHostActivity",
+    "checkpoint_xpath": "//*[contains(@text,'登录') or contains(@content-desc,'登录')]",
+    "task_description": "On the login page: enter account ${LLM_LOGIN_ACCOUNT}, check the box to agree to the User Login Guide Agreement, then tap the button to get SMS verification code.",
+    "max_steps": 10,
+    "max_duration_ms": 30000,
+    "use_planner": true,
+    "use_llm_step_summary": true,
+    "max_times":1,
+    "reset_count":false
+  }
+]

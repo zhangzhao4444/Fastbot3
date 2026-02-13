@@ -14,8 +14,8 @@ import static com.android.commands.monkey.utils.Config.execSchemaEveryStartup;
 import static com.android.commands.monkey.utils.Config.historyRestartRate;
 import static com.android.commands.monkey.utils.Config.homeAfterNSecondsofsleep;
 import static com.android.commands.monkey.utils.Config.homingRate;
-import static com.android.commands.monkey.utils.Config.refectchInfoCount;
-import static com.android.commands.monkey.utils.Config.refectchInfoWaitingInterval;
+import static com.android.commands.monkey.utils.Config.refetchInfoCount;
+import static com.android.commands.monkey.utils.Config.refetchInfoWaitingInterval;
 import static com.android.commands.monkey.utils.Config.saveGUITreeToXmlEveryStep;
 import static com.android.commands.monkey.utils.Config.schemaTraversalMode;
 import static com.android.commands.monkey.utils.Config.scrollAfterNSecondsofsleep;
@@ -67,7 +67,6 @@ import com.android.commands.monkey.events.base.MonkeyRotationEvent;
 import com.android.commands.monkey.events.base.MonkeySchemaEvent;
 import com.android.commands.monkey.events.base.MonkeyThrottleEvent;
 import com.android.commands.monkey.events.base.MonkeyTouchEvent;
-import com.android.commands.monkey.events.base.MonkeyWaitEvent;
 import com.android.commands.monkey.events.base.mutation.MutationAirplaneEvent;
 import com.android.commands.monkey.events.base.mutation.MutationAlwaysFinishActivityEvent;
 import com.android.commands.monkey.events.base.mutation.MutationWifiEvent;
@@ -87,10 +86,8 @@ import com.android.commands.monkey.utils.MonkeyUtils;
 import com.android.commands.monkey.utils.OkHttpClient;
 import com.android.commands.monkey.utils.ProxyServer;
 import com.android.commands.monkey.utils.RandomHelper;
-import com.android.commands.monkey.utils.StoneUtils;
 import com.android.commands.monkey.utils.U2Client;
 import com.android.commands.monkey.utils.UUIDHelper;
-import com.android.commands.monkey.utils.Utils;
 import com.bytedance.fastbot.AiClient;
 import com.google.gson.Gson;
 
@@ -168,7 +165,7 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
             server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false);
             Logger.println("[MonkeySourceApeU2] proxyServer started. Listening tcp:8090");
         } catch (IOException e) {
-            Logger.println("[MonkeySourceApeU2] Error when trying to start the proxy server：" + e.getMessage());
+            Logger.println("[MonkeySourceApeU2] Error when trying to start the proxy server: " + e.getMessage());
             e.printStackTrace();
             throw new RuntimeException(e);
         }
@@ -216,10 +213,8 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
             if (!this.currentActivity.equals(className)) {
                 this.currentActivity = className;
                 activityHistory.add(this.currentActivity);
-                activityCountHistory.put(
-                        currentActivity,
-                        StoneUtils.getOrDefaultFromHashMap(activityCountHistory, this.currentActivity, 0) + 1
-                );
+                Integer count = activityCountHistory.get(this.currentActivity);
+                activityCountHistory.put(currentActivity, (count != null ? count : 0) + 1);
                 Logger.println("// [Monkey] current activity is " + this.currentActivity);
                 timestamp++;
             }
@@ -237,10 +232,8 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
         if (!this.currentActivity.equals(className)) {
             this.currentActivity = className;
             activityHistory.add(this.currentActivity);
-            activityCountHistory.put(
-                    currentActivity,
-                    StoneUtils.getOrDefaultFromHashMap(activityCountHistory, this.currentActivity, 0) + 1
-            );
+            Integer count = activityCountHistory.get(this.currentActivity);
+            activityCountHistory.put(currentActivity, (count != null ? count : 0) + 1);
             Logger.println("// [Script] current activity is " + this.currentActivity);
             timestamp++;
         }
@@ -390,8 +383,8 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
         }
         else {
             try {
-                Response hierachyResponse = u2Client.dumpHierarchy();
-                res = hierachyResponse.body().string();
+                Response hierarchyResponse = u2Client.dumpHierarchy();
+                res = hierarchyResponse.body().string();
             } catch (IOException e)
             {
                 throw new RuntimeException(e);
@@ -568,7 +561,7 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
         Action fuzzingAction = null;
         Element info = null;
 
-        int repeat = refectchInfoCount;
+        int repeat = refetchInfoCount;
 
         int retry = 2;
         while ("".equals(stringOfGuiTree) && retry-- > 0){
@@ -582,7 +575,7 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
             info = getRootInActiveWindow();
             // this two operations may not be the same
             if (info == null || topActivityName == null) {
-                sleep(refectchInfoWaitingInterval);
+                sleep(refetchInfoWaitingInterval);
                 continue;
             }
 
@@ -637,7 +630,7 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
                 allowFuzzing = operate.allowFuzzing;
                 ActionType type = operate.act;
                 Logger.println("action type: " + type.toString());
-                Logger.println("rpc cost time: " + (System.currentTimeMillis() - rpc_start));
+                Logger.println("rpc cost time: " + (System.currentTimeMillis() - rpc_start) + " ms");
 
                 mReusableRect.set(0, 0, 0, 0);
                 mReusablePointFloats.clear();
@@ -680,7 +673,6 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
                         modelAction.setClearText(operate.clear);
                         modelAction.setEditText(operate.editable);
                         modelAction.setRawInput(operate.rawinput);
-                        modelAction.setUseAdbInput(operate.adbinput);
                         break;
                     case LONG_CLICK:
                         modelAction.setWaitTime(operate.waitTime);
@@ -731,22 +723,6 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
         dumpHierarchy();
         sleep(1000);
         return getRootInActiveWindow();
-    }
-
-    /**
-     * Get the top Activity info from the Activity stack
-     * @return Component name of the top activity
-     */
-    protected File checkOutputDir() {
-        if (mCachedOutputDir != null && mCachedOutputDir.exists()) {
-            return mCachedOutputDir;
-        }
-        File dir = getOutputDir();
-        if (!dir.exists()) {
-            dir.mkdirs();
-        }
-        mCachedOutputDir = dir;
-        return dir;
     }
 
     /**

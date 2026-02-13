@@ -92,7 +92,7 @@ namespace fastbotx {
      * 1. **Double Q-Functions**: Maintains Q1 and Q2 to reduce overestimation
      * 2. **Action Selection**: Randomly selects Q1 or Q2 for action selection
      * 3. **Q-value Updates**: Randomly updates Q1 or Q2, using the other Q-function for evaluation
-     * 4. **Reuse Model**: Records action-to-activity mapping relationships (same as ModelReusableAgent)
+     * 4. **Reuse Model**: Records action-to-activity mapping relationships
      * 
      * Double SARSA Algorithm:
      * - Action selection: Randomly choose Q1 or Q2, then select action with max Q-value
@@ -105,7 +105,7 @@ namespace fastbotx {
      * - More stable learning in noisy environments
      * - Better action selection reliability
      * 
-     * Action selection strategy (same as ModelReusableAgent, priority from high to low):
+     * Action selection strategy (priority from high to low):
      * 1. Select unexecuted actions not in reuse model (explore new actions)
      * 2. Select unvisited unexecuted actions in reuse model (based on humble-gumbel distribution)
      * 3. Select unvisited actions
@@ -178,7 +178,7 @@ namespace fastbotx {
          * @brief Compute reward value of latest action
          * 
          * Computes reward based on probability that action can reach unvisited activities.
-         * Reward calculation formula (same as ModelReusableAgent):
+         * Reward calculation formula:
          * reward = probabilityOfVisitingNewActivities / sqrt(visitedCount + 1)
          *        + getStateActionExpectationValue / sqrt(stateVisitedCount + 1)
          * 
@@ -220,7 +220,7 @@ namespace fastbotx {
         /**
          * @brief Select new action (implements AbstractAgent's pure virtual function)
          * 
-         * Attempts to select action in priority order (same as ModelReusableAgent):
+         * Attempts to select action in priority order:
          * 1. Select unexecuted actions not in reuse model
          * 2. Select unvisited unexecuted actions in reuse model
          * 3. Select unvisited actions

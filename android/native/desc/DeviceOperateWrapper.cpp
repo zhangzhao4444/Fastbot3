@@ -20,7 +20,7 @@ namespace fastbotx {
      */
     DeviceOperateWrapper::DeviceOperateWrapper()
             : act(ActionType::NOP), throttle(0), waitTime(0), editable(false), clear(false),
-              adbInput(false), rawInput(false) {
+              rawInput(false) {
 
     }
 
@@ -106,7 +106,6 @@ namespace fastbotx {
                 BLOGE("no pos element in server action %s", optJsonStr.c_str());
             }
             this->throttle = static_cast<float>(getJsonValue<int>(retJson, "throttle", 0));
-            this->adbInput = getJsonValue<bool>(retJson, "adb_input", false);
             this->waitTime = getJsonValue<int>(retJson, "wait_time", 0);
         }
         catch (nlohmann::json::exception &e) // may some char encoding error
@@ -137,7 +136,6 @@ namespace fastbotx {
             retJson["name"] = this->name;
             retJson["text"] = this->_text;
             retJson["clear"] = BOOL_TO_STR(this->clear);
-            retJson["adbInput"] = BOOL_TO_STR(this->adbInput);
             retJson["rawInput"] = BOOL_TO_STR(this->rawInput);
             retJson["editable"] = BOOL_TO_STR(this->editable);
             retJson["jAction"] = this->jAction;
@@ -156,13 +154,12 @@ namespace fastbotx {
             char returnCString[2000];
             snprintf(returnCString, sizeof(returnCString), "{\"act\":\"%s\", \"pos\":[%d,%d,%d,%d],\"sid\":\"%s\",        \
             \"aid\":\"%s\",\"waitTime\":%d,\"throttle\":%.2f,\"extra0\":\"%s\",    \
-            \"name\":\"%s\",\"text\":\"%s\",\"allowFuzzing\":\"%s\",\"clear\":\"%s\",\"adbInput\":\"%s\",       \
+            \"name\":\"%s\",\"text\":\"%s\",\"allowFuzzing\":\"%s\",\"clear\":\"%s\",       \
             \"rawInput\":\"%s\",\"editable\":\"%s\",\"jAction\":\"%s\"}",
                     actStr.c_str(),
                     pos.left, pos.top, pos.right, pos.bottom, sid.c_str(), aid.c_str(),
                     waitTime, throttle, extra0.c_str(), name.c_str(), _text.c_str(),
                     BOOL_TO_STR(this->allowFuzzing), BOOL_TO_STR(this->clear),
-                    BOOL_TO_STR(this->adbInput),
                     BOOL_TO_STR(this->rawInput), BOOL_TO_STR(this->editable),
                     this->jAction.c_str());
             ret = std::string(returnCString);

@@ -18,6 +18,8 @@
 
 package com.android.commands.monkey.utils;
 
+import com.android.commands.monkey.BuildConfig;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.util.ArrayList;
@@ -37,9 +39,9 @@ public class Config {
 
 
     /**
-     * fastbot version
+     * fastbot version (build-time: 3.0.年.月日.时分-git)
      */
-    public static final String fastbotversion = "3.0.26.0202.2150-git";
+    public static final String fastbotversion = BuildConfig.FASTBOT_VERSION;
     /**
      * enable debug log, disable by default
      */
@@ -62,6 +64,18 @@ public class Config {
     public static final int flushImagesThreshold = Config.getInteger("max.flushImagesThreshold", 10);
     public static final int imageWriterCount = Config.getInteger("max.imageWriterCount", 3);
     /**
+     * enable LLM-based AutodevAgent (used to gate high-cost operations like screenshots)
+     */
+    public static final boolean llmEnabled = Config.getBoolean("max.llm.enabled", false);
+    /**
+     * LLM screenshot: max of width/height in pixels (0 = no resize). Resize reduces tokens/cost; 768–1024 keeps UI readable. Config: max.llm.screenshotMaxSize
+     */
+    public static final int llmScreenshotMaxSize = Config.getInteger("max.llm.screenshotMaxSize", 1024);
+    /**
+     * LLM screenshot: JPEG quality 1–100 (0 = PNG). 80–90 balances size vs text legibility. Config: max.llm.screenshotJpegQuality
+     */
+    public static final int llmScreenshotJpegQuality = Config.getInteger("max.llm.screenshotJpegQuality", 85);
+    /**
      * input fuzzing, default 50% probability fuzz input to textview
      */
     public static final boolean doinputtextFuzzing = Config.getBoolean("max.doinputtextFuzzing", true);
@@ -82,9 +96,10 @@ public class Config {
     public static final long swipeDuration = Config.getLong("max.swipeDuration", 200);
     /**
      * get retry settings for guitree (SECURITY_AND_OPTIMIZATION §7: fewer retries = less Binder/blocking)
+     * Config keys kept as max.refectchInfo* for backward compatibility.
      */
-    public static final long refectchInfoWaitingInterval = Config.getLong("max.refectchInfoWaitingInterval", 50);
-    public static final int refectchInfoCount = Config.getInteger("max.refectchInfoCount", 2);
+    public static final long refetchInfoWaitingInterval = Config.getLong("max.refectchInfoWaitingInterval", 50);
+    public static final int refetchInfoCount = Config.getInteger("max.refectchInfoCount", 2);
     /**
      * tree dump mode: "binary" (default, try binary then fallback to XML) or "xml" (always dump XML, skip binary).
      * Config: max.treeDumpMode = binary | xml

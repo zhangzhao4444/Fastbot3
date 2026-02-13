@@ -8,7 +8,7 @@
 
 本文档详细解释 **Double SARSA** 强化学习算法的原理、实现细节和在 Android UI 测试场景下的优势。Double SARSA 是对标准 N-step SARSA 的重要改进，通过维护两个独立的 Q 函数来减少过估计偏差，提高学习稳定性和动作选择的可靠性。
 
-**当前实现**：`DoubleSarsaAgent` 实现了 **N-step Double SARSA** 算法，是 `ModelReusableAgent`（标准 N-step SARSA）的改进版本。
+**当前实现**：`DoubleSarsaAgent` 实现了 **N-step Double SARSA** 算法，是标准 N-step SARSA 的改进版本。
 
 ---
 

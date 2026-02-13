@@ -21,13 +21,7 @@ package com.android.commands.monkey.action;
 import com.android.commands.monkey.events.CustomEvent;
 import com.android.commands.monkey.fastbot.client.ActionType;
 
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
-
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
-
 
 /**
  * Generation fuzzing action, action type is FUZZ
@@ -35,51 +29,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class FuzzAction extends Action {
 
-    /**
-     *
-     */
-    private static final long serialVersionUID = 1L;
-    private static final AtomicInteger fuzzIdGenerator = new AtomicInteger();
-    private final int id; // simply make every fuzz action unique.
     private final List<CustomEvent> events;
 
     public FuzzAction(List<CustomEvent> events) {
         super(ActionType.FUZZ);
         this.events = events;
-        this.id = fuzzIdGenerator.incrementAndGet();
-    }
-
-    @Override
-    public int hashCode() {
-        final int prime = 31;
-        int result = super.hashCode();
-        result = prime * result + id;
-        return result;
-    }
-
-    @Override
-    public boolean equals(Object obj) {
-        if (this == obj)
-            return true;
-        if (!super.equals(obj))
-            return false;
-        if (getClass() != obj.getClass())
-            return false;
-        FuzzAction other = (FuzzAction) obj;
-        return id == other.id;
     }
 
     public List<CustomEvent> getFuzzingEvents() {
         return events;
-    }
-
-    public JSONObject toJSONObject() throws JSONException {
-        JSONObject jAction = super.toJSONObject();
-        JSONArray jEvents = new JSONArray();
-        for (CustomEvent event : events) {
-            jEvents.put(event.toJSONObject());
-        }
-        jAction.put("events", jEvents);
-        return jAction;
     }
 }

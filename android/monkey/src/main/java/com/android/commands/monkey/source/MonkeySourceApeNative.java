@@ -20,8 +20,8 @@ import static com.android.commands.monkey.utils.Config.historyRestartRate;
 import static com.android.commands.monkey.utils.Config.homeAfterNSecondsofsleep;
 import static com.android.commands.monkey.utils.Config.homingRate;
 import static com.android.commands.monkey.utils.Config.imageWriterCount;
-import static com.android.commands.monkey.utils.Config.refectchInfoCount;
-import static com.android.commands.monkey.utils.Config.refectchInfoWaitingInterval;
+import static com.android.commands.monkey.utils.Config.refetchInfoCount;
+import static com.android.commands.monkey.utils.Config.refetchInfoWaitingInterval;
 import static com.android.commands.monkey.utils.Config.saveGUITreeToXmlEveryStep;
 import static com.android.commands.monkey.utils.Config.schemaTraversalMode;
 import static com.android.commands.monkey.utils.Config.scrollAfterNSecondsofsleep;
@@ -32,6 +32,9 @@ import static com.android.commands.monkey.utils.Config.startAfterDoScrollBottomA
 import static com.android.commands.monkey.utils.Config.startAfterNSecondsofsleep;
 import static com.android.commands.monkey.utils.Config.swipeDuration;
 import static com.android.commands.monkey.utils.Config.takeScreenshotForEveryStep;
+import static com.android.commands.monkey.utils.Config.llmEnabled;
+import static com.android.commands.monkey.utils.Config.llmScreenshotJpegQuality;
+import static com.android.commands.monkey.utils.Config.llmScreenshotMaxSize;
 import static com.android.commands.monkey.utils.Config.throttleForExecPreSchema;
 import static com.android.commands.monkey.utils.Config.throttleForExecPreShell;
 import static com.android.commands.monkey.utils.Config.useRandomClick;
@@ -78,7 +81,6 @@ import com.android.commands.monkey.events.base.MonkeyRotationEvent;
 import com.android.commands.monkey.events.base.MonkeySchemaEvent;
 import com.android.commands.monkey.events.base.MonkeyThrottleEvent;
 import com.android.commands.monkey.events.base.MonkeyTouchEvent;
-import com.android.commands.monkey.events.base.MonkeyWaitEvent;
 import com.android.commands.monkey.events.base.mutation.MutationAirplaneEvent;
 import com.android.commands.monkey.events.base.mutation.MutationAlwaysFinishActivityEvent;
 import com.android.commands.monkey.events.base.mutation.MutationWifiEvent;
@@ -96,7 +98,6 @@ import com.android.commands.monkey.utils.Logger;
 import com.android.commands.monkey.utils.MonkeyUtils;
 import com.android.commands.monkey.utils.RandomHelper;
 import com.android.commands.monkey.utils.UUIDHelper;
-import com.android.commands.monkey.utils.Utils;
 import com.bytedance.fastbot.AiClient;
 
 import java.io.BufferedWriter;
@@ -144,12 +145,18 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
     /** Reusable list for generateFuzzingAction simplify path (PERFORMANCE_OPTIMIZATION_ITEMS §8.3). */
     private final List<CustomEvent> mReusableFuzzEvents = new ArrayList<>();
 
+    // Cached screenshot state for LLM-based AutodevAgent (PNG bytes in memory, throttled by time/activity)
+    private long mLastLlmScreenshotTime = 0L;
+    private String mLastLlmScreenshotActivity = "";
+    private byte[] mLastLlmScreenshotPng = null;
+
     public MonkeySourceApeNative(Random random, List<ComponentName> MainApps,
                                  long throttle, boolean randomizeThrottle, boolean permissionTargetSystem,
                                  File outputDirectory) {
         super(random, MainApps, throttle, randomizeThrottle, outputDirectory);
+        AiClient.setLlmDumpDirectory(getOutputDir());
         mImageWriters = new ImageWriterQueue[imageWriterCount];
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < imageWriterCount; i++) {
             mImageWriters[i] = new ImageWriterQueue();
             Thread imageThread = new Thread(mImageWriters[i]);
             imageThread.start();
@@ -206,6 +213,103 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
     }
 
     /**
+     * Capture a screenshot as PNG bytes for LLM-based AutodevAgent, with simple
+     * throttling to avoid taking a screenshot every step.
+     *
+     * Strategy:
+     * - Only active when llmEnabled == true (unless forceRetry is true for native requestScreenshotRetry path)
+     * - If same activity and less than 1000ms since last capture, reuse cached PNG
+     * - Otherwise, call UiAutomation.takeScreenshot(), compress to PNG in-memory,
+     *   recycle the Bitmap and update cache.
+     *
+     * @param activity current activity name
+     * @param forceRetry if true, take screenshot regardless of llmEnabled (used when native requested retry with screenshot)
+     * @return PNG bytes or null if disabled or error
+     */
+    private byte[] captureLlmScreenshotIfNeeded(String activity, boolean forceRetry) {
+        boolean gated = !forceRetry && (!llmEnabled || mUiAutomation == null);
+        if (gated) {
+            if (mVerbose > 0) {
+                Logger.println("// [LLM screenshot] skip: llmEnabled=" + llmEnabled + " mUiAutomation=" + (mUiAutomation != null) + " forceRetry=" + forceRetry);
+            }
+            return null;
+        }
+        if (mUiAutomation == null) {
+            if (mVerbose > 0) Logger.println("// [LLM screenshot] mUiAutomation is null");
+            return null;
+        }
+        if (!forceRetry) {
+            long now = System.currentTimeMillis();
+            if (mLastLlmScreenshotPng != null
+                    && activity != null
+                    && activity.equals(mLastLlmScreenshotActivity)
+                    && (now - mLastLlmScreenshotTime) < 1000L) {
+                return mLastLlmScreenshotPng;
+            }
+        }
+
+        Bitmap map = mUiAutomation.takeScreenshot();
+        if (map == null) {
+            if (mVerbose > 0) Logger.println("// [LLM screenshot] takeScreenshot() returned null");
+            return null;
+        }
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream(64 * 1024);
+        boolean ok = map.compress(Bitmap.CompressFormat.PNG, 100, baos);
+        map.recycle();
+        if (!ok) {
+            if (mVerbose > 0) Logger.println("// [LLM screenshot] compress failed");
+            return null;
+        }
+        byte[] png = baos.toByteArray();
+        if (!forceRetry) {
+            long now = System.currentTimeMillis();
+            mLastLlmScreenshotPng = png;
+            mLastLlmScreenshotTime = now;
+            mLastLlmScreenshotActivity = (activity != null ? activity : "");
+        }
+        if (mVerbose > 0) Logger.println("// [LLM screenshot] captured len=" + png.length + " forceRetry=" + forceRetry);
+        return png;
+    }
+
+    /** @see #captureLlmScreenshotIfNeeded(String, boolean) */
+    private byte[] captureLlmScreenshotIfNeeded(String activity) {
+        return captureLlmScreenshotIfNeeded(activity, false);
+    }
+
+    /**
+     * Capture screenshot when native triggers an LLM request (doLlmHttpPostFromPrompt).
+     * No throttle, no llmEnabled gate — ensures every LLM request gets a fresh image.
+     * Optionally resizes (max.llm.screenshotMaxSize) and compresses as JPEG (max.llm.screenshotJpegQuality)
+     * to reduce tokens and latency; 0 = no resize / PNG.
+     */
+    private byte[] captureScreenshotForLlmRequest() {
+        if (mUiAutomation == null) return null;
+        Bitmap map = mUiAutomation.takeScreenshot();
+        if (map == null) return null;
+        int maxSize = llmScreenshotMaxSize > 0 ? llmScreenshotMaxSize : Integer.MAX_VALUE;
+        int w = map.getWidth();
+        int h = map.getHeight();
+        if (w > maxSize || h > maxSize) {
+            float scale = Math.min((float) maxSize / w, (float) maxSize / h);
+            int nw = Math.max(1, Math.round(w * scale));
+            int nh = Math.max(1, Math.round(h * scale));
+            Bitmap scaled = Bitmap.createScaledBitmap(map, nw, nh, true);
+            map.recycle();
+            map = scaled;
+        }
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream(64 * 1024);
+        int jpegQuality = llmScreenshotJpegQuality;
+        boolean ok;
+        if (jpegQuality > 0 && jpegQuality <= 100) {
+            ok = map.compress(Bitmap.CompressFormat.JPEG, jpegQuality, baos);
+        } else {
+            ok = map.compress(Bitmap.CompressFormat.PNG, 100, baos);
+        }
+        map.recycle();
+        return ok ? baos.toByteArray() : null;
+    }
+
+    /**
      * ActiveWindow may not belong to activity package.
      *
      * @return AccessibilityNodeInfo of the root
@@ -256,13 +360,16 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
             mXmlBuffer.flip();
             return AiClient.getActionFromBuffer(activity, mXmlBuffer);
         } catch (Exception e) {
-            byte[] bytes = stringOfGuiTree.getBytes(StandardCharsets.UTF_8);
-            ensureXmlBufferCapacity(bytes.length);
-            mXmlBuffer.clear();
-            mXmlBuffer.put(bytes);
-            mXmlBuffer.flip();
-            return AiClient.getActionFromBuffer(activity, mXmlBuffer);
+            if (mVerbose > 0) Logger.println("// getActionFromXmlBuffer error: " + e.getMessage());
+            return null;
         }
+    }
+
+    /**
+     * Same as getActionFromXmlBuffer; LLM screenshot provider is already set before tree dump.
+     */
+    private Operate getActionFromXmlBufferWithScreenshot(String activity, String stringOfGuiTree) {
+        return getActionFromXmlBuffer(activity, stringOfGuiTree);
     }
 
     void resetRotation() {
@@ -281,7 +388,7 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                 generateEvents();
             } catch (RuntimeException e) {
                 Logger.errorPrintln(e.getMessage());
-                e.printStackTrace();
+                if (mVerbose > 0) Logger.println("// getNextEvent: " + e.toString());
                 clearEvent();
                 return null;
             }
@@ -299,12 +406,8 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
     }
 
     /**
-     * Get the top Activity info from the Activity stack
-     * @return Component name of the top activity
-     */
-    /**
      * If the given component is not allowed to interact with, start a random app or
-     * generating a fuzzing action
+     * generating a fuzzing action.
      * @param cn Component that is not allowed to interact with
      */
     private void dealWithBlockedActivity(ComponentName cn) {
@@ -357,8 +460,9 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                 if (mVerbose > 0) Logger.println("// current activity is " + this.currentActivity);
                 timestamp++;
             }
-        }else
+        } else {
             dealWithBlockedActivity(cn);
+        }
     }
 
     public Bitmap captureBitmap() {
@@ -370,15 +474,13 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
      * @param info AccessibilityNodeInfo of the root of this current window
      * @return If this window belongs to system UI, return true
      */
-    public boolean dealWithSystemUI(AccessibilityNodeInfo info)
-    {
-        if(info == null || info.getPackageName() == null)
-        {
+    public boolean dealWithSystemUI(AccessibilityNodeInfo info) {
+        if (info == null || info.getPackageName() == null) {
             if (mVerbose > 0) Logger.println("get null accessibility node");
             return false;
         }
         String packageName = info.getPackageName().toString();
-        if(packageName.equals("com.android.systemui")) {
+        if (packageName.equals("com.android.systemui")) {
 
             if (mVerbose > 0) Logger.println("get notification window or other system windows");
             Rect bounds = AndroidDevice.getDisplayBounds(AndroidDevice.getFocusedDisplayId());
@@ -410,7 +512,7 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
         Operate operate = null;
         Action fuzzingAction = null;
         AccessibilityNodeInfo info = null;
-        int repeat = refectchInfoCount;
+        int repeat = refetchInfoCount;
         long tGetTop = 0, tGetRoot = 0, tGetRootSlow = 0, tDumpBinary = 0, tDumpXml = 0;
         boolean usedGetRootSlow = false;
 
@@ -424,13 +526,12 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
         while (repeat-- > 0) {
             info = getRootInActiveWindow();
             if (info == null || topActivityName == null) {
-                sleep(refectchInfoWaitingInterval);
+                sleep(refetchInfoWaitingInterval);
                 continue;
             }
 
             if (mVerbose > 0) Logger.println("// Event id: " + mEventId);
-            if(dealWithSystemUI(info))
-                return;
+            if (dealWithSystemUI(info)) return;
             break;
         }
         tGetRoot = System.currentTimeMillis() - t1;
@@ -444,13 +545,14 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
             usedGetRootSlow = true;
             if (info != null) {
                 if (mVerbose > 0) Logger.println("// Event id: " + mEventId);
-                if(dealWithSystemUI(info))
-                    return;
+                if (dealWithSystemUI(info)) return;
             }
         }
 
         // If node is not null, build tree and recycle this resource.
         if (info!=null){
+            // So when C++ triggers LLM request (doLlmHttpPostFromPrompt), we capture on demand — no per-step screenshot.
+            AiClient.setLlmScreenshotProvider(this::captureScreenshotForLlmRequest);
             boolean useXmlOnly = "xml".equalsIgnoreCase(Config.treeDumpMode);
             if (useXmlOnly) {
                 // max.treeDumpMode=xml: skip binary, always dump XML (e.g. for perf comparison or compatibility).
@@ -472,7 +574,8 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                 if (binaryWritten > 0) {
                     mXmlBuffer.position(0);
                     mXmlBuffer.limit(binaryWritten);
-                    operate = AiClient.getActionFromBuffer(topActivityName != null ? topActivityName.getClassName() : "", mXmlBuffer);
+                    String activityForLlm = topActivityName != null ? topActivityName.getClassName() : "";
+                    operate = AiClient.getActionFromBuffer(activityForLlm, mXmlBuffer);
                 }
                 if (operate == null) {
                     if (mVerbose > 0) {
@@ -512,7 +615,7 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                 ActionType type = operate.act;
                 if (mVerbose > 0) {
                     Logger.println("action type: " + type.toString());
-                    Logger.println("rpc cost time: " + (System.currentTimeMillis() - rpc_start));
+                    Logger.println("rpc cost time: " + (System.currentTimeMillis() - rpc_start) + " ms");
                 }
 
                 mReusableRect.set(0, 0, 0, 0);
@@ -540,8 +643,8 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                         out.write(stringOfGuiTree);
                         out.flush();
                         out.close();
-                    } catch (java.io.FileNotFoundException e) {
                     } catch (java.io.IOException e) {
+                        if (mVerbose > 0) Logger.println("// saveGUITreeToXml: " + e.getMessage());
                     }
                 }
 
@@ -564,7 +667,6 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                         modelAction.setClearText(operate.clear);
                         modelAction.setEditText(operate.editable);
                         modelAction.setRawInput(operate.rawinput);
-                        modelAction.setUseAdbInput(operate.adbinput);
                         break;
                     case LONG_CLICK:
                         modelAction.setWaitTime(operate.waitTime);
@@ -617,23 +719,11 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
             long total = System.currentTimeMillis() - start;
             Logger.println(" event time:" + Long.toString(total));
             if (tGetRootSlow > 0 || tDumpXml > 50 || total > 200) {
-                Logger.println("// event time breakdown: getTop=" + tGetTop + " getRoot=" + tGetRoot
+                Logger.println("// event time: getTop=" + tGetTop + " getRoot=" + tGetRoot
                         + (usedGetRootSlow ? " getRootSlow=" + tGetRootSlow : "")
                         + " dumpBinary=" + tDumpBinary + " dumpXml=" + tDumpXml + " ms");
             }
         }
-    }
-
-    private File checkOutputDir() {
-        if (mCachedOutputDir != null && mCachedOutputDir.exists()) {
-            return mCachedOutputDir;
-        }
-        File dir = getOutputDir();
-        if (!dir.exists()) {
-            dir.mkdirs();
-        }
-        mCachedOutputDir = dir;
-        return dir;
     }
 
     private ImageWriterQueue nextImageWriter() {

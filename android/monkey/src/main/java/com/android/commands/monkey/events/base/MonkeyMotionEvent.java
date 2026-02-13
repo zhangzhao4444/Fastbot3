@@ -20,7 +20,6 @@ import android.app.IActivityManager;
 import android.graphics.Rect;
 import android.hardware.input.InputManager;
 import android.os.SystemClock;
-import android.util.SparseArray;
 import android.view.IWindowManager;
 import android.view.InputDevice;
 import android.view.MotionEvent;
@@ -73,7 +72,15 @@ public abstract class MonkeyMotionEvent extends MonkeyEvent {
     private long mDownTime;
     private long mEventTime;
     private int mAction;
-    private SparseArray<MotionEvent.PointerCoords> mPointers;
+    // Per-event cached display info to avoid repeated AndroidDevice calls per pointer.
+    private boolean mDisplayInfoInitialized;
+    private Rect mDisplayBounds;
+    private int mStatusBarHeight;
+    private int mBottomBarHeight;
+    private final int[] mPointerIds = new int[MAX_POINTERS];
+    // Lazily allocated per pointer index to avoid always allocating MAX_POINTERS objects.
+    private final MotionEvent.PointerCoords[] mPointerCoords = new MotionEvent.PointerCoords[MAX_POINTERS];
+    private int mPointerCount;
     private int mMetaState;
     private float mXPrecision;
     private float mYPrecision;
@@ -92,7 +99,6 @@ public abstract class MonkeyMotionEvent extends MonkeyEvent {
         mDownTime = -1;
         mEventTime = -1;
         mAction = action;
-        mPointers = new SparseArray<MotionEvent.PointerCoords>();
         mXPrecision = 1;
         mYPrecision = 1;
     }
@@ -102,24 +108,27 @@ public abstract class MonkeyMotionEvent extends MonkeyEvent {
     }
 
     public MonkeyMotionEvent addPointer(int id, float x, float y, float pressure, float size) {
-        Rect bounds = AndroidDevice.getDisplayBounds(AndroidDevice.getFocusedDisplayId());
-        int statusBarHeight = AndroidDevice.getStatusBarHeight();
-        int bottomBarHeight = AndroidDevice.getBottomBarHeight();
-        if (bounds != null) {
-            int maxY = bounds.height() - 1;
-            if (bottomBarHeight > maxY) bottomBarHeight = maxY;
+        if (mPointerCount >= MAX_POINTERS) return this;
+        ensureDisplayInfo();
+        float clippedY = y;
+        if (mDisplayBounds != null) {
+            if (clippedY <= mStatusBarHeight) {
+                clippedY = mStatusBarHeight + 1;
+            } else if (clippedY >= mBottomBarHeight) {
+                if (type == 1) clippedY = mBottomBarHeight - 1;
+            }
         }
-        MotionEvent.PointerCoords c = new MotionEvent.PointerCoords();
+        MotionEvent.PointerCoords c = mPointerCoords[mPointerCount];
+        if (c == null) {
+            c = new MotionEvent.PointerCoords();
+            mPointerCoords[mPointerCount] = c;
+        }
         c.x = x;
-        if (y <= statusBarHeight) {
-            y = statusBarHeight + 1;
-        } else if (y >= bottomBarHeight) {
-            if (type == 1) y = bottomBarHeight - 1;
-        }
-        c.y = y;
+        c.y = clippedY;
         c.pressure = pressure;
         c.size = size;
-        mPointers.append(id, c);
+        mPointerIds[mPointerCount] = id;
+        mPointerCount++;
         return this;
     }
 
@@ -180,23 +189,35 @@ public abstract class MonkeyMotionEvent extends MonkeyEvent {
         return this;
     }
 
+    private void ensureDisplayInfo() {
+        if (mDisplayInfoInitialized) return;
+        Rect bounds = AndroidDevice.getDisplayBounds(AndroidDevice.getFocusedDisplayId());
+        int statusBarHeight = AndroidDevice.getStatusBarHeight();
+        int bottomBarHeight = AndroidDevice.getBottomBarHeight();
+        if (bounds != null) {
+            int maxY = bounds.height() - 1;
+            if (bottomBarHeight > maxY) bottomBarHeight = maxY;
+        }
+        mDisplayBounds = bounds;
+        mStatusBarHeight = statusBarHeight;
+        mBottomBarHeight = bottomBarHeight;
+        mDisplayInfoInitialized = true;
+    }
+
     /**
      * @return instance of a motion event
      * use PointerProperties + PointerCoords obtain, set toolType (FINGER/MOUSE).
      * Reuses ThreadLocal PointerProperties[] and PointerCoords[] to avoid allocation per call.
      */
     /* private */ MotionEvent getEvent() {
-        int pointerCount = mPointers.size();
-        if (pointerCount > MAX_POINTERS) {
-            pointerCount = MAX_POINTERS;
-        }
+        int pointerCount = Math.min(mPointerCount, MAX_POINTERS);
         MotionEvent.PointerProperties[] props = sPointerProperties.get();
         MotionEvent.PointerCoords[] coords = sPointerCoords.get();
         int toolType = (mSource == InputDevice.SOURCE_MOUSE) ? MotionEvent.TOOL_TYPE_MOUSE : MotionEvent.TOOL_TYPE_FINGER;
         for (int i = 0; i < pointerCount; i++) {
-            props[i].id = mPointers.keyAt(i);
+            props[i].id = mPointerIds[i];
             props[i].toolType = toolType;
-            MotionEvent.PointerCoords src = mPointers.valueAt(i);
+            MotionEvent.PointerCoords src = mPointerCoords[i];
             coords[i].x = src.x;
             coords[i].y = src.y;
             coords[i].pressure = src.pressure;

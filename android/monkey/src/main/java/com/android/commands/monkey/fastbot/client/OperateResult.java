@@ -14,7 +14,6 @@ public class OperateResult {
     public long waitTime;
     public String text;
     public boolean clear;
-    public boolean adbInput;
     public boolean rawInput;
     public boolean allowFuzzing;
     public boolean editable;

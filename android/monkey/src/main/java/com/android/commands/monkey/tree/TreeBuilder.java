@@ -97,7 +97,7 @@ public class TreeBuilder {
                         ret.append(isInvalidXmlChar(ch) ? '.' : ch);
                     }
                 } catch (Exception ex) {
-                    Logger.println("strip invalid xml failed!, repace all &# " + ex.toString());
+                    Logger.println("strip invalid xml failed, replace invalid chars: " + ex.toString());
                     return cs.toString().replaceAll("\"", "").replaceAll("&#", "");
                 }
                 return ret.toString();
@@ -126,32 +126,71 @@ public class TreeBuilder {
     private static final String ATTR_PASSWORD = "pwd";
     private static final String ATTR_SELECTED = "sel";
 
+    /** Max depth for XML/binary dump to avoid stack overflow and huge output. */
+    private static final int MAX_TREE_DEPTH = 25;
+
+    /** Attribute names to strip in filterTree (static to avoid array alloc per call). */
+    private static final String[] ATTRIBUTES_TO_REMOVE = {"drawing-order", "hint", "display-id"};
+
+    /** Avoid per-node Boolean.toString() allocation in XML dump. */
+    private static final String VAL_TRUE = "true";
+    private static final String VAL_FALSE = "false";
+
+    /** Cache for small indices to avoid Integer.toString() per node in hot path. */
+    private static final int INDEX_CACHE_SIZE = 256;
+    private static final String[] INDEX_STRINGS = new String[INDEX_CACHE_SIZE];
+    static {
+        for (int i = 0; i < INDEX_CACHE_SIZE; i++) {
+            INDEX_STRINGS[i] = String.valueOf(i);
+        }
+    }
+
+    private static String indexToString(int index) {
+        return (index >= 0 && index < INDEX_CACHE_SIZE) ? INDEX_STRINGS[index] : String.valueOf(index);
+    }
+
+    /** Reusable buffer for bounds string to avoid Rect.toShortString() intermediate allocations. */
+    private static final ThreadLocal<StringBuilder> sBoundsBuffer = new ThreadLocal<StringBuilder>() {
+        @Override
+        protected StringBuilder initialValue() {
+            return new StringBuilder(32);
+        }
+    };
+
+    private static String boundsToShortString(Rect r) {
+        StringBuilder sb = sBoundsBuffer.get();
+        sb.setLength(0);
+        sb.append('[').append(r.left).append(',').append(r.top).append("][")
+                .append(r.right).append(',').append(r.bottom).append(']');
+        return sb.toString();
+    }
+
     // copy from AccessibilityNodeInfoDumper
     private static void dumpNodeRec(AccessibilityNodeInfo node, XmlSerializer serializer, int index,
                                     int depth)  throws IOException {
         serializer.startTag("", "node");
-        serializer.attribute("", ATTR_INDEX, Integer.toString(index));
+        serializer.attribute("", ATTR_INDEX, indexToString(index));
         serializer.attribute("", ATTR_TEXT, safeCharSeqToString(node.getText()));
         serializer.attribute("", ATTR_RESOURCE_ID, safeCharSeqToString(node.getViewIdResourceName()));
         serializer.attribute("", ATTR_CLASS, safeCharSeqToString(node.getClassName()));
         serializer.attribute("", ATTR_PACKAGE, safeCharSeqToString(node.getPackageName()));
         serializer.attribute("", ATTR_CONTENT_DESC, safeCharSeqToString(node.getContentDescription()));
-        serializer.attribute("", ATTR_CHECKABLE, Boolean.toString(node.isCheckable()));
-        serializer.attribute("", ATTR_CHECKED, Boolean.toString(node.isChecked()));
-        serializer.attribute("", ATTR_CLICKABLE, Boolean.toString(node.isClickable()));
-        serializer.attribute("", ATTR_ENABLED, Boolean.toString(node.isEnabled()));
-        serializer.attribute("", ATTR_FOCUSABLE, Boolean.toString(node.isFocusable()));
-        serializer.attribute("", ATTR_FOCUSED, Boolean.toString(node.isFocused()));
-        serializer.attribute("", ATTR_SCROLLABLE, Boolean.toString(node.isScrollable()));
-        serializer.attribute("", ATTR_LONG_CLICKABLE, Boolean.toString(node.isLongClickable()));
-        serializer.attribute("", ATTR_PASSWORD, Boolean.toString(node.isPassword()));
-        serializer.attribute("", ATTR_SELECTED, Boolean.toString(node.isSelected()));
+        serializer.attribute("", ATTR_CHECKABLE, node.isCheckable() ? VAL_TRUE : VAL_FALSE);
+        serializer.attribute("", ATTR_CHECKED, node.isChecked() ? VAL_TRUE : VAL_FALSE);
+        serializer.attribute("", ATTR_CLICKABLE, node.isClickable() ? VAL_TRUE : VAL_FALSE);
+        serializer.attribute("", ATTR_ENABLED, node.isEnabled() ? VAL_TRUE : VAL_FALSE);
+        serializer.attribute("", ATTR_FOCUSABLE, node.isFocusable() ? VAL_TRUE : VAL_FALSE);
+        serializer.attribute("", ATTR_FOCUSED, node.isFocused() ? VAL_TRUE : VAL_FALSE);
+        serializer.attribute("", ATTR_SCROLLABLE, node.isScrollable() ? VAL_TRUE : VAL_FALSE);
+        serializer.attribute("", ATTR_LONG_CLICKABLE, node.isLongClickable() ? VAL_TRUE : VAL_FALSE);
+        serializer.attribute("", ATTR_PASSWORD, node.isPassword() ? VAL_TRUE : VAL_FALSE);
+        serializer.attribute("", ATTR_SELECTED, node.isSelected() ? VAL_TRUE : VAL_FALSE);
         Rect xmlRect = sXmlDumpRect.get();
         getVisibleBoundsInScreen(node, xmlRect);
-        serializer.attribute("", ATTR_BOUNDS, xmlRect.toShortString());
+        serializer.attribute("", ATTR_BOUNDS, boundsToShortString(xmlRect));
 
         depth += 1;
-        if(depth <= 25) {
+        if (depth <= MAX_TREE_DEPTH) {
             int count = node.getChildCount();
             for (int i = 0; i < count; i++) {
                 AccessibilityNodeInfo child = node.getChild(i);
@@ -160,8 +199,8 @@ public class TreeBuilder {
                     child.recycle();
                 }
             }
-            serializer.endTag("", "node");
         }
+        serializer.endTag("", "node");
     }
 
     private static String getAttr(org.w3c.dom.Element node, String shortName, String longName) {
@@ -169,9 +208,15 @@ public class TreeBuilder {
         return node.hasAttribute(longName) ? node.getAttribute(longName) : "";
     }
 
+    private static String getIndexAttr(Element node, int fallbackIndex) {
+        if (node.hasAttribute(ATTR_INDEX)) return node.getAttribute(ATTR_INDEX);
+        if (node.hasAttribute("index")) return node.getAttribute("index");
+        return String.valueOf(fallbackIndex);
+    }
+
     private static void dumpNodeRec(Element node, XmlSerializer serializer, int index, int depth) throws IOException {
         serializer.startTag("", "node");
-        serializer.attribute("", ATTR_INDEX, node.hasAttribute(ATTR_INDEX) ? node.getAttribute(ATTR_INDEX) : node.hasAttribute("index") ? node.getAttribute("index") : String.valueOf(index));
+        serializer.attribute("", ATTR_INDEX, getIndexAttr(node, index));
         serializer.attribute("", ATTR_TEXT, getAttr(node, ATTR_TEXT, "text"));
         serializer.attribute("", ATTR_RESOURCE_ID, getAttr(node, ATTR_RESOURCE_ID, "resource-id"));
         serializer.attribute("", ATTR_CLASS, getAttr(node, ATTR_CLASS, "class"));
@@ -192,21 +237,18 @@ public class TreeBuilder {
 
         depth += 1;
 
-        if (depth <= 25) {
-            // 处理子 Element 节点
+        if (depth <= MAX_TREE_DEPTH) {
             NodeList childNodes = node.getChildNodes();
             int childElementIndex = 0;
-            boolean hasChildElement = false;
             for (int i = 0; i < childNodes.getLength(); i++) {
                 Node child = childNodes.item(i);
                 if (child.getNodeType() == Node.ELEMENT_NODE) {
-                    hasChildElement = true;
                     dumpNodeRec((Element) child, serializer, childElementIndex, depth);
                     childElementIndex++;
                 }
             }
-            serializer.endTag("", "node");
         }
+        serializer.endTag("", "node");
     }
 
     // Binary format for C++ createFromBinary (SECURITY_AND_OPTIMIZATION §7 opt1). Little-endian.
@@ -233,7 +275,7 @@ public class TreeBuilder {
     }
 
     private static int dumpNodeRecBinary(AccessibilityNodeInfo node, ByteBuffer buf, int index, int depth) {
-        if (depth > 25 || buf.remaining() < MIN_NODE_BYTES) return -1;
+        if (depth > MAX_TREE_DEPTH || buf.remaining() < MIN_NODE_BYTES) return -1;
         Rect r = sBinaryDumpRect.get();
         getVisibleBoundsInScreen(node, r);
         int left = (node != null) ? r.left : 0, top = (node != null) ? r.top : 0, right = (node != null) ? r.right : 0, bottom = (node != null) ? r.bottom : 0;
@@ -298,7 +340,7 @@ public class TreeBuilder {
     private static final int XML_WRITER_INITIAL_CAPACITY = 256 * 1024;  // PERFORMANCE_OPTIMIZATION_ITEMS §2.3: reduce resize
 
     public static String dumpDocumentStrWithOutTree(AccessibilityNodeInfo rootInfo) {
-        String dumpstrRet = "";
+        String result = "";
         try {
             StringWriter textWriter = new StringWriter(XML_WRITER_INITIAL_CAPACITY);
             XmlSerializer serializer = Xml.newSerializer();
@@ -310,11 +352,11 @@ public class TreeBuilder {
             int depth = 1;
             dumpNodeRec(rootInfo, serializer, 0, depth);
             serializer.endDocument();
-            dumpstrRet = textWriter.toString();
+            result = textWriter.toString();
         } catch (IllegalArgumentException | IOException | IllegalStateException e) {
             Logger.println("failed to dump window to file: " + e.toString());
         }
-        return dumpstrRet;
+        return result;
     }
 
     /**
@@ -327,8 +369,7 @@ public class TreeBuilder {
         }
 
         // filter the necessary attrs
-        String[] attributeToRemove = {"drawing-order", "hint", "display-id"};
-        for (String attr : attributeToRemove) {
+        for (String attr : ATTRIBUTES_TO_REMOVE) {
             if (root.hasAttribute(attr)) {
                 root.removeAttribute(attr);
             }
@@ -349,7 +390,7 @@ public class TreeBuilder {
      * and generates an xml dump to the location specified by <code>dumpFile</code>
      */
     public static String dumpDocumentStrWithOutTree(Element rootInfo) {
-        String dumpstrRet = "";
+        String result = "";
         try {
             StringWriter textWriter = new StringWriter(XML_WRITER_INITIAL_CAPACITY);
             XmlSerializer serializer = Xml.newSerializer();
@@ -361,10 +402,10 @@ public class TreeBuilder {
             int depth = 1;
             dumpNodeRec(rootInfo, serializer, 0, depth);
             serializer.endDocument();
-            dumpstrRet = textWriter.toString();
+            result = textWriter.toString();
         } catch (IllegalArgumentException | IOException | IllegalStateException e) {
             Logger.println("failed to dump window to file: " + e.toString());
         }
-        return dumpstrRet;
+        return result;
     }
 }

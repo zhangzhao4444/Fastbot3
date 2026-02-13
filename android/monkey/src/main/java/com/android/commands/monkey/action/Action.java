@@ -21,9 +21,6 @@ package com.android.commands.monkey.action;
 import com.android.commands.monkey.fastbot.client.ActionType;
 import com.android.commands.monkey.utils.Config;
 
-import org.json.JSONException;
-import org.json.JSONObject;
-
 /**
  * @author Zhao Zhang
  */
@@ -34,28 +31,20 @@ import org.json.JSONObject;
 public class Action {
 
     public static final Action NOP = new Action(ActionType.NOP);
-    private static final long serialVersionUID = 1L;
 
     static {
         NOP.setThrottle(Config.getInteger("max.nopActionThrottle", 1000));
     }
 
     private final ActionType type;
-    private int priority;
     private int throttle;
-    private double value;
 
     public Action(ActionType type) {
         this.type = type;
-        this.value = 0;
     }
 
     public ActionType getType() {
         return type;
-    }
-
-    public int getPriority() {
-        return priority;
     }
 
     public boolean isModelAction() {
@@ -83,6 +72,7 @@ public class Action {
         this.throttle = throttle;
     }
 
+    @Override
     public String toString() {
         if (!isModelAction()) {
             return type.toString();
@@ -90,32 +80,4 @@ public class Action {
         return super.toString() + '@' + type.toString(); // + String.format("[V=%f]", value);
     }
 
-    @Override
-    public int hashCode() {
-        final int prime = 31;
-        int result = 1;
-        result = prime * result + ((type == null) ? 0 : type.hashCode());
-        return result;
-    }
-
-    @Override
-    public boolean equals(Object obj) {
-        if (this == obj)
-            return true;
-        if (obj == null)
-            return false;
-        if (getClass() != obj.getClass())
-            return false;
-        Action other = (Action) obj;
-        if (type != other.type)
-            return false;
-        return true;
-    }
-
-    public JSONObject toJSONObject() throws JSONException {
-        JSONObject jAction = new JSONObject();
-        jAction.put("actionType", getType());
-        jAction.put("throttle", getThrottle());
-        return jAction;
-    }
 }

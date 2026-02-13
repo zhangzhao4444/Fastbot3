@@ -21,7 +21,7 @@ import android.view.IWindowManager;
 
 import com.android.commands.monkey.events.MonkeyEvent;
 import com.android.commands.monkey.utils.Logger;
-import com.android.commands.monkey.utils.StoneUtils;
+import com.android.commands.monkey.utils.ProcessUtils;
 
 /**
  * @author Dingchun Wang
@@ -38,7 +38,7 @@ public class MutationAirplaneEvent extends MonkeyEvent {
     }
 
     private boolean isAirModeOpen() {
-        String result = StoneUtils.executeShellCommand("settings get global airplane_mode_on").trim();
+        String result = ProcessUtils.executeShellCommand("settings get global airplane_mode_on").trim();
         return !result.contains("0");
     }
 

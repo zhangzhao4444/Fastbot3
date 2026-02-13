@@ -7,6 +7,9 @@
 
 ***More detail see at [Fastbot architecture](https://mp.weixin.qq.com/s/QhzqBFZygkIS6C69__smyQ)
 
+We gratefully acknowledge Prof. Ting Su, the SSE Lab at East China Normal University, Dr. Tianxiao Gu（Bytedance）, and Tiesong Liu (OPay) for their valuable support and contributions.
+
+
 ## Features
 
 * Compatible with the latest Android systems (Android 5–14 and beyond), including stock and manufacturer ROMs.
@@ -23,11 +26,23 @@
 
 ### Changelog
 
+**update 2026.2**
+* **LLM agent (AutodevAgent)**: Optional LLM-based custom events via `/sdcard/max.llm.tasks`: when the current screen matches a checkpoint (Activity + XPath), action selection can be handed to an LLM (e.g. for login or guided tasks). Supports optional Planner/Executor layering, first-step screenshot retry, session-scoped todo/scratchpad, and safe_mode/forbidden_texts. Configure LLM in `max.config` (e.g. `max.llm.enabled`, `max.llm.apiUrl`, `max.llm.model`). See [Configuration → LLM custom events](#llm-custom-events-maxllmtasks) and [AUTODEV_AGENT_LLM_TECHNICAL_ANALYSIS.md](./native/agent/AUTODEV_AGENT_LLM_TECHNICAL_ANALYSIS.md).
+* **Script-driven custom events (max.xpath.actions)**: Configurable action sequences via `/sdcard/max.xpath.actions` (e.g. fixed login flow by activity). Disabled by default when LLM-driven custom events (max.llm.tasks + url/apiKey) are configured.
+* **Unified avoidance rules (max.avoid.rules)**: A single config file `/sdcard/max.avoid.rules` replaces the former `max.widget.black` and `max.tree.pruning`. Use it to avoid or soften UI elements (e.g. logout, ads) via `action: "avoid"` (remove from tree + click shield) or `action: "modify"` (e.g. set `clickable: false`). See [Configuration → Unified avoidance rules](#unified-avoidance-rules-maxavoidrules).
+
 **update 2026.1**
-* **Double SARSA**: Default agent is now **DoubleSarsaAgent**, implementing N-step Double SARSA with two Q-functions (Q1, Q2) to reduce overestimation bias and improve action selection stability (see [DOUBLE_SARSA_ALGORITHM_EXPLANATION.md](./native/agent/DOUBLE_SARSA_ALGORITHM_EXPLANATION.md)).
-* **Dynamic state abstraction**: State granularity is tuned at runtime—finer when the same action leads to different screens or too many choices, coarser when states are over-split (see [STATE_ABSTRACTION_TECHNICAL_ARCHIVE.md](./native/desc/STATE_ABSTRACTION_TECHNICAL_ARCHIVE.md)).
+* **Double SARSA**: Default agent is now **DoubleSarsaAgent**, implementing N-step Double SARSA with two Q-functions (Q1, Q2) to reduce overestimation bias and improve action selection stability (see [DOUBLE_SARSA_ALGORITHM_EXPLANATION.md](./native/agent/DOUBLE_SARSA_ALGORITHM_EXPLANATION.md)). Experiment results (Widget Coverage vs Steps) show that Double SARSA consistently outperforms SARSA in coverage and convergence:
+
+  <img src="./doc/double_sarsa.jpg" width="560" alt="Double SARSA vs SARSA: Widget Coverage over Steps" />
+
+* **Dynamic state abstraction**: State granularity is tuned at runtime—finer when the same action leads to different screens or too many choices, coarser when states are over-split (see [STATE_ABSTRACTION_TECHNICAL_ARCHIVE.md](./native/desc/STATE_ABSTRACTION_TECHNICAL_ARCHIVE.md)). Experiment results (Widget Coverage vs Steps) show that dynamic state abstraction consistently outperforms the baseline:
+
+  <img src="./doc/dynamic_state.jpg" width="560" alt="Dynamic state abstraction vs old: Widget Coverage over Steps" />
+
 * **Performance & security**: FBM loader verifies buffer before deserialization; activity name length is capped when serializing; KeyCompareLessThan and related reuse-model code hardened for null-safety and format.
 * **XXH64**: Introduced xxHash 64-bit for fast state/action hashing in native layer.
+* Support Android 14～16.
 
 **update 2023.9**
 * Add Fastbot code analysis file for quick understanding of the source code. See [fastbot_code_analysis.md](./fastbot_code_analysis.md).
@@ -61,39 +76,33 @@
   sdk install gradle 7.6.2
   gradle wrapper
   ```
-* **NDK & CMake**: Required for building the C++ native (.so) part. You need to set **NDK_ROOT** (or **ANDROID_NDK_HOME**) to your NDK path; the build script uses `$NDK_ROOT/build/cmake/android.toolchain.cmake`. Recommended: NDK r21 or later. For step-by-step installation (Android Studio, sdkmanager, or manual), see **[NDK 安装指南 / NDK Install Guide](./native/NDK_INSTALL_GUIDE.md)**. If you see *CMake 'X.Y.Z' was not found in SDK*, either install that version via SDK Manager → SDK Tools → CMake (e.g. 3.22.1 or 3.18.1), or set the same version in `monkey/build.gradle` → `externalNativeBuild.cmake.version` to match the CMake version you have installed.
+* **NDK & CMake**: Required for building the C++ native (.so) part. You need to set **NDK_ROOT** (or **ANDROID_NDK_HOME**) to your NDK path; the build script uses `$NDK_ROOT/build/cmake/android.toolchain.cmake`. Recommended: NDK r21 or later. For step-by-step installation (Android Studio, sdkmanager, or manual), see **[NDK Install Guide](./native/NDK_INSTALL_GUIDE.md)**. If you see *CMake 'X.Y.Z' was not found in SDK*, either install that version via SDK Manager → SDK Tools → CMake (e.g. 3.22.1 or 3.18.1), or set the same version in `monkey/build.gradle` → `externalNativeBuild.cmake.version` to match the CMake version you have installed.
 
 ### Build Java (monkeyq.jar)
 
 From the **android** project root:
 
+**Automatic build (recommended)**  
+Use the helper script to build the jar and generate the dex jar in one go. The script picks the latest build-tools and uses **d8** (or **dx** if d8 is not available):
+
 ```shell
 ./gradlew clean makeJar
-```
-
-Then generate the dex jar. Newer SDKs use **d8** (dx was removed); the script auto-detects:
-
-```shell
-# Script uses latest build-tools and d8 (or dx if present)
 sh build_monkeyq.sh
 ```
 
-Manual step (use **d8** in recent build-tools, or **dx** in older ones):
+The result is `monkeyq.jar` in the project root (or as specified by the script).
+
+**Manual build**  
+If you prefer to run the dex step yourself (e.g. to pin a specific build-tools version):
 
 ```shell
+./gradlew clean makeJar
+# Then run one of the following (replace <version> with your build-tools version):
 # d8 (recommended when dx is not in your build-tools)
 $ANDROID_HOME/build-tools/<version>/d8 --min-api 22 --output=monkeyq.jar monkey/build/libs/monkey.jar
 # or dx (older SDK)
 $ANDROID_HOME/build-tools/<version>/dx --dex --min-sdk-version=22 --output=monkeyq.jar monkey/build/libs/monkey.jar
 ```
-
-Or use the helper script (preferred):
-
-```shell
-sh build_monkeyq.sh
-```
-
-The result is `monkeyq.jar` in the project root (or as specified by the script).
 
 ### Build native (.so)
 
@@ -113,6 +122,24 @@ The script builds for **armeabi-v7a**, **arm64-v8a**, **x86**, and **x86_64**. A
 ---
 
 ## Usage
+
+### One-click run (activate_fastbot.sh)
+
+For a quick run with default settings, use the **activate_fastbot.sh** script from the **android** directory. It will:
+
+- Push built artifacts (monkeyq.jar, dependency jars, native libs, framework.jar) to the device  
+- Push config files from `test/` if present (`max.config`, `max.llm.tasks`)  
+- Optionally install and enable ADBKeyBoard for Chinese/emoji input (if `test/ADBKeyBoard.apk` or `test/keyboardservice-debug.apk` exists)  
+- Run the monkey with env-based LLM config (`MAX_LLM_API_URL`, `MAX_LLM_API_KEY`) and pull logs to `android/logs/`
+
+**Prerequisites:** Build artifacts first (see [Build](#build)). Ensure one device is connected (`adb devices`).
+
+**Customize:** Edit the script to set the target package (`-p`), duration (`--running-minutes`), throttle (`--throttle`), and env vars (e.g. `LLM_LOGIN_ACCOUNT`, `LLM_LOGIN_PASSWORD`, `MAX_LLM_API_URL`, `MAX_LLM_API_KEY`) as needed.
+
+```shell
+# From android project root, after building
+sh activate_fastbot.sh
+```
 
 ### Environment preparation
 
@@ -143,18 +170,6 @@ adb -s <device_serial> shell CLASSPATH=/sdcard/monkeyq.jar:/sdcard/framework.jar
   adb push max.valid.strings /sdcard
   ```
 
-> For more details, see [中文手册](./handbook-cn.md).
-
-#### Optional: ADBKeyBoard (Chinese/emoji input)
-
-If you use **activate_fastbot.sh** and want IME text input (e.g. Chinese), the script pushes and installs **ADBKeyBoard** from `test/ADBKeyBoard.apk`. The APK **must target SDK 24+**; otherwise you will see `INSTALL_FAILED_DEPRECATED_SDK_VERSION`. Replace `android/test/ADBKeyBoard.apk` with a compatible build, e.g. from [senzhk/ADBKeyBoard releases](https://github.com/senzhk/ADBKeyBoard/releases) (e.g. **v2.4-dev** → `keyboardservice-debug.apk`), and save it as `android/test/ADBKeyBoard.apk`.
-
-**If log shows "Input (...) is successfully sent: true" but nothing appears in the input field:**
-
-1. **IME package must match** – The monkey uses `com.android.adbkeyboard/.AdbIME` by default. If you installed `keyboardservice-debug.apk` from senzhk/ADBKeyBoard, it uses the same package; other forks may use a different package. Run `adb shell ime list -s` and ensure your IME is enabled and set: `adb shell ime set <your.ime/.Component>`.
-2. **Current IME** – After tapping the input field, the app may switch back to the system keyboard. The monkey switches to ADBKeyBoard before sending; check the log line `Current IME: ...` to confirm it is your ADBKeyBoard component. If it is not, the focused field is bound to another IME and will not receive the text.
-3. **Focus** – The touch that focuses the input must happen before the IME event; the 600 ms delay after switching IME gives the system time to bind the connection. If the field loses focus (e.g. dialog closes), the text will not show.
-
 #### Required parameters
 
 | Parameter | Description |
@@ -177,7 +192,170 @@ If you use **activate_fastbot.sh** and want IME text input (e.g. Chinese), the s
 ```shell
 adb push data/fuzzing/ /sdcard/
 adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/fuzzing
+```  
+
+> For more details, see the [Chinese handbook](./handbook-cn.md).
+
+#### Optional: ADBKeyBoard (Chinese/emoji input)
+
+If you use **activate_fastbot.sh** and want IME text input (e.g. Chinese), the script pushes and installs **ADBKeyBoard** from `test/ADBKeyBoard.apk`. The APK **must target SDK 24+**; otherwise you will see `INSTALL_FAILED_DEPRECATED_SDK_VERSION`. Replace `android/test/ADBKeyBoard.apk` with a compatible build, e.g. from [senzhk/ADBKeyBoard releases](https://github.com/senzhk/ADBKeyBoard/releases) (e.g. **v2.4-dev** → `keyboardservice-debug.apk`), and save it as `android/test/ADBKeyBoard.apk`.
+
+**If log shows "Input (...) is successfully sent: true" but nothing appears in the input field:**
+
+1. **IME package must match** – The monkey uses `com.android.adbkeyboard/.AdbIME` by default. If you installed `keyboardservice-debug.apk` from senzhk/ADBKeyBoard, it uses the same package; other forks may use a different package. Run `adb shell ime list -s` and ensure your IME is enabled and set: `adb shell ime set <your.ime/.Component>`.
+2. **Current IME** – After tapping the input field, the app may switch back to the system keyboard. The monkey switches to ADBKeyBoard before sending; check the log line `Current IME: ...` to confirm it is your ADBKeyBoard component. If it is not, the focused field is bound to another IME and will not receive the text.
+3. **Focus** – The touch that focuses the input must happen before the IME event; the 600 ms delay after switching IME gives the system time to bind the connection. If the field loses focus (e.g. dialog closes), the text will not show.
+
+
+
+### Configuration
+
+#### LLM custom events (max.llm.tasks)
+
+Fastbot supports **LLM-based custom events**: when the current screen matches a configured checkpoint (Activity + XPath), the engine can hand over action selection to an LLM agent (e.g. for login flows or guided tasks) until the task completes or times out.
+
+**Where to configure**
+
+| Purpose | Path (on device) | Format |
+|---------|------------------|--------|
+| LLM switch, API URL, model, etc. | **`/sdcard/max.config`** | `key=value`, one per line |
+| Task list (checkpoints + descriptions) | **`/sdcard/max.llm.tasks`** | JSON array |
+
+* **LLM runtime**: Configure in **`/sdcard/max.config`**. Native reads it in `Preference::loadBaseConfig()`; if the file is missing or `max.llm.enabled=true` is not set, AutodevAgent will not call the LLM.
+* **Task definitions**: Configure in **`/sdcard/max.llm.tasks`**. See the JSON example below; push with: `adb push test/max.llm.tasks /sdcard/max.llm.tasks`.
+
+**LLM-related keys in max.config (example)**
+
+To avoid leaking secrets, **do not put the real API URL or API key in committed files**. Use placeholders in `max.config` and set the real values **on the device** when launching the monkey—the native layer resolves `max.llm.apiUrl` and `max.llm.apiKey` from the process environment when the value is `${VAR_NAME}` or when the value is empty (fallback: `MAX_LLM_API_URL`, `MAX_LLM_API_KEY`).
+
+```properties
+max.llm.enabled=true
+max.llm.apiUrl=${MAX_LLM_API_URL}
+max.llm.apiKey=${MAX_LLM_API_KEY}
+max.llm.model=gpt-4o-mini
+max.llm.maxTokens=512
+max.llm.timeoutMs=20000
 ```
+
+**Setting environment variables on the device**
+
+Push a `max.config` with placeholders (`max.llm.apiUrl=${MAX_LLM_API_URL}` and `max.llm.apiKey=${MAX_LLM_API_KEY}`), then set the real URL and key in the **same shell** that starts the monkey. **Important:** Each `adb shell` starts a new session, so `adb shell` → `export VAR=...` → `exit` → next `adb shell` will **not** see those variables. Use one of the following:
+
+- **One-liner:** Set env vars and run the monkey in a single `adb shell` command:
+  ```bash
+  adb shell "export MAX_LLM_API_URL='https://...'; export MAX_LLM_API_KEY='sk-...'; CLASSPATH=/sdcard/monkeyq.jar:/sdcard/framework.jar:/sdcard/fastbot-thirdpart.jar exec app_process /system/bin com.android.commands.monkey.Monkey -p <package> --agent reuseq --running-minutes 60 --throttle 300 -v -v"
+  ```
+- **Wrapper script (recommended):** Put exports and the monkey command in a script, push it to the device, then run that script so env and process share one shell session.
+  1. Create `run_fastbot.sh` on your PC:
+     ```bash
+     #!/system/bin/sh
+     export CLASSPATH=/sdcard/monkeyq.jar:/sdcard/framework.jar:/sdcard/fastbot-thirdpart.jar
+     export MAX_LLM_API_URL='https://your-llm-server.com/v1/chat/completions'
+     export MAX_LLM_API_KEY='your-api-key-here'
+     export LLM_LOGIN_ACCOUNT='user@example.com'   # optional, for task placeholder
+     export LLM_LOGIN_PASSWORD='secret'            # optional
+     exec app_process /system/bin com.android.commands.monkey.Monkey -p <package> --agent reuseq --running-minutes 60 --throttle 300 -v -v
+     ```
+     Replace URL, key, `<package>`, and optional account/password.
+  2. Push and run on the device:
+     ```bash
+     adb push run_fastbot.sh /data/local/tmp/
+     adb shell chmod +x /data/local/tmp/run_fastbot.sh
+     adb shell /data/local/tmp/run_fastbot.sh
+     ```
+     The script runs in one shell session, so the exports are visible to `app_process` and env vars persist for the whole run.
+
+Config template with placeholders: **`test/max.config`**; the native layer will read URL/key from the process environment at runtime.
+
+* **Path**: Push the task config file to `/sdcard/max.llm.tasks`.
+* **Format**: JSON array of task objects. Example:
+
+  ```json
+  [
+    {
+      "activity": "xxx",
+      "checkpoint_xpath": "//*[contains(@text,'Login') or contains(@content-desc,'Login')]",
+      "task_description": "On the login page: enter account ${LLM_LOGIN_ACCOUNT} and password ${LLM_LOGIN_PASSWORD}, then tap the login button.",
+      "max_steps": 10,
+      "max_duration_ms": 30000,
+      "safe_mode": false,
+      "forbidden_texts": ["Log out", "Delete account", "Sign out"],
+      "use_planner": true,
+      "use_llm_step_summary": true,
+      "max_times": 1,
+      "reset_count": false
+    }
+  ]
+  ```
+
+* **Environment variable substitution (action input only)**: To avoid sending account/password to the LLM, describe the task with placeholders in `task_description` (e.g. “enter account \${LLM_LOGIN_ACCOUNT} and password \${LLM_LOGIN_PASSWORD}”). The LLM will then return an INPUT action whose text is that placeholder (e.g. `"${LLM_LOGIN_ACCOUNT}"`). **Substitution happens only when executing the action**: when the native layer builds the final Operate for the device, it replaces `${VAR_NAME}` in the action’s input text with `getenv("VAR_NAME")`. So secrets are never sent to the LLM; they are read from the process environment only at execution time. Set env vars in the device shell before starting the monkey, e.g.:
+  ```bash
+  adb shell "export LLM_LOGIN_ACCOUNT='user@example.com'; export LLM_LOGIN_PASSWORD='secret'; CLASSPATH=... exec app_process ..."
+  ```
+  Example names: `LLM_LOGIN_ACCOUNT`, `LLM_LOGIN_PASSWORD`. Any `${OTHER_VAR}` in the **action input text** is substituted at execution.
+
+* **Main fields**:
+  * `activity`: Target activity (empty = any activity); match is then by `checkpoint_xpath` on the UI tree.
+  * `checkpoint_xpath`: XPath that must match on the current page to start this task.
+  * `task_description`: Natural language instruction for the LLM. Use placeholders like `${LLM_LOGIN_ACCOUNT}` here; the LLM may echo them in INPUT actions, and they are replaced from env only when the action is executed.
+  * `max_steps`: Maximum number of LLM steps allowed for this task (default 10). Session aborts when reached.
+  * `max_duration_ms`: Maximum duration in milliseconds for the LLM session (default 30000). Session aborts when exceeded.
+  * `use_planner`: If true, a Planner layer outputs semantic steps (e.g. tap/scroll/type_text) and an Executor performs them; if false, a single LLM call decides the next action each step (default true).
+  * `use_llm_step_summary`: If true, call the LLM for a one-line step summary after each action; if false, use a local summary (default false). Affects prompt size and latency.
+  * `max_times`: Maximum times this task can be matched and run in the whole test session (default 0 = unlimited). When set to e.g. 1, the task is triggered at most once.
+  * `reset_count`: If true, when the current activity switches to a different activity, this task’s run count is cleared—so re-entering the activity can match the task again until `max_times` is reached. If false, run count is never reset; `max_times` is a hard limit for the session (default false).
+  * `safe_mode`: If true, elements whose text/content-desc contain any `forbidden_texts` string are not clicked (session aborts).
+  * `forbidden_texts`: List of strings; when `safe_mode` is true, elements containing any of these are not clicked.
+
+* **LLM runtime**: Enable and configure the LLM in `max.config` (e.g. `max.llm.enabled=true`, `max.llm.apiUrl`, `max.llm.apiKey`, `max.llm.model`, etc.). The agent uses an OpenAI-compatible HTTP API.
+
+* **Example**: See `test/max.llm.tasks` in the repo for a sample. Push to device:  
+  `adb push test/max.llm.tasks /sdcard/max.llm.tasks`
+
+**LLM agent flow (summary)**: `Model::getOperateOpt` builds state, then calls `AutodevAgent::selectNextAction(activity, element, screenshot)`. If the current page matches a task’s activity + checkpoint_xpath, that task session runs and the LLM (optionally Planner→Executor) produces the next action as `ActionPtr`; otherwise normal RL is used. Config: `Preference::loadBaseConfig()` reads `max.config` for `LlmRuntimeConfig`, and `Preference::loadLlmTasks()` reads `max.llm.tasks` for the task list. See [AUTODEV_AGENT_LLM_TECHNICAL_ANALYSIS.md](./native/agent/AUTODEV_AGENT_LLM_TECHNICAL_ANALYSIS.md).
+
+#### Unified avoidance rules (max.avoid.rules)
+
+**Replaces** the former **max.widget.black** and **max.tree.pruning** with a single config file. Use it to hide or soften UI elements so the agent avoids clicking them (e.g. logout, ads).
+
+* **Path**: `/sdcard/max.avoid.rules`
+* **Format**: JSON array of rule objects. Push: `adb push test/max.avoid.rules /sdcard/max.avoid.rules`
+
+**Rule fields**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `activity` | Yes | Activity name this rule applies to; use `""` for all activities |
+| `action` | Yes | **`"avoid"`** — remove matched nodes from the tree and add their bounds to the click shield (model and fuzz will not click there); **`"modify"`** — only override properties (e.g. `clickable: false`), node stays in tree |
+| `xpath` | Conditional | XPath to match nodes; for `avoid` can be used alone or with `bounds`; for `modify` required |
+| `bounds` | No | Optional rect: `[x1,y1][x2,y2]` or `x1,y1,x2,y2`; values in [0, 1.1] are treated as relative to screen size |
+| `resourceid`, `text`, `contentdesc`, `classname`, `clickable` | No | Only for `action: "modify"`; e.g. `"clickable": "false"` to make element non-clickable in the model |
+
+**Example**
+
+```json
+[
+  {"activity": "com.example.MainActivity", "xpath": "//*[@resource-id='com.example:id/logout']", "action": "avoid"},
+  {"activity": "", "xpath": "//*[contains(@text,'ad')]", "action": "avoid"},
+  {"activity": "com.example.SettingsActivity", "xpath": "//*[@resource-id='id/danger_btn']", "action": "modify", "clickable": "false"}
+]
+```
+
+* **Deprecated**: `max.widget.black` and `max.tree.pruning` are no longer loaded. Migration and design details: [UNIFIED_AVOIDANCE_RULES_DESIGN.md](./native/events/UNIFIED_AVOIDANCE_RULES_DESIGN.md).
+
+#### Custom event sequence (max.xpath.actions)
+
+You can define **scripted action sequences** per activity (e.g. login flow) so that when the current activity matches, Fastbot runs your steps instead of the RL agent for that period.
+
+* **Path**: `/sdcard/max.xpath.actions`
+* **Format**: JSON array of **cases**. Each case: `activity`, `prob` (0–1 or 1 = 100%), `times`, `throttle` (ms), and `actions`: array of `{ "xpath"?, "action", "text"? }`.
+* **Action types**: `CLICK`, `LONG_CLICK`, `BACK`, `SCROLL_TOP_DOWN`, `SCROLL_BOTTOM_UP`, `SCROLL_LEFT_RIGHT`, `SCROLL_RIGHT_LEFT`. For `CLICK` with input, add `"text": "content to type"`.
+* **Behavior**: When not already running a case, a case matching the current activity is chosen with probability `prob`. Steps run in order; each step finds the element by `xpath` (except `BACK`) and builds a custom action. When the sequence finishes, control returns to the normal agent.
+* **Example**: See `test/max.xpath.actions`. Push: `adb push test/max.xpath.actions /sdcard/max.xpath.actions`
+
+* **Priority**: If **max.llm.tasks** is loaded and **LLM url and apiKey** are set in max.config, **max.xpath.actions** custom events are disabled for that run (LLM/RL only).
+
+Use **max.llm.tasks** when you need LLM-driven, checkpoint-triggered behavior (e.g. “on login screen, ask LLM to complete login”). Use **max.xpath.actions** for fixed, xpath-based sequences without LLM.
 
 ### Results
 

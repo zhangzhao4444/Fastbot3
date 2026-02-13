@@ -22,6 +22,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import com.android.commands.monkey.utils.FileUtils;
+
 import fi.iki.elonen.NanoHTTPD;
 
 // import static com.android.commands.monkey.utils.Config.takeScreenshotForEveryStep;
@@ -155,7 +157,7 @@ public class ProxyServer extends NanoHTTPD {
             Logger.println("    postFailureScreenshots: " + postFailureScreenshots);
             Logger.println("    logStamp: " + logStamp);
             Logger.println("    outputDir: " + outputDir);
-            if (!StoneUtils.ensureDir(outputDir)){
+            if (!FileUtils.ensureDir(outputDir)){
                 Logger.errorPrintln("Fail to create output dir: " + outputDir);
                 Logger.errorPrintln("Please specify a valid outputDir");
             }
@@ -430,16 +432,14 @@ public class ProxyServer extends NanoHTTPD {
     }
 
     private void saveLog(JSONObject obj, String file_name){
-        if (!StoneUtils.ensureDir(outputDir))
+        if (!FileUtils.ensureDir(outputDir))
         {
             Logger.errorPrintln("outputDir: '" + outputDir + "' not exists.");
         }
         File logFile = new File(outputDir, file_name);
-        try {
-            StoneUtils.writeStringToFile(logFile, String.format("%s\n", obj.toString()), true);
-        } catch (IOException e){
+        boolean ok = FileUtils.writeStringToFile(logFile, String.format("%s\n", obj.toString()), true);
+        if (!ok) {
             Logger.errorPrintln("Error when saving log: " + logFile);
-            e.printStackTrace();
         }
     }
 

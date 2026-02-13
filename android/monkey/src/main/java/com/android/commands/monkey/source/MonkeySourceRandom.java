@@ -44,7 +44,7 @@ import com.android.commands.monkey.events.base.MonkeyTouchEvent;
 import com.android.commands.monkey.events.base.MonkeyTrackballEvent;
 import com.android.commands.monkey.framework.AndroidDevice;
 import com.android.commands.monkey.utils.Logger;
-import com.android.commands.monkey.utils.Utils;
+import com.android.commands.monkey.utils.CoverageUtils;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -657,7 +657,7 @@ public class MonkeySourceRandom implements MonkeyEventSource {
         Arrays.sort(totalActivities);
 
 
-        Utils.activityStatistics(mOutputDirectory, testedActivities, totalActivities, new ArrayList<Map<String, String>>(), f, new HashMap<String, Integer>());
+        CoverageUtils.activityStatistics(mOutputDirectory, testedActivities, totalActivities, new ArrayList<Map<String, String>>(), f, new HashMap<String, Integer>());
 
     }
 

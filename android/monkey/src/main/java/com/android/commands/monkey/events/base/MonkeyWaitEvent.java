@@ -23,8 +23,10 @@ import com.android.commands.monkey.events.MonkeyEvent;
 import com.android.commands.monkey.utils.Logger;
 
 /**
- * monkey throttle event
+ * Wait event (sleep for a duration). Prefer {@link MonkeyThrottleEvent#obtain(long)} for pooled reuse.
+ * @deprecated Use {@link MonkeyThrottleEvent#obtain(long)} instead; this class is no longer instantiated by the codebase.
  */
+@Deprecated
 public class MonkeyWaitEvent extends MonkeyEvent {
     /* private */ long mWaitTime;
 

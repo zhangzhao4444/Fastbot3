@@ -20,38 +20,75 @@ package com.android.commands.monkey.events;
 
 import com.android.commands.monkey.events.base.MonkeyThrottleEvent;
 
-import java.util.LinkedList;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.List;
 import java.util.Random;
 
 /**
- * class for keeping a monkey event queue
+ * Queue for monkey events. Uses ArrayDeque for efficient head remove / tail add.
+ * When throttle &gt; 0, a Throttle event is appended after each throttlable event.
  */
-@SuppressWarnings("serial")
-public class MonkeyEventQueue extends LinkedList<MonkeyEvent> {
+public class MonkeyEventQueue {
 
-    private Random mRandom;
-    private long mThrottle;
-    private boolean mRandomizeThrottle;
+    private final Deque<MonkeyEvent> mQueue = new ArrayDeque<>();
+    private final Random mRandom;
+    private final long mThrottle;
+    private final boolean mRandomizeThrottle;
 
     public MonkeyEventQueue(Random random, long throttle, boolean randomizeThrottle) {
-        super();
         mRandom = random;
         mThrottle = throttle;
         mRandomizeThrottle = randomizeThrottle;
     }
 
-    @Override
+    /**
+     * Appends an event. If throttle &gt; 0 and the event is throttlable, a Throttle event is also appended.
+     */
     public void addLast(MonkeyEvent e) {
-        super.add(e);
-        if (e.isThrottlable()) {
+        mQueue.addLast(e);
+        if (mThrottle > 0 && e.isThrottlable()) {
             long throttle = mThrottle;
-            if (mRandomizeThrottle && (mThrottle > 0)) {
+            if (mRandomizeThrottle) {
                 throttle = mRandom.nextLong();
                 if (throttle < 0) throttle = -throttle;
                 throttle %= mThrottle;
                 ++throttle;
             }
-            super.add(MonkeyThrottleEvent.obtain(throttle));
+            mQueue.addLast(MonkeyThrottleEvent.obtain(throttle));
         }
+    }
+
+    /** Appends an event (same as addLast). Exists for compatibility with callers using add(). */
+    public void add(MonkeyEvent e) {
+        addLast(e);
+    }
+
+    /**
+     * Appends all events. When throttle &lt;= 0, appends directly without inserting Throttle events (faster).
+     */
+    public void addLastAll(List<MonkeyEvent> events) {
+        if (events == null) return;
+        if (mThrottle <= 0) {
+            for (int i = 0; i < events.size(); i++) {
+                mQueue.addLast(events.get(i));
+            }
+        } else {
+            for (int i = 0; i < events.size(); i++) {
+                addLast(events.get(i));
+            }
+        }
+    }
+
+    public boolean isEmpty() {
+        return mQueue.isEmpty();
+    }
+
+    public MonkeyEvent removeFirst() {
+        return mQueue.removeFirst();
+    }
+
+    public MonkeyEvent getFirst() {
+        return mQueue.getFirst();
     }
 }

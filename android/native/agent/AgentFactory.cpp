@@ -11,7 +11,6 @@
 #include "AgentFactory.h"
 #include "utils.hpp"
 #include "Model.h"
-// #include "ModelReusableAgent.h"  // Temporarily disabled for DoubleSarsa testing
 #include "DoubleSarsaAgent.h"
 #include "json.hpp"
 #include "Preference.h"
@@ -24,7 +23,7 @@ namespace fastbotx {
      * Creates corresponding Agent instance based on algorithm type (agentT).
      * 
      * Supported algorithm types:
-     * - All types: Creates DoubleSarsaAgent (Double SARSA) - ModelReusableAgent temporarily disabled for testing
+     * - All types: Creates DoubleSarsaAgent (Double SARSA)
      * 
      * Creation flow:
      * 1. Create Agent instance based on algorithm type
@@ -44,10 +43,6 @@ namespace fastbotx {
     AbstractAgentPtr
     AgentFactory::create(AlgorithmType agentT, const ModelPtr &model, DeviceType /*deviceType*/) {
         AbstractAgentPtr agent = nullptr;
-        
-        // Temporarily: Always create DoubleSarsaAgent for testing
-        // ModelReusableAgent has been disabled
-        // TODO: Re-enable ModelReusableAgent support after DoubleSarsa testing is complete
         DoubleSarsaAgentPtr doubleSarsaAgent = std::make_shared<DoubleSarsaAgent>(model);
         
         // Start background thread to periodically save model
@@ -60,7 +55,7 @@ namespace fastbotx {
                         std::weak_ptr<fastbotx::DoubleSarsaAgent>(doubleSarsaAgent));
         
         agent = doubleSarsaAgent;
-        BLOG("Created DoubleSarsaAgent (ModelReusableAgent temporarily disabled for testing)");
+        BLOG("Created DoubleSarsaAgent");
         
         return agent;
     }

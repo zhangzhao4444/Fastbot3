@@ -16,6 +16,7 @@
 #include "AbstractAgent.h"
 #include "AgentFactory.h"
 #include "Preference.h"
+#include "agent/AutodevAgent.h"
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -132,11 +133,6 @@ namespace fastbotx {
          * @brief Get next operation step from Element object, returning JSON format
          * 
          * This method wraps getOperateOpt() and converts the result to JSON string.
-         * 
-         * @param element XML Element object of the current page
-         * @param activity Activity name string
-         * @param deviceID Device ID string (default: empty string uses default device)
-         * @return Next operation step in JSON format
          */
         std::string getOperate(const ElementPtr &element, const std::string &activity,
                                const std::string &deviceID = "");
@@ -144,13 +140,7 @@ namespace fastbotx {
         /**
          * @brief Core method for getting next operation and updating RL model
          * 
-         * This is the main orchestration method that creates states, selects actions,
-         * and updates the reinforcement learning model.
-         * 
-         * @param element XML Element object of the current page
-         * @param activity Activity name string
-         * @param deviceID Device ID string (default: empty string uses default device)
-         * @return DeviceOperateWrapper object containing the next operation to perform
+         * Image for LLM is obtained in Java on demand when native triggers HTTP (no screenshot param).
          */
         OperatePtr getOperateOpt(const ElementPtr &element, const std::string &activity,
                                  const std::string &deviceID = "");
@@ -219,8 +209,6 @@ namespace fastbotx {
          * @param element XML Element object of the current page
          * @return Custom action if exists, nullptr otherwise
          */
-        ActionPtr getCustomActionIfExists(const std::string &activity, const ElementPtr &element) const;
-        
         /**
          * @brief Get or create an activity string pointer (memory optimization)
          * 
@@ -300,6 +288,11 @@ namespace fastbotx {
 
         /// Parameters for communicating with network-based action models
         NetActionParam _netActionParam;
+
+        /// Optional LLM-based GUI agent (AutodevAgent). When configured with a concrete
+        /// LlmClient implementation, this agent can temporarily take over action
+        /// selection for predefined tasks (e.g. login flows).
+        std::shared_ptr<AutodevAgent> _autodevAgent;
 
         /// Coverage tracking: visited activities and step count (performance optimization)
         std::unordered_set<std::string> _visitedActivities;

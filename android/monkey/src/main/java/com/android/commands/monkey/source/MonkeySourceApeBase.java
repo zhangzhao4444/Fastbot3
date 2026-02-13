@@ -60,11 +60,12 @@ import com.android.commands.monkey.events.base.MonkeyKeyEvent;
 import com.android.commands.monkey.events.base.MonkeySchemaEvent;
 import com.android.commands.monkey.events.base.MonkeyThrottleEvent;
 import com.android.commands.monkey.events.base.MonkeyTouchEvent;
-import com.android.commands.monkey.events.base.MonkeyWaitEvent;
 import com.android.commands.monkey.events.base.mutation.MutationAirplaneEvent;
 import com.android.commands.monkey.events.base.mutation.MutationAlwaysFinishActivityEvent;
 import com.android.commands.monkey.events.base.mutation.MutationWifiEvent;
 import com.android.commands.monkey.events.customize.ClickEvent;
+import com.android.commands.monkey.events.customize.DragEvent;
+import com.android.commands.monkey.events.customize.PinchOrZoomEvent;
 import com.android.commands.monkey.events.customize.ShellEvent;
 import com.android.commands.monkey.fastbot.client.ActionType;
 import com.android.commands.monkey.framework.AndroidDevice;
@@ -75,7 +76,7 @@ import com.android.commands.monkey.utils.Logger;
 import com.android.commands.monkey.utils.MonkeyUtils;
 import com.android.commands.monkey.utils.RandomHelper;
 import com.android.commands.monkey.utils.UUIDHelper;
-import com.android.commands.monkey.utils.Utils;
+import com.android.commands.monkey.utils.CoverageUtils;
 import com.android.commands.monkey.utils.AndroidVersions;
 import com.bytedance.fastbot.AiClient;
 
@@ -218,8 +219,10 @@ public abstract class MonkeySourceApeBase {
     }
 
     protected final void addEvents(List<MonkeyEvent> events) {
+        if (events == null || events.isEmpty()) return;
+        mQ.addLastAll(events);
         for (int i = 0; i < events.size(); i++) {
-            addEvent(events.get(i));
+            events.get(i).setEventId(mEventId++);
         }
     }
 
@@ -251,6 +254,21 @@ public abstract class MonkeySourceApeBase {
 
     public File getOutputDir() {
         return mOutputDirectory;
+    }
+
+    /**
+     * Returns the output directory, creating it if necessary. Caches the result in mCachedOutputDir.
+     */
+    protected File checkOutputDir() {
+        if (mCachedOutputDir != null && mCachedOutputDir.exists()) {
+            return mCachedOutputDir;
+        }
+        File dir = getOutputDir();
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        mCachedOutputDir = dir;
+        return dir;
     }
 
     public void clearPackage(String packageName) {
@@ -384,6 +402,13 @@ public abstract class MonkeySourceApeBase {
                 }
             }
         }
+        // All 10 candidates in black: try display center as fallback to avoid clicking black area
+        float cx = displayBounds.exactCenterX();
+        float cy = displayBounds.exactCenterY();
+        boolean[] centerShield = AiClient.checkPointsInShield(this.currentActivity, new float[]{cx}, new float[]{cy});
+        if (centerShield != null && centerShield.length > 0 && !centerShield[0]) {
+            return new PointF(cx, cy);
+        }
         return new PointF(mShieldXCoords[9], mShieldYCoords[9]);
     }
 
@@ -414,7 +439,7 @@ public abstract class MonkeySourceApeBase {
         long downAt = SystemClock.uptimeMillis();
         addEvent(new MonkeyTouchEvent(MotionEvent.ACTION_DOWN).setDownTime(downAt).addPointer(0, p1.x, p1.y).setIntermediateNote(false));
         if (waitTime > 0) {
-            addEvent(new MonkeyWaitEvent(waitTime));
+            addEvent(MonkeyThrottleEvent.obtain(waitTime));
         }
         addEvent(new MonkeyTouchEvent(MotionEvent.ACTION_UP).setDownTime(downAt).addPointer(0, p1.x, p1.y).setIntermediateNote(false));
     }
@@ -439,7 +464,7 @@ public abstract class MonkeySourceApeBase {
             long downAt = SystemClock.uptimeMillis();
             addEvent(new MonkeyTouchEvent(MotionEvent.ACTION_DOWN).setDownTime(downAt).addPointer(0, p.x, p.y).setIntermediateNote(false));
             if (waitTime > 0) {
-                addEvent(new MonkeyWaitEvent(waitTime));
+                addEvent(MonkeyThrottleEvent.obtain(waitTime));
             }
             addEvent(new MonkeyTouchEvent(MotionEvent.ACTION_UP).setDownTime(downAt).addPointer(0, p.x, p.y).setIntermediateNote(false));
         }
@@ -478,18 +503,17 @@ public abstract class MonkeySourceApeBase {
             float alpha = i / (float) steps;
             addEvent(new MonkeyTouchEvent(MotionEvent.ACTION_MOVE).setDownTime(downAt)
                     .addPointer(0, lerp(start.x, end.x, alpha), lerp(start.y, end.y, alpha)).setIntermediateNote(true).setType(1));
-            addEvent(new MonkeyWaitEvent(waitTime));
+            addEvent(MonkeyThrottleEvent.obtain(waitTime));
         }
         addEvent(new MonkeyTouchEvent(MotionEvent.ACTION_UP).setDownTime(downAt).addPointer(0, end.x, end.y).setIntermediateNote(false).setType(1));
     }
 
     protected void doInput(ModelAction action) {
         String inputText = action.getInputText();
-        boolean useAdbInput = action.isUseAdbInput();
         // Only send IME/text input when the action target is an editable widget (EditText).
         // Otherwise e.g. clicking a button ("获取短信验证码") would focus the button and
         // commitText() would go nowhere, so nothing appears in the UI.
-        if (inputText != null && !inputText.equals("") && action.isEditText()) {
+        if (inputText != null && !inputText.isEmpty() && action.isEditText()) {
             if (mVerbose > 0) Logger.println("Input text is " + inputText);
             if (action.isClearText()) {
                 generateClearEvent(action.getBoundingBox());
@@ -500,14 +524,9 @@ public abstract class MonkeySourceApeBase {
                 }
                 return;
             }
-            if (!useAdbInput) {
-                if (mVerbose > 0) Logger.println("MonkeyIMEEvent added " + inputText);
-                addEvent(new MonkeyIMEEvent(inputText));
-            } else {
-                if (mVerbose > 0) Logger.println("MonkeyCommandEvent added " + inputText);
-                addEvent(new MonkeyCommandEvent("input text " + inputText));
-            }
-        } else if (inputText != null && !inputText.equals("")) {
+            if (mVerbose > 0) Logger.println("MonkeyIMEEvent added " + inputText);
+            addEvent(new MonkeyIMEEvent(inputText));
+        } else if (inputText != null && !inputText.isEmpty()) {
             if (mVerbose > 0) Logger.println("Skip IME input for non-edit widget: " + inputText);
         } else {
             if (lastInputTimestamp == timestamp) {
@@ -515,7 +534,7 @@ public abstract class MonkeySourceApeBase {
                 return;
             }
             lastInputTimestamp = timestamp;
-            if (action.isEditText() || AndroidDevice.isVirtualKeyboardOpened()) {
+            if (action.isEditText()) {
                 generateKeyEvent(KeyEvent.KEYCODE_ESCAPE);
             }
         }
@@ -550,14 +569,14 @@ public abstract class MonkeySourceApeBase {
     protected void generateShellEvents() {
         if (execPreShell) {
             String command = ShellProvider.randomNext();
-            if (!"".equals(command) && (firstExecShell || execPreShellEveryStartup)) {
+            if (!command.isEmpty() && (firstExecShell || execPreShellEveryStartup)) {
                 if (mVerbose > 0) Logger.println("shell: " + command);
                 try {
                     AndroidDevice.executeCommandAndWaitFor(command.split(" "));
                     sleep(throttleForExecPreShell);
                     this.firstExecShell = false;
                 } catch (Exception e) {
-                    // ignore
+                    if (mVerbose > 0) Logger.println("// execPreShell failed: " + e.getMessage());
                 }
             }
         }
@@ -569,13 +588,13 @@ public abstract class MonkeySourceApeBase {
                 String schema = SchemaProvider.randomNext();
                 if (schemaTraversalMode) {
                     if (schemaStack.empty()) {
-                        ArrayList<String> strings = SchemaProvider.getStrings();
+                        List<String> strings = SchemaProvider.getStrings();
                         for (String s : strings) schemaStack.push(s);
                     }
                     if (schemaStack.empty()) return;
                     schema = schemaStack.pop();
                 }
-                if ("".equals(schema)) return;
+                if (schema.isEmpty()) return;
                 if (mVerbose > 0) Logger.println("fastbot exec schema: " + schema);
                 addEvent(new MonkeySchemaEvent(schema));
                 generateThrottleEvent(throttleForExecPreSchema);
@@ -663,11 +682,29 @@ public abstract class MonkeySourceApeBase {
     protected void generateFuzzingEvents(FuzzAction action) {
         List<CustomEvent> events = action.getFuzzingEvents();
         long throttle = action.getThrottle();
+        PointF shieldReuse = new PointF();
         for (CustomEvent event : events) {
             if (event instanceof ClickEvent) {
-                PointF point = ((ClickEvent) event).getPoint();
-                point = shieldBlackRect(point);
-                ((ClickEvent) event).setPoint(point);
+                ClickEvent click = (ClickEvent) event;
+                shieldReuse.set(click.getX(), click.getY());
+                PointF s = shieldBlackRect(shieldReuse);
+                click.setPoint(s.x, s.y);
+            } else if (event instanceof DragEvent) {
+                DragEvent drag = (DragEvent) event;
+                drag.applyShieldInPlace((x, y, out, off) -> {
+                    shieldReuse.set(x, y);
+                    PointF s = shieldBlackRect(shieldReuse);
+                    out[off] = s.x;
+                    out[off + 1] = s.y;
+                });
+            } else if (event instanceof PinchOrZoomEvent) {
+                PinchOrZoomEvent pinch = (PinchOrZoomEvent) event;
+                pinch.applyShieldInPlace((x, y, out, off) -> {
+                    shieldReuse.set(x, y);
+                    PointF s = shieldBlackRect(shieldReuse);
+                    out[off] = s.x;
+                    out[off + 1] = s.y;
+                });
             }
             for (MonkeyEvent me : event.generateMonkeyEvents()) {
                 if (me == null) throw new RuntimeException();
@@ -738,7 +775,7 @@ public abstract class MonkeySourceApeBase {
         }
         String[] totalActivities = set.toArray(new String[0]);
         Arrays.sort(totalActivities);
-        Utils.activityStatistics(mOutputDirectory, testedActivities, totalActivities, new ArrayList<Map<String, String>>(), f, new HashMap<String, Integer>());
+        CoverageUtils.activityStatistics(mOutputDirectory, testedActivities, totalActivities, new ArrayList<Map<String, String>>(), f, new HashMap<String, Integer>());
     }
 
     /** Subclasses implement to return a fuzzing action (e.g. from native or simplified list). */

@@ -16,6 +16,7 @@
 #include "Action.h"
 #include "DeviceOperateWrapper.h"
 #include "Element.h"
+#include "../llm/LlmTypes.h"
 
 
 namespace fastbotx {
@@ -34,6 +35,7 @@ namespace fastbotx {
         std::string contentDescription;
         std::string text;
         std::string classname;
+        std::string clickable;  ///< "true" | "false" | "" (skip); used by tree pruning only
         std::string activity;
         std::string command;
         std::vector<float> bounds;
@@ -41,7 +43,6 @@ namespace fastbotx {
         bool clearText{};
         int throttle{};
         int waitTime{};
-        bool adbInput{};
 
         ~CustomAction() override = default;
     };
@@ -49,18 +50,41 @@ namespace fastbotx {
     typedef std::shared_ptr<CustomAction> CustomActionPtr;
     typedef std::vector<CustomActionPtr> CustomActionPtrVec;
 
-    class CustomEvent {
-    public:
-        float prob;
-        int times;
-        std::string activity;
-
-        CustomActionPtrVec actions;
-    };
-
-    typedef std::shared_ptr<CustomEvent> CustomEventPtr;
-    typedef std::vector<CustomEventPtr> CustomEventPtrVec;
     typedef std::map<std::string, std::vector<RectPtr>> StringRectsMap;
+
+    /// Unified avoidance rule: avoid (delete + rect cache) or modify (property overrides only).
+    struct AvoidRule {
+        std::string activity;
+        XpathPtr xpath;
+        std::vector<float> bounds;  // size 4 when present
+        enum class Action { Avoid, Modify };
+        Action action{Action::Avoid};
+        std::string resourceID;
+        std::string text;
+        std::string contentDescription;
+        std::string classname;
+        std::string clickable;
+    };
+    typedef std::shared_ptr<AvoidRule> AvoidRulePtr;
+    typedef std::vector<AvoidRulePtr> AvoidRulePtrVec;
+
+    /// One step in a max.xpath.actions case: xpath locator + action type + optional text (for CLICK input).
+    struct XpathActionStep {
+        std::string xpath;
+        std::string actionType;  // CLICK, LONG_CLICK, BACK, SCROLL_TOP_DOWN, etc.
+        std::string text;       // optional; for CLICK when input is needed
+        bool clearText{false};
+        int throttle{0};        // per-step override; 0 = use case throttle
+        int waitTime{0};        // wait after this step (ms)
+    };
+    /// One case in max.xpath.actions: activity + prob + throttle + sequence of steps.
+    struct XpathCase {
+        std::string activity;
+        float prob{1.0f};        // 0..1 or 1 = 100%
+        int times{1};
+        int throttle{0};
+        std::vector<XpathActionStep> steps;
+    };
 
     class Preference {
     public:
@@ -68,10 +92,11 @@ namespace fastbotx {
 
         static std::shared_ptr<Preference> inst();
 
-        //@brief use custom preference correct the root xml, and return a custom action,
-        //@return nullptr if no custom action happened
-        ActionPtr
-        resolvePageAndGetSpecifiedAction(const std::string &activity, const ElementPtr &rootXML);
+        /**
+         * Resolve the page: apply black widgets, tree pruning, valid texts, etc. to the element tree.
+         * Call this before using the element for state/AutodevAgent when custom actions (max.xpath.actions) are not used.
+         */
+        void resolvePage(const std::string &activity, const ElementPtr &rootXML);
 
         //@brief patch operate: 1. fuzz input text 2. ..
         void patchOperate(const OperatePtr &opt);
@@ -92,27 +117,50 @@ namespace fastbotx {
 
         int getForceMaxBlockStateTimes() const { return this->_forceMaxBlockStateTimes; }
 
+        /**
+         * Get runtime LLM configuration (OpenAI-compatible HTTP endpoint).
+         */
+        const LlmRuntimeConfig &getLlmRuntimeConfig() const { return this->_llmRuntimeConfig; }
+
+        /**
+         * Load LLM task configurations from external file.
+         * This is typically called from loadConfigs().
+         */
+        void loadLlmTasks();
+
+        /**
+         * Match all configured LLM tasks for the current activity and page,
+         * then randomly pick one whose checkpoint XPath matches the given root XML.
+         *
+         * @param activity Current activity name.
+         * @param rootXML  Current page root element.
+         * @return A matched LlmTaskConfigPtr or nullptr if no task matches.
+         */
+        LlmTaskConfigPtr matchLlmTask(const std::string &activity,
+                                      const ElementPtr &rootXML);
+
+        /** True iff this task is still allowed to start (run count < max_times when max_times > 0). */
+        bool canStartLlmTask(const LlmTaskConfigPtr &cfg) const;
+        /** Call when an LLM session is actually started for this task (so max_times is counted per session start, not per match). */
+        void incrementLlmTaskRunCount(const LlmTaskConfigPtr &cfg);
+
+        /**
+         * Get the next custom action from max.xpath.actions for the current activity and page.
+         * When a case is in progress, returns the next step (element located by xpath); otherwise
+         * may start a new case with probability prob. BACK/SCROLL do not require xpath match.
+         */
+        ActionPtr getCustomActionFromXpath(const std::string &activity,
+                                          const ElementPtr &rootXML);
+
         ~Preference();
 
     protected:
 
-        ///after the activity matches, resolve the black widgets, tree pruning, valid texts
-        void resolvePage(const std::string &activity, const ElementPtr &rootXML);
-
         void deMixResMapping(const ElementPtr &rootXML);
 
-        bool patchActionBounds(const CustomActionPtr &action, const ElementPtr &);
+        /// Single-pass resolve: avoid (delete + rect cache) + modify (property overrides), deMixResMapping, cachePageTexts, pruningValidTexts, then recurse.
+        void resolveElementWithAvoid(const ElementPtr &element, const std::string &activity);
 
-        // recursive resolve the elems, than resolve the black widgets, tree pruning, valid texts
-        void resolveElement(const ElementPtr &element, const std::string &activity);
-
-        // recursive
-        void resolveBlackWidgets(const ElementPtr &rootXML, const std::string &activity);
-
-        //  not recursive
-        void resolveTreePruning(const ElementPtr &elem, const std::string &activity);
-
-        // not recursive
         void pruningValidTexts(const ElementPtr &element);
 
         // recursive
@@ -131,25 +179,17 @@ namespace fastbotx {
 
         void loadBaseConfig();
 
-        void loadActions();
+        void loadAvoidRules();
 
-        void loadBlackWidgets();
+        void loadXpathActions();
 
         void loadWhiteBlackList();
 
         void loadInputTexts();
 
-        void loadTreePruning();
-
     private:
 
         static std::shared_ptr<Preference> _preferenceInst;
-
-        std::queue<ActionPtr> _currentActions;
-
-        CustomEventPtrVec _customEvents;
-        // remember the times of this event being visited.
-        std::map<CustomEventPtr, int> _eventTimes;
 
         std::vector<std::string> _whiteList;
         std::vector<std::string> _blackList;
@@ -158,10 +198,8 @@ namespace fastbotx {
         std::vector<std::string> _fuzzingTexts;
         std::deque<std::string> _pageTextsCache;
 
-        CustomActionPtrVec _blackWidgetActions;
-        CustomActionPtrVec _treePrunings;
-        // Performance optimization: Group tree prunings by activity for faster lookup
-        std::map<std::string, CustomActionPtrVec> _treePruningsByActivity;
+        AvoidRulePtrVec _avoidRules;
+        std::map<std::string, AvoidRulePtrVec> _avoidRulesByActivity;
 
         std::map<std::string, std::string> _resMapping;
         std::map<std::string, std::string> _resMixedMapping;
@@ -176,9 +214,28 @@ namespace fastbotx {
         int _forceMaxBlockStateTimes{};
         RectPtr _rootScreenSize;
 
+        /// LLM task configurations loaded from external file.
+        std::vector<LlmTaskConfigPtr> _llmTasks;
+        /// Per-task run count (key = activity + "|" + checkpointXpathString) for maxTimes limit.
+        std::map<std::string, int> _llmTaskRunCount;
+        /// Last activity passed to matchLlmTask; used to detect activity switch and clear run counts when resetCount is true.
+        std::string _lastLlmActivity;
+
+        /// Runtime LLM HTTP configuration loaded from base config.
+        LlmRuntimeConfig _llmRuntimeConfig;
+
+        /// max.xpath.actions: cases and current execution state.
+        std::vector<XpathCase> _xpathActionCases;
+        /// Remaining trigger count per case (times in config); when 0 the case is not chosen.
+        std::vector<int> _xpathCaseRemainingTimes;
+        int _currentXpathCaseIdx{-1};
+        int _currentXpathStepIdx{0};
+
         static std::string loadFileContent(const std::string &fileAbsolutePath);
 
         StringRectsMap _cachedBlackWidgetRects;
+        /// Bounds-only avoid rects for current resolvePage(activity), used to delete elements whose center is inside.
+        std::vector<RectPtr> _currentBoundsOnlyAvoidRects;
 
     public:
         static std::string InvalidProperty;
@@ -186,11 +243,11 @@ namespace fastbotx {
         static std::string DefaultResMappingFilePath;
         static std::string BaseConfigFilePath;      // /sdcard/max.config
         static std::string InputTextConfigFilePath; // /sdcard/max.strings
-        static std::string ActionConfigFilePath;    // /sdcard/max.xpath.actions
+        static std::string LlmTaskConfigFilePath;   // /sdcard/max.llm.tasks
         static std::string WhiteListFilePath;       // /sdcard/awl.strings
         static std::string BlackListFilePath;       // /sdcard/abl.strings
-        static std::string BlackWidgetFilePath;     // /sdcard/max.widget.black
-        static std::string TreePruningFilePath;     // /sdcard/max.tree.pruning
+        static std::string AvoidRulesFilePath;      // /sdcard/max.avoid.rules (unified black + pruning)
+        static std::string XpathActionsFilePath;    // /sdcard/max.xpath.actions (custom event sequence)
         static std::string ValidTextFilePath;       // /sdcard/max.valid.strings
         static std::string FuzzingTextsFilePath;    // /sdcard/max.fuzzing.strings
         static std::string PackageName;

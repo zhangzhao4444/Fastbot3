@@ -12,20 +12,22 @@
 extern "C" {
 #endif
 
-// getAction
+// getAction (returns operate as JSON string)
 JNIEXPORT jstring JNICALL
-Java_com_bytedance_fastbot_AiClient_b0bhkadf(JNIEnv *env, jobject, jstring, jstring);
+Java_com_bytedance_fastbot_AiClient_getOperateJsonNative(JNIEnv *env, jobject, jstring, jstring);
 
-//InitAgent
+// InitAgent
 JNIEXPORT void JNICALL
-Java_com_bytedance_fastbot_AiClient_fgdsaf5d(JNIEnv *env, jobject, jint, jstring, jint);
+Java_com_bytedance_fastbot_AiClient_initAgentNative(JNIEnv *env, jobject, jint, jstring, jint);
 
-//loadResMapping
-JNIEXPORT void JNICALL Java_com_bytedance_fastbot_AiClient_jdasdbil(JNIEnv *env, jobject, jstring);
+// loadResMapping
+JNIEXPORT void JNICALL
+Java_com_bytedance_fastbot_AiClient_loadResMappingNative(JNIEnv *env, jobject, jstring);
 
+// single-point shield check
 JNIEXPORT jboolean JNICALL
-Java_com_bytedance_fastbot_AiClient_nkksdhdk(JNIEnv *env, jobject, jstring activity, jfloat pointX,
-                                             jfloat pointY);
+Java_com_bytedance_fastbot_AiClient_checkPointInShieldNative(JNIEnv *env, jobject, jstring activity, jfloat pointX,
+                                                             jfloat pointY);
 JNIEXPORT jbooleanArray JNICALL
 Java_com_bytedance_fastbot_AiClient_checkPointsInShieldNative(JNIEnv *env, jobject, jstring activity,
                                                               jfloatArray xCoords, jfloatArray yCoords);
@@ -44,6 +46,10 @@ Java_com_bytedance_fastbot_AiClient_getCoverageJsonNative(JNIEnv *env, jobject);
 JNIEXPORT jstring JNICALL
 Java_com_bytedance_fastbot_AiClient_getNextFuzzActionNative(JNIEnv *env, jobject, jint displayWidth,
                                                             jint displayHeight, jboolean simplify);
+
+/** Register AiClient instance as LLM HTTP runner for native when libcurl is not available. */
+JNIEXPORT void JNICALL
+Java_com_bytedance_fastbot_AiClient_nativeRegisterLlmHttpRunner(JNIEnv *env, jobject thiz);
 
 #ifdef __cplusplus
 }

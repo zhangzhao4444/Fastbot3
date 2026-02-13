@@ -10,6 +10,7 @@
 #include <regex>
 #include <mutex>
 #include <cstring>
+#include <cstdlib>
 #include <climits>
 #include "utils.hpp"
 #include "Preference.h"
@@ -20,6 +21,7 @@
 
 namespace fastbotx {
 
+    static void substituteEnvVars(std::string &s);
 
     /**
      * @brief Default constructor for CustomAction
@@ -84,7 +86,6 @@ namespace fastbotx {
         opt->clear = this->clearText;
         opt->throttle = static_cast<float>(this->throttle);
         opt->waitTime = this->waitTime;
-        opt->adbInput = this->adbInput;
         opt->allowFuzzing = this->allowFuzzing;
         
         return opt;
@@ -176,11 +177,99 @@ namespace fastbotx {
         // Extract resource-id='...'
         extractQuotedValue("resource-id='", this->resourceID);
         
-        // Extract text='...'
-        extractQuotedValue("text='", this->text);
+        // Helper: extract value from contains(@attr,'val') or contains(@attr,"val") (handles optional space and Unicode quotes)
+        auto extractContainsValue = [&xpathString](const char* prefix, size_t prefixLen, std::string& out) -> bool {
+            size_t pos = xpathString.find(prefix);
+            if (pos == std::string::npos) return false;
+            size_t i = pos + prefixLen;
+            while (i < xpathString.length() && (xpathString[i] == ' ' || xpathString[i] == ',')) ++i;
+            if (i >= xpathString.length()) return false;
+            char openQ = xpathString[i];
+            if (openQ != '\'' && openQ != '"') {
+                // Unicode single quotes (UTF-8: E2 80 98 / E2 80 99)
+                if (i + 2 < xpathString.length() && (unsigned char)xpathString[i] == 0xE2
+                    && (unsigned char)xpathString[i+1] == 0x80 && ((unsigned char)xpathString[i+2] == 0x98 || (unsigned char)xpathString[i+2] == 0x99)) {
+                    openQ = '\''; // treat as single quote for matching
+                    i += 3;
+                } else
+                    return false;
+            } else {
+                ++i;
+            }
+            size_t start = i;
+            if (openQ == '\'') {
+                while (i < xpathString.length() && xpathString[i] != '\'') {
+                    if ((unsigned char)xpathString[i] == 0xE2 && i + 2 < xpathString.length()
+                        && (unsigned char)xpathString[i+1] == 0x80 && (unsigned char)xpathString[i+2] == 0x99)
+                        break; // Unicode right single quote
+                    ++i;
+                }
+            } else {
+                i = xpathString.find('"', i);
+            }
+            if (i > start) {
+                out = xpathString.substr(start, i - start);
+                return true;
+            }
+            return false;
+        };
         
-        // Extract content-desc='...'
+        // Helper: extract value between first two single quotes after a prefix (robust for any UTF-8 content)
+        auto extractBetweenTwoSingleQuotes = [&xpathString](const char* prefix, std::string& out) -> bool {
+            size_t pos = xpathString.find(prefix);
+            if (pos == std::string::npos) return false;
+            size_t after = pos + strlen(prefix);
+            size_t q1 = xpathString.find('\'', after);
+            if (q1 == std::string::npos) return false;
+            size_t q2 = xpathString.find('\'', q1 + 1);
+            if (q2 == std::string::npos || q2 <= q1 + 1) return false;
+            out = xpathString.substr(q1 + 1, q2 - q1 - 1);
+            return true;
+        };
+        
+        // Extract text='...' (exact) or contains(@text,'...') / contains(@text,"...")
+        extractQuotedValue("text='", this->text);
+        if (this->text.empty()) {
+            if (!extractContainsValue("contains(@text", 13, this->text)
+                && !extractBetweenTwoSingleQuotes("contains(@text", this->text)) {
+                size_t pos = xpathString.find("contains(@text,'");
+                if (pos != std::string::npos) {
+                    size_t start = pos + 15;
+                    size_t end = xpathString.find('\'', start);
+                    if (end != std::string::npos) this->text = xpathString.substr(start, end - start);
+                }
+            }
+            if (this->text.empty()) {
+                size_t pos = xpathString.find("contains(@text,\"");
+                if (pos != std::string::npos) {
+                    size_t start = pos + 16;
+                    size_t end = xpathString.find('"', start);
+                    if (end != std::string::npos) this->text = xpathString.substr(start, end - start);
+                }
+            }
+        }
+        
+        // Extract content-desc='...' (exact) or contains(@content-desc,'...') / contains(@content-desc,"...")
         extractQuotedValue("content-desc='", this->contentDescription);
+        if (this->contentDescription.empty()) {
+            if (!extractContainsValue("contains(@content-desc", 22, this->contentDescription)
+                && !extractBetweenTwoSingleQuotes("contains(@content-desc", this->contentDescription)) {
+                size_t pos = xpathString.find("contains(@content-desc,'");
+                if (pos != std::string::npos) {
+                    size_t start = pos + 23;
+                    size_t end = xpathString.find('\'', start);
+                    if (end != std::string::npos) this->contentDescription = xpathString.substr(start, end - start);
+                }
+            }
+            if (this->contentDescription.empty()) {
+                size_t pos = xpathString.find("contains(@content-desc,\"");
+                if (pos != std::string::npos) {
+                    size_t start = pos + 24;
+                    size_t end = xpathString.find('"', start);
+                    if (end != std::string::npos) this->contentDescription = xpathString.substr(start, end - start);
+                }
+            }
+        }
         
         // Extract class='...'
         extractQuotedValue("class='", this->clazz);
@@ -224,9 +313,19 @@ namespace fastbotx {
             this->operationAND = true;
         }
         
-        BDLOG(" xpath parsed: res id %s, text %s, index %d, content %s %d",
-              this->resourceID.c_str(), this->text.c_str(), this->index,
-              this->contentDescription.c_str(), this->operationAND);
+        // Human-friendly xpath parse log for debug
+        BDLOG("    xpath parsed: resource-id=\"%s\", text=\"%s\", content-desc=\"%s\", index=%d, useAND=%s",
+              this->resourceID.c_str(),
+              this->text.c_str(),
+              this->contentDescription.c_str(),
+              this->index,
+              this->operationAND ? "true" : "false");
+        if (this->text.empty() && this->contentDescription.empty()
+            && xpathString.find("contains(") != std::string::npos) {
+            size_t maxLen = (xpathString.length() < 120) ? xpathString.length() : 120;
+            BDLOG(" xpath contains() but parsed text/content empty; first %zu chars: %s",
+                  maxLen, xpathString.substr(0, maxLen).c_str());
+        }
     }
 
 
@@ -274,169 +373,11 @@ namespace fastbotx {
     Preference::~Preference() {
         this->_resMixedMapping.clear();
         this->_resMapping.clear();
-        this->_blackWidgetActions.clear();
-        this->_treePrunings.clear();
+        this->_avoidRules.clear();
+        this->_avoidRulesByActivity.clear();
         this->_inputTexts.clear();
         this->_blackList.clear();
-        std::queue<ActionPtr> empty;
-        this->_currentActions.swap(empty);
-        this->_customEvents.clear();
         this->_validTexts.clear();
-    }
-
-    /**
-     * @brief Resolve page and get specified custom action
-     * 
-     * This is the main entry point for page processing. It:
-     * 1. Preprocesses the UI tree (black widgets, tree pruning, etc.)
-     * 2. Checks for pending custom actions in the queue
-     * 3. If queue is empty, matches custom events based on probability
-     * 4. Returns the first action from the queue
-     * 
-     * @param activity Current activity name
-     * @param rootXML Root Element of the UI tree
-     * 
-     * @return ActionPtr - Custom action if available, nullptr otherwise
-     * 
-     * @note Custom events are matched based on:
-     *       - Activity name match
-     *       - Random probability < event.prob
-     *       - Remaining times > 0
-     * 
-     * @note Performance optimizations:
-     *       - Early activity check to avoid unnecessary random number generation
-     *       - Removed redundant empty() check inside loop
-     *       - Moved logging after matching checks to reduce overhead
-     */
-    ActionPtr Preference::resolvePageAndGetSpecifiedAction(const std::string &activity,
-                                                           const ElementPtr &rootXML) {
-        if (nullptr != rootXML)
-            this->resolvePage(activity, rootXML);
-
-        // resolve action
-        ActionPtr returnAction = nullptr;
-        if (this->_currentActions.empty()) {
-            // Performance: Check activity match first to avoid unnecessary random number generation
-            // Most events won't match the current activity, so early exit saves computation
-            for (const CustomEventPtr &customEvent: this->_customEvents) {
-                // Early exit: Check activity match first (fastest check)
-                if (customEvent->activity != activity) {
-                    continue;
-                }
-                
-                // Early exit: Check times before generating random number
-                if (customEvent->times <= 0) {
-                    continue;
-                }
-                
-                // Only generate random number if activity matches and times > 0
-                float eventRate = randomInt(0, 10) / 10.0;
-                
-                // Check probability match
-                if (eventRate < customEvent->prob) {
-                    // Performance: Removed redundant empty() check - we know queue is empty here
-                    // (entered this block only if _currentActions.empty() was true)
-                    BLOG("custom event matched: %s actions size: %d", activity.c_str(),
-                         (int) customEvent->actions.size());
-                    
-                    // Add all actions to queue
-                    for (const auto &matchedAction: customEvent->actions) {
-                        this->_currentActions.push(matchedAction);
-                    }
-                    
-                    customEvent->times--;
-                    
-                    // Performance: Log detailed info only when event matches
-                    BLOG("customEvent activities %s, page event is %s, event times %d , rate is %f/%f",
-                         customEvent->activity.c_str(), activity.c_str(), 
-                         customEvent->times, eventRate, customEvent->prob);
-                }
-            }
-        }
-        
-        // Process queue if not empty
-        if (!this->_currentActions.empty()) {
-            BLOG("check custom action queue");
-            auto frontAction = this->_currentActions.front();
-            this->_currentActions.pop();
-            
-            // Performance: Cache action type check
-            ActionType actionType = frontAction->getActionType();
-            if (actionType >= ActionType::CLICK &&
-                actionType <= ActionType::SCROLL_RIGHT_LEFT) {
-                // android action type
-                auto customAction = std::dynamic_pointer_cast<CustomAction>(frontAction);
-                // Security: Check if dynamic_cast succeeded
-                if (!customAction) {
-                    BLOGE("Failed to cast action to CustomAction");
-                    return nullptr;
-                }
-                if (rootXML && !this->patchActionBounds(customAction, rootXML)) {
-                    return nullptr; // do nothing when action match failed
-                }
-                // Security: Check xpath before accessing
-                if (customAction->xpath) {
-                    BLOG("custom action %s happened", customAction->xpath->toString().c_str());
-                }
-                BLOG("custom action: %s happened", customAction->toString().c_str());
-                return customAction;
-            }
-        }
-        return returnAction;
-    }
-
-    /**
-     * @brief Patch action bounds by finding matching element in UI tree
-     * 
-     * Finds the first element matching the action's xpath and sets the action's bounds
-     * to match the element's bounds. This is used to convert xpath-based actions to
-     * bounds-based actions for execution.
-     * 
-     * @param action The custom action that needs bounds patching
-     * @param rootXML The XML tree of the current page
-     * 
-     * @return bool - true if bounds were successfully found and set, false otherwise
-     * 
-     * @note Performance optimizations:
-     *       - Uses findFirstMatchedElement for early termination
-     *       - Pre-allocates bounds vector to avoid multiple reallocations
-     *       - Early validation of xpath and rootXML
-     *       - Caches xpath string for error logging
-     */
-    bool Preference::patchActionBounds(const CustomActionPtr &action, const ElementPtr &rootXML) {
-        // Performance: Early validation
-        if (nullptr == action || nullptr == rootXML) {
-            return false;
-        }
-        
-        // Performance: Early validation of xpath
-        if (nullptr == action->xpath) {
-            return false;
-        }
-        
-        // Performance optimization: Use findFirstMatchedElement for early termination
-        // Since we only need the first matched element, no need to collect all matches
-        ElementPtr matchedElement = this->findFirstMatchedElement(action->xpath, rootXML);
-        if (matchedElement == nullptr) {
-            BLOG("action xpath not found %s", action->xpath->toString().c_str());
-            return false;
-        }
-        
-        RectPtr rect = matchedElement->getBounds();
-        if (rect == nullptr) {
-            BLOGE("action xpath matched but bounds is null %s", action->xpath->toString().c_str());
-            return false;
-        }
-        
-        // Performance optimization: Pre-allocate vector to avoid multiple reallocations
-        // Using resize + direct assignment is faster than 4 push_back calls
-        action->bounds.resize(4);
-        action->bounds[0] = static_cast<float>(rect->left);
-        action->bounds[1] = static_cast<float>(rect->top);
-        action->bounds[2] = static_cast<float>(rect->right);
-        action->bounds[3] = static_cast<float>(rect->bottom);
-        
-        return true;
     }
 
     /**
@@ -462,6 +403,14 @@ namespace fastbotx {
      *       - Only generates random numbers when needed
      */
     void Preference::patchOperate(const OperatePtr &opt) {
+        // Substitute ${VAR} in action input text from env (e.g. LLM returns "${LLM_LOGIN_ACCOUNT}";
+        // replace here so secrets are not sent to the LLM, only when executing the action).
+        std::string text = opt->getText();
+        if (!text.empty()) {
+            substituteEnvVars(text);
+            opt->setText(text);
+        }
+
         // Performance: Early exit if input fuzzing is disabled
         if (!this->_doInputFuzzing) {
             return;
@@ -559,75 +508,72 @@ namespace fastbotx {
             return;
         }
 
-        BDLOG("preference resolve page: %s black widget %zu tree pruning %zu", activity.c_str(),
-              this->_blackWidgetActions.size(), this->_treePrunings.size());
+        BDLOG("preference resolve page: %s avoid rules %zu", activity.c_str(), this->_avoidRules.size());
 
         // Performance: Get and cache root size only if not already cached or if cached size is invalid
-        // Fix: Check isEmpty() instead of (left + top) != 0, which was incorrect logic
         if (nullptr == this->_rootScreenSize || this->_rootScreenSize->isEmpty()) {
             RectPtr rootSize = rootXML->getBounds();
-            
-            // Performance: If root bounds are empty, try to get from first child
             if (!rootSize || rootSize->isEmpty()) {
-                // Performance: Cache children reference to avoid repeated getChildren() calls
                 const auto &children = rootXML->getChildren();
                 if (!children.empty()) {
                     rootSize = children[0]->getBounds();
                 }
             }
-            
             this->_rootScreenSize = rootSize;
-            
-            // Performance: Log error only once when root size cannot be determined
             if (!this->_rootScreenSize || this->_rootScreenSize->isEmpty()) {
                 BLOGE("%s", "No root size in current page");
             }
         }
-        
-        // recursively resolve black widgets
-        this->resolveBlackWidgets(rootXML, activity);
-        // Performance optimization: deMixResMapping is now merged into resolveElement
-        // This reduces tree traversal from 3 passes to 2 passes (resolveBlackWidgets + resolveElement)
-        // recursively deal all rootXML tree (includes deMixResMapping)
-        this->resolveElement(rootXML, activity);
+
+        // Clear cache for this activity and collect bounds-only avoid rects (single-pass unified avoidance)
+        this->_cachedBlackWidgetRects[activity].clear();
+        this->_currentBoundsOnlyAvoidRects.clear();
+        int rootW = this->_rootScreenSize ? this->_rootScreenSize->right : 0;
+        int rootH = this->_rootScreenSize ? this->_rootScreenSize->bottom : 0;
+        auto addRulesForActivity = [this, rootW, rootH, activity](const std::string &act) {
+            auto it = this->_avoidRulesByActivity.find(act);
+            if (it == this->_avoidRulesByActivity.end()) return;
+            for (const AvoidRulePtr &rule : it->second) {
+                if (rule->action != AvoidRule::Action::Avoid || rule->bounds.size() != 4) continue;
+                if (rule->xpath) continue; // xpath-based avoid: rects come from deleted elements
+                std::vector<float> b = rule->bounds;
+                bool rel = (b[0] >= 0.0f && b[0] <= 1.1f && b[1] >= 0.0f && b[1] <= 1.1f &&
+                            b[2] >= 0.0f && b[2] <= 1.1f && b[3] >= 0.0f && b[3] <= 1.1f);
+                if (rel && rootW > 0 && rootH > 0) {
+                    b[0] *= static_cast<float>(rootW);
+                    b[1] *= static_cast<float>(rootH);
+                    b[2] *= static_cast<float>(rootW);
+                    b[3] *= static_cast<float>(rootH);
+                }
+                RectPtr r = std::make_shared<Rect>(b[0], b[1], b[2], b[3]);
+                this->_cachedBlackWidgetRects[activity].push_back(r);
+                this->_currentBoundsOnlyAvoidRects.push_back(r);
+            }
+        };
+        addRulesForActivity(activity);
+        addRulesForActivity("");
+
+        this->resolveElementWithAvoid(rootXML, activity);
     }
 
     /**
-     * @brief Recursively resolve element and its children
-     * 
-     * Processes a single Element and recursively processes all its children.
-     * Performs the following operations in a single traversal:
-     * 1. Resource ID mapping (deMixResMapping): Maps obfuscated resource IDs back to original
-     * 2. Page text caching: Collects page texts for input fuzzing
-     * 3. Tree pruning: Modifies element properties based on xpath rules
-     * 4. Valid text pruning: Marks valid texts and sets clickable if needed
-     * 
-     * @param element Current Element to process
-     * @param activity Current activity name
-     * 
-     * @note Performance optimization: Merges multiple operations into single traversal
-     *       to reduce tree traversal overhead.
+     * @brief Single-pass resolve: avoid (delete + rect cache) + modify (property overrides), deMixResMapping, cachePageTexts, pruningValidTexts, then recurse.
+     * Replaces former resolveBlackWidgets + resolveElement + resolveTreePruning.
      */
-    void Preference::resolveElement(const ElementPtr &element, const std::string &activity) {
-        if (!element)
-            return;
-            
-        // Performance optimization: Merge deMixResMapping into resolveElement traversal
-        // This reduces tree traversal from 3 passes to 2 passes
-        // Process resource ID mapping (deMixResMapping logic)
+    void Preference::resolveElementWithAvoid(const ElementPtr &element, const std::string &activity) {
+        if (!element) return;
+
         if (!this->_resMixedMapping.empty()) {
             std::string stringOfResourceID = element->getResourceID();
             if (!stringOfResourceID.empty()) {
-                auto iterator = this->_resMixedMapping.find(stringOfResourceID);
-                if (iterator != this->_resMixedMapping.end()) {
-                    element->reSetResourceID((*iterator).second);
-                    BDLOG("de-mixed %s as %s", stringOfResourceID.c_str(), (*iterator).second.c_str());
+                auto it = this->_resMixedMapping.find(stringOfResourceID);
+                if (it != this->_resMixedMapping.end()) {
+                    element->reSetResourceID(it->second);
+                    BDLOG("de-mixed %s as %s", stringOfResourceID.c_str(), it->second.c_str());
                 }
             }
         }
-            
-        // Performance optimization: Cache page texts during resolveElement traversal
-        // This avoids a separate full tree traversal in cachePageTexts
+
         if (!element->getText().empty()) {
             if (this->_pageTextsCache.size() > PageTextsMaxCount) {
                 for (int i = 0; i < 20 && !this->_pageTextsCache.empty(); i++)
@@ -635,169 +581,72 @@ namespace fastbotx {
             }
             this->_pageTextsCache.push_back(element->getText());
         }
-        
-        // resolve tree pruning
-        this->resolveTreePruning(element, activity);
-        // pruning Valid Texts
-        if (this->_pruningValidTexts)
-            this->pruningValidTexts(element);
-            
-        for (const auto &child: element->getChildren()) {
-            this->resolveElement(child, activity);
-        }
-    }
 
-    /**
-     * @brief Resolve and delete black widgets (blacklisted controls/regions)
-     * 
-     * Black widgets are pre-configured controls or regions that should be avoided
-     * during exploration (e.g., logout button). This function:
-     * 1. Collects all blackWidgetActions for the current activity
-     * 2. Phase 1: Deletes xpath-only black widgets (no bounds specified)
-     * 3. Phase 2: Deletes bounds-based black widgets (with bounds)
-     * 4. Caches all black widget rects for point checking
-     * 
-     * @param rootXML Root Element of the UI tree
-     * @param activity Current activity name
-     * 
-     * @note Performance optimization:
-     *       - Two-phase processing reduces redundant tree traversals
-     *       - Unified caching prevents overwriting previous results
-     *       - Early activity filtering reduces processing overhead
-     */
-    void Preference::resolveBlackWidgets(const ElementPtr &rootXML, const std::string &activity) {
-        if (this->_blackWidgetActions.empty() || !rootXML) {
-            return;
-        }
-        
-        if (nullptr == this->_rootScreenSize) {
-            BLOGE("black widget match failed %s", "No root node in current page");
-            return;
-        }
-        
-        // Performance optimization: Collect all blackWidgetActions for current activity first
-        // This avoids repeated activity checks in the loop
-        std::vector<CustomActionPtr> actionsForActivity;
-        for (const CustomActionPtr &blackWidgetAction: this->_blackWidgetActions) {
-            if (activity.empty() || blackWidgetAction->activity == activity) {
-                actionsForActivity.push_back(blackWidgetAction);
+        int rootW = this->_rootScreenSize ? this->_rootScreenSize->right : 0;
+        int rootH = this->_rootScreenSize ? this->_rootScreenSize->bottom : 0;
+        auto boundsToRect = [rootW, rootH](const std::vector<float> &b) -> RectPtr {
+            if (b.size() != 4) return nullptr;
+            std::vector<float> abs = b;
+            bool rel = (b[0] >= 0.0f && b[0] <= 1.1f && b[1] >= 0.0f && b[1] <= 1.1f &&
+                        b[2] >= 0.0f && b[2] <= 1.1f && b[3] >= 0.0f && b[3] <= 1.1f);
+            if (rel && rootW > 0 && rootH > 0) {
+                abs[0] *= static_cast<float>(rootW);
+                abs[1] *= static_cast<float>(rootH);
+                abs[2] *= static_cast<float>(rootW);
+                abs[3] *= static_cast<float>(rootH);
             }
-        }
-        if (actionsForActivity.empty()) {
-            return;
-        }
-        
-        // Performance optimization: Two-phase processing
-        // Phase 1: Process xpath-only blackWidgets (no bounds specified)
-        // Phase 2: Process bounds-based blackWidgets (with bounds)
-        // This reduces redundant tree traversals and simplifies logic
-        
-        std::vector<RectPtr> allCachedRects;  // Unified cache for all black widget rects
-        
-        // Phase 1: Process xpath-only blackWidgets
-        for (const CustomActionPtr &action: actionsForActivity) {
-            if (!action->xpath || action->bounds.size() >= 4) {
-                continue; // Skip bounds-based widgets in phase 1
-            }
-            
-            std::vector<ElementPtr> matchedElements;
-            this->findMatchedElements(matchedElements, action->xpath, rootXML);
-            
-            if (!matchedElements.empty()) {
-                // Security: Check xpath before accessing (defensive programming)
-                if (action->xpath) {
-                    BDLOG("black widget xpath %s, matched %d nodes", 
-                          action->xpath->toString().c_str(), (int) matchedElements.size());
-                } else {
-                    BDLOG("black widget (no xpath), matched %d nodes", (int) matchedElements.size());
-                }
-                
-                for (const auto &matchedElement: matchedElements) {
-                    if (matchedElement) {
-                        BLOG("black widget, delete node: %s depends xpath",
-                             matchedElement->getResourceID().c_str());
-                        RectPtr bounds = matchedElement->getBounds();
-                        if (bounds) {
-                            allCachedRects.push_back(bounds);
+            return std::make_shared<Rect>(abs[0], abs[1], abs[2], abs[3]);
+        };
+
+        for (const std::string &actKey : {activity, std::string("")}) {
+            auto it = this->_avoidRulesByActivity.find(actKey);
+            if (it == this->_avoidRulesByActivity.end()) continue;
+            for (const AvoidRulePtr &rule : it->second) {
+                if (rule->action == AvoidRule::Action::Avoid) {
+                    if (rule->xpath && element->matchXpathSelector(rule->xpath)) {
+                        if (rule->bounds.size() == 4) {
+                            RectPtr rejectRect = boundsToRect(rule->bounds);
+                            RectPtr elBounds = element->getBounds();
+                            if (!rejectRect || !elBounds || !rejectRect->contains(elBounds->center()))
+                                continue;
                         }
-                        matchedElement->deleteElement();
-                    }
-                }
-            }
-        }
-        
-        // Phase 2: Process bounds-based blackWidgets
-        for (const CustomActionPtr &action: actionsForActivity) {
-            if (action->bounds.size() < 4) {
-                continue; // Skip xpath-only widgets in phase 2
-            }
-            
-            // Security: Double-check bounds size (defensive programming)
-            if (action->bounds.size() < 4) {
-                BLOGE("Invalid bounds size: %zu (expected 4)", action->bounds.size());
-                continue;
-            }
-            
-            std::vector<float> bounds = action->bounds;
-            
-            // Convert relative bounds to absolute bounds if needed
-            // Security: More accurate check - all bounds should be in [0, 1.1] range for relative coordinates
-            bool isRelative = (bounds[0] >= 0.0f && bounds[0] <= 1.1f &&
-                              bounds[1] >= 0.0f && bounds[1] <= 1.1f &&
-                              bounds[2] >= 0.0f && bounds[2] <= 1.1f &&
-                              bounds[3] >= 0.0f && bounds[3] <= 1.1f);
-            
-            if (isRelative) {
-                int rootWidth = this->_rootScreenSize->right;
-                int rootHeight = this->_rootScreenSize->bottom;
-                bounds[0] = bounds[0] * static_cast<float>(rootWidth);
-                bounds[1] = bounds[1] * static_cast<float>(rootHeight);
-                bounds[2] = bounds[2] * static_cast<float>(rootWidth);
-                bounds[3] = bounds[3] * static_cast<float>(rootHeight);
-            }
-            
-            RectPtr rejectRect = std::make_shared<Rect>(bounds[0], bounds[1], bounds[2], bounds[3]);
-            allCachedRects.push_back(rejectRect);
-            
-            // If xpath is specified, first filter by xpath, then by bounds
-            std::vector<ElementPtr> candidates;
-            if (action->xpath) {
-                // Collect elements matching xpath
-                this->findMatchedElements(candidates, action->xpath, rootXML);
-                // Security: xpath is already checked, but add defensive check for logging
-                BDLOG("black widget xpath %s with bounds, matched %d nodes",
-                      action->xpath ? action->xpath->toString().c_str() : "(null)",
-                      (int) candidates.size());
-            } else {
-                // No xpath, check all elements in the reject rect
-                rootXML->recursiveElements([&rejectRect](const ElementPtr &child) -> bool {
-                    RectPtr b = child->getBounds();
-                    return b && rejectRect->contains(b->center());
-                }, candidates);
-            }
-            
-            // Delete elements that are in the reject rect
-            for (const auto &element: candidates) {
-                if (element) {
-                    RectPtr elementBounds = element->getBounds();
-                    if (elementBounds && rejectRect->contains(elementBounds->center())) {
-                        BLOG("black widget, delete node: %s depends bounds",
-                             element->getResourceID().c_str());
+                        RectPtr bounds = element->getBounds();
+                        if (bounds) this->_cachedBlackWidgetRects[activity].push_back(bounds);
+                        BLOG("avoid rule, delete node: %s", element->getResourceID().c_str());
                         element->deleteElement();
+                        return;
                     }
+                    if (!rule->xpath && rule->bounds.size() == 4) {
+                        RectPtr elBounds = element->getBounds();
+                        if (!elBounds) continue;
+                        Point c = elBounds->center();
+                        for (const RectPtr &rect : this->_currentBoundsOnlyAvoidRects) {
+                            if (rect && rect->contains(c)) {
+                                BLOG("avoid rule (bounds), delete node: %s", element->getResourceID().c_str());
+                                element->deleteElement();
+                                return;
+                            }
+                        }
+                    }
+                } else if (rule->action == AvoidRule::Action::Modify && rule->xpath && element->matchXpathSelector(rule->xpath)) {
+                    if (rule->resourceID != InvalidProperty) element->reSetResourceID(rule->resourceID);
+                    if (rule->contentDescription != InvalidProperty) element->reSetContentDesc(rule->contentDescription);
+                    if (rule->text != InvalidProperty) element->reSetText(rule->text);
+                    if (rule->classname != InvalidProperty) element->reSetClassname(rule->classname);
+                    if (!rule->clickable.empty()) element->reSetClickable(rule->clickable == "true");
                 }
             }
         }
-        
-        // Unified cache: Store all black widget rects for this activity
-        // This replaces the previous per-action caching which would overwrite previous results
-        if (!allCachedRects.empty()) {
-            this->_cachedBlackWidgetRects[activity] = allCachedRects;
+
+        if (this->_pruningValidTexts) this->pruningValidTexts(element);
+
+        for (const auto &child : element->getChildren()) {
+            this->resolveElementWithAvoid(child, activity);
         }
     }
 
     /**
-     * @brief Check if a point is inside blacklisted rectangles
+     * @brief Check if a point is inside blacklisted rectangles (unified avoid rects from max.avoid.rules)
      * 
      * Checks if the given coordinate point falls within any of the cached black widget
      * rectangles for the specified activity. This is used to prevent clicking on
@@ -851,89 +700,6 @@ namespace fastbotx {
     }
 
     /**
-     * @brief Resolve tree pruning: modify element properties based on xpath rules
-     * 
-     * Tree pruning allows modifying element properties (resourceID, text, contentDescription,
-     * classname) based on xpath matching rules. This is useful for:
-     * - Unifying resource IDs for similar elements
-     * - Modifying text content for consistency
-     * - Changing class names for better matching
-     * 
-     * @param elem Current Element to check and potentially modify
-     * @param activity Current activity name
-     * 
-     * @note Performance optimization:
-     *       - Uses activity-grouped tree prunings for faster lookup
-     *       - Early exit if xpath doesn't match
-     *       - Uses != operator instead of compare() for string comparison
-     * 
-     * @note Only modifies properties that are not set to InvalidProperty
-     */
-    void Preference::resolveTreePruning(const ElementPtr &elem, const std::string &activity) {
-        if (!elem) {
-            return;
-        }
-        
-        // Performance optimization: Use activity-grouped tree prunings for faster lookup
-        // Only iterate through prunings for the current activity instead of all prunings
-        const CustomActionPtrVec *pruningsForActivity = nullptr;
-        auto activityIt = this->_treePruningsByActivity.find(activity);
-        if (activityIt != this->_treePruningsByActivity.end()) {
-            pruningsForActivity = &activityIt->second;
-        } else if (this->_treePruningsByActivity.empty() && !this->_treePrunings.empty()) {
-            // Fallback: If activity-grouped map is empty, use original vector (for backward compatibility)
-            // This should not happen if loadTreePruning is called correctly
-            // Build temporary vector for current activity
-            static thread_local CustomActionPtrVec tempPrunings;
-            tempPrunings.clear();
-            for (const auto &prun: this->_treePrunings) {
-                if (prun->activity == activity) {
-                    tempPrunings.push_back(prun);
-                }
-            }
-            if (!tempPrunings.empty()) {
-                pruningsForActivity = &tempPrunings;
-            }
-        }
-        
-        if (!pruningsForActivity || pruningsForActivity->empty()) {
-            return;
-        }
-        
-        // Performance optimization: Extract common logic to avoid code duplication
-        // Process all prunings for the current activity
-        for (const auto &prun: *pruningsForActivity) {
-            XpathPtr xpath = prun->xpath;
-            if (!xpath) {
-                continue;
-            }
-            
-            // Performance: Early exit if xpath doesn't match
-            if (!elem->matchXpathSelector(xpath)) {
-                continue;
-            }
-            
-            BLOG("pruning node %s for xpath: %s", elem->getResourceID().c_str(),
-                 xpath->toString().c_str());
-            
-            // Performance optimization: Use != operator instead of compare for string comparison
-            // InvalidProperty is a constant string, so direct comparison is safe
-            if (prun->resourceID != InvalidProperty) {
-                elem->reSetResourceID(prun->resourceID);
-            }
-            if (prun->contentDescription != InvalidProperty) {
-                elem->reSetContentDesc(prun->contentDescription);
-            }
-            if (prun->text != InvalidProperty) {
-                elem->reSetText(prun->text);
-            }
-            if (prun->classname != InvalidProperty) {
-                elem->reSetClassname(prun->classname);
-            }
-        }
-    }
-
-    /**
      * @brief Prune valid texts: mark valid texts and set clickable
      * 
      * Recursively processes elements to find valid texts (texts that appear in _validTexts set).
@@ -982,7 +748,7 @@ namespace fastbotx {
             }
         }
         
-        BDLOG("set valid Text: %s ", element->validText.c_str());
+        // BDLOG("set valid Text: %s ", element->validText.c_str());
         
         // Performance optimization: Cache parent lock result to avoid repeated weak_ptr operations
         // if we find valid text from text field or content description field,
@@ -1336,10 +1102,9 @@ namespace fastbotx {
      * 1. Resource mapping (max.mapping)
      * 2. Valid texts (max.valid.strings)
      * 3. Base config (max.config)
-     * 4. Black widgets (max.widget.black)
-     * 5. Custom actions (max.xpath.actions)
+     * 4. Unified avoidance rules (max.avoid.rules; replaces max.widget.black + max.tree.pruning)
+     * 5. LLM tasks (max.llm.tasks)
      * 6. White/black lists (awl.strings, abl.strings)
-     * 7. Tree pruning (max.tree.pruning)
      * 8. Input texts (max.strings, max.fuzzing.strings)
      * 
      * @note Only loads on Android or in debug mode
@@ -1376,18 +1141,25 @@ namespace fastbotx {
             BLOGE("Failed to load base config: %s", ex.what());
         }
         
-        // 4. Black widgets (used for avoiding certain UI elements)
+        // 4. Unified avoidance rules (replaces max.widget.black + max.tree.pruning)
         try {
-            loadBlackWidgets();
+            loadAvoidRules();
         } catch (const std::exception &ex) {
-            BLOGE("Failed to load black widgets: %s", ex.what());
+            BLOGE("Failed to load avoid rules: %s", ex.what());
         }
         
-        // 5. Custom actions (user-defined actions)
+        // 4.1 Custom event sequence (max.xpath.actions)
         try {
-            loadActions();
+            loadXpathActions();
         } catch (const std::exception &ex) {
-            BLOGE("Failed to load custom actions: %s", ex.what());
+            BLOGE("Failed to load xpath actions: %s", ex.what());
+        }
+        
+        // 5.1 LLM tasks (AutodevAgent tasks)
+        try {
+            loadLlmTasks();
+        } catch (const std::exception &ex) {
+            BLOGE("Failed to load LLM tasks: %s", ex.what());
         }
         
         // 6. White/black lists (currently not actively used)
@@ -1395,13 +1167,6 @@ namespace fastbotx {
             loadWhiteBlackList();
         } catch (const std::exception &ex) {
             BLOGE("Failed to load white/black lists: %s", ex.what());
-        }
-        
-        // 7. Tree pruning (used for modifying element properties)
-        try {
-            loadTreePruning();
-        } catch (const std::exception &ex) {
-            BLOGE("Failed to load tree pruning: %s", ex.what());
         }
         
         // 8. Input texts (used for input fuzzing)
@@ -1413,9 +1178,15 @@ namespace fastbotx {
 #endif
     }
 
-#define MaxRandomPickSTR  "max.randomPickFromStringList"
-#define InputFuzzSTR "max.doinputtextFuzzing"
-#define ListenMode "max.listenMode"
+#define MaxRandomPickSTR        "max.randomPickFromStringList"
+#define InputFuzzSTR            "max.doinputtextFuzzing"
+#define ListenMode              "max.listenMode"
+#define LlmEnabledSTR           "max.llm.enabled"
+#define LlmApiUrlSTR            "max.llm.apiUrl"
+#define LlmApiKeySTR            "max.llm.apiKey"
+#define LlmModelSTR             "max.llm.model"
+#define LlmMaxTokensSTR         "max.llm.maxTokens"
+#define LlmTimeoutMsSTR         "max.llm.timeoutMs"
 
     /**
      * @brief Load base configuration file
@@ -1450,42 +1221,52 @@ namespace fastbotx {
      *       - Reduced logging overhead
      */
     void Preference::loadBaseConfig() {
-        LOGI("pref init checking curr packageName is offset: %s", Preference::PackageName.c_str());
+        // LOGI("pref init checking curr packageName is offset: %s", Preference::PackageName.c_str());
         std::string configContent = loadFileContent(BaseConfigFilePath);
         if (configContent.empty()) {
             return;
         }
         
-        BLOG("max.config:\n %s", configContent.c_str());
+        // Pretty-print max.config without extra blank line, and indent each entry
+        BLOG("max.config:");
         std::vector<std::string> lines;
         splitString(configContent, lines, '\n');
         
         for (const std::string &line: lines) {
-            // Performance: Skip empty lines early
-            if (line.empty()) {
+            // Performance: Skip empty or whitespace-only lines early
+            std::string trimmedLine = line;
+            trimString(trimmedLine);
+            if (trimmedLine.empty()) {
                 continue;
             }
             
+            // Log raw (trimmed) line with indentation for readability; keep comments
+            BLOG("  %s", trimmedLine.c_str());
+            
             // Performance: Manual key-value parsing to avoid splitString overhead
-            size_t eqPos = line.find('=');
+            size_t eqPos = trimmedLine.find('=');
             if (eqPos == std::string::npos || eqPos == 0 || eqPos == line.length() - 1) {
                 continue; // No '=' or '=' at start/end
             }
             
             // Extract key and value
-            std::string key = line.substr(0, eqPos);
-            std::string value = line.substr(eqPos + 1);
+            std::string key = trimmedLine.substr(0, eqPos);
+            std::string value = trimmedLine.substr(eqPos + 1);
             
             // Trim whitespace
             trimString(key);
             trimString(value);
             
-            // Performance: Skip if key or value is empty after trimming
-            if (key.empty() || value.empty()) {
+            // Skip if key is empty; allow empty value for env-backed keys (max.llm.apiUrl, max.llm.apiKey)
+            if (key.empty()) {
+                continue;
+            }
+            if (value.empty() && key != LlmApiUrlSTR && key != LlmApiKeySTR) {
                 continue;
             }
             
-            BDLOG("base config key:-%s- value:-%s-", key.c_str(), value.c_str());
+            // Human-friendly config log: max.config parsed: key=value
+            //BDLOG("max.config parsed: %s=%s", key.c_str(), value.c_str());
             
             // Performance: Use string comparison with early exit
             // Check most common keys first (if we know the distribution)
@@ -1498,6 +1279,44 @@ namespace fastbotx {
             } else if (key == ListenMode) {
                 BDLOG("set %s", ListenMode);
                 this->setListenMode(value == "true");
+            } else if (key == LlmEnabledSTR) {
+                this->_llmRuntimeConfig.enabled = (value == "true");
+            } else if (key == LlmApiUrlSTR) {
+                if (value.size() >= 4 && value[0] == '$' && value[1] == '{' && value.back() == '}') {
+                    std::string varName = value.substr(2, value.size() - 3);
+                    const char *envVal = std::getenv(varName.c_str());
+                    this->_llmRuntimeConfig.apiUrl = envVal ? envVal : value;
+                } else if (value.empty()) {
+                    const char *envVal = std::getenv("MAX_LLM_API_URL");
+                    if (envVal) this->_llmRuntimeConfig.apiUrl = envVal;
+                } else {
+                    this->_llmRuntimeConfig.apiUrl = value;
+                }
+            } else if (key == LlmApiKeySTR) {
+                if (value.size() >= 4 && value[0] == '$' && value[1] == '{' && value.back() == '}') {
+                    std::string varName = value.substr(2, value.size() - 3);
+                    const char *envVal = std::getenv(varName.c_str());
+                    this->_llmRuntimeConfig.apiKey = envVal ? envVal : value;
+                } else if (value.empty()) {
+                    const char *envVal = std::getenv("MAX_LLM_API_KEY");
+                    if (envVal) this->_llmRuntimeConfig.apiKey = envVal;
+                } else {
+                    this->_llmRuntimeConfig.apiKey = value;
+                }
+            } else if (key == LlmModelSTR) {
+                this->_llmRuntimeConfig.model = value;
+            } else if (key == LlmMaxTokensSTR) {
+                try {
+                    this->_llmRuntimeConfig.maxTokens = std::stoi(value);
+                } catch (...) {
+                    BLOGE("invalid max.llm.maxTokens value: %s", value.c_str());
+                }
+            } else if (key == LlmTimeoutMsSTR) {
+                try {
+                    this->_llmRuntimeConfig.timeoutMs = std::stoi(value);
+                } catch (...) {
+                    BLOGE("invalid max.llm.timeoutMs value: %s", value.c_str());
+                }
             }
         }
     }
@@ -1582,189 +1401,204 @@ namespace fastbotx {
     }
 
     /**
-     * @brief Load custom actions from JSON file
-     * 
-     * Loads custom action events from /sdcard/max.xpath.actions file.
-     * Each event contains:
-     * - activity: Activity name to match
-     * - prob: Probability of triggering (0.0 - 1.0)
-     * - times: Number of times this event can be triggered
-     * - actions: List of actions to execute
-     * 
-     * Each action contains:
-     * - action: Action type (CLICK, LONG_CLICK, etc.)
-     * - xpath: XPath selector to find target element
-     * - text: Input text (for editable widgets)
-     * - clearText: Whether to clear text before input
-     * - throttle: Throttle time in milliseconds
-     * - wait: Wait time in milliseconds
-     * - useAdbInput: Whether to use ADB input
-     * 
-     * @note File format: JSON array of event objects
+     * @brief Load unified avoidance rules from /sdcard/max.avoid.rules (replaces max.widget.black + max.tree.pruning).
+     * Each rule: activity, xpath (optional), bounds (optional), action ("avoid" | "modify"), and for modify: resourceid, text, contentdesc, classname, clickable.
      */
-    /**
-     * @brief Load custom actions from JSON file
-     * 
-     * Loads custom action events from /sdcard/max.xpath.actions file.
-     * Each event contains:
-     * - activity: Activity name to match
-     * - prob: Probability of triggering (0.0 - 1.0)
-     * - times: Number of times this event can be triggered
-     * - actions: List of actions to execute
-     * 
-     * Each action contains:
-     * - action: Action type (CLICK, LONG_CLICK, etc.)
-     * - xpath: XPath selector to find target element
-     * - text: Input text (for editable widgets)
-     * - clearText: Whether to clear text before input
-     * - throttle: Throttle time in milliseconds
-     * - wait: Wait time in milliseconds
-     * - useAdbInput: Whether to use ADB input
-     * 
-     * @note File format: JSON array of event objects
-     * 
-     * @note Performance optimizations:
-     *       - Removed duplicate logging for xpath
-     *       - Cache action type to avoid repeated getActionType() calls
-     *       - Early exit for empty xpath (still create Xpath object for consistency)
-     *       - Fixed bug: command should be read from action, not actions
-     */
-    void Preference::loadActions() {
-        std::string fileContent = loadFileContent(ActionConfigFilePath);
-        if (fileContent.empty()) {
-            return;
-        }
-        
-        BLOG("loading actions  : %s", ActionConfigFilePath.c_str());
+    void Preference::loadAvoidRules() {
+        std::string fileContent = fastbotx::Preference::loadFileContent(AvoidRulesFilePath);
+        if (fileContent.empty()) return;
         try {
-            ::nlohmann::json actionEvents = ::nlohmann::json::parse(fileContent);
-            for (const ::nlohmann::json &actionEvent: actionEvents) {
-                CustomEventPtr customEvent = std::make_shared<CustomEvent>();
-                customEvent->prob = static_cast<float>(getJsonValue<float>(actionEvent, "prob", 1));
-                customEvent->times = getJsonValue<int>(actionEvent, "times", 1);
-                customEvent->activity = getJsonValue<std::string>(actionEvent, "activity", "");
-                BLOG("loading event %s", customEvent->activity.c_str());
-                
-                ::nlohmann::json actions = getJsonValue<::nlohmann::json>(actionEvent, "actions",
-                                                                          ::nlohmann::json());
-                for (const ::nlohmann::json &action: actions) {
-                    std::string actionTypeString = getJsonValue<std::string>(action, "action", "");
-                    auto customAction = std::make_shared<CustomAction>(
-                            stringToActionType(actionTypeString));
-                    
-                    std::string xPathString = getJsonValue<std::string>(action, "xpath", "");
-                    // Performance: Only log once per action
-                    BLOG("loading action %s", xPathString.c_str());
-                    customAction->xpath = std::make_shared<Xpath>(xPathString);
-                    
-                    customAction->text = getJsonValue<std::string>(action, "text", "");
-                    customAction->clearText = getJsonValue<bool>(action, "clearText", false);
-                    customAction->throttle = getJsonValue<int>(action, "throttle", 1000);
-                    customAction->waitTime = getJsonValue<int>(action, "wait", 0);
-                    customAction->adbInput = getJsonValue<bool>(action, "useAdbInput", false);
-                    customAction->allowFuzzing = false;
-                    
-                    // Performance: Cache action type to avoid repeated getActionType() calls
-                    ActionType actionType = customAction->getActionType();
-                    if (actionType == ActionType::SHELL_EVENT) {
-                        // Bug fix: command should be read from action, not actions
-                        customAction->command = getJsonValue<std::string>(action, "command", "");
-                    }
-                    
-                    customEvent->actions.push_back(customAction);
-                }
-                this->_customEvents.push_back(customEvent);
+            BLOG("loading avoid rules: %s", AvoidRulesFilePath.c_str());
+            ::nlohmann::json arr = ::nlohmann::json::parse(fileContent);
+            if (!arr.is_array()) {
+                BLOGE("avoid rules is not a JSON array");
+                return;
             }
-        } catch (nlohmann::json::exception &ex) {
-            BLOGE("parse actions error happened: id,%d: %s", ex.id, ex.what());
+            this->_avoidRulesByActivity.clear();
+            this->_avoidRules.clear();
+            this->_avoidRules.reserve(arr.size());
+            for (const ::nlohmann::json &obj : arr) {
+                AvoidRulePtr r = std::make_shared<AvoidRule>();
+                r->activity = getJsonValue<std::string>(obj, "activity", "");
+                std::string xpathStr = getJsonValue<std::string>(obj, "xpath", "");
+                if (!xpathStr.empty()) r->xpath = std::make_shared<Xpath>(xpathStr);
+                std::string actionStr = getJsonValue<std::string>(obj, "action", "avoid");
+                r->action = (actionStr == "modify") ? AvoidRule::Action::Modify : AvoidRule::Action::Avoid;
+                std::string boundsStr = getJsonValue<std::string>(obj, "bounds", "");
+                if (!boundsStr.empty()) {
+                    r->bounds.resize(4);
+                    int parsed = (boundsStr.find('[') != std::string::npos)
+                        ? sscanf(boundsStr.c_str(), "[%f,%f][%f,%f]", &r->bounds[0], &r->bounds[1], &r->bounds[2], &r->bounds[3])
+                        : sscanf(boundsStr.c_str(), "%f,%f,%f,%f", &r->bounds[0], &r->bounds[1], &r->bounds[2], &r->bounds[3]);
+                    if (parsed != 4) {
+                        BLOGE("Failed to parse avoid rule bounds: %s", boundsStr.c_str());
+                        r->bounds.clear();
+                    }
+                }
+                r->resourceID = getJsonValue<std::string>(obj, "resourceid", InvalidProperty);
+                r->text = getJsonValue<std::string>(obj, "text", InvalidProperty);
+                r->contentDescription = getJsonValue<std::string>(obj, "contentdesc", InvalidProperty);
+                r->classname = getJsonValue<std::string>(obj, "classname", InvalidProperty);
+                r->clickable = getJsonValue<std::string>(obj, "clickable", "");
+                this->_avoidRules.push_back(r);
+                this->_avoidRulesByActivity[r->activity].push_back(r);
+            }
+        } catch (::nlohmann::json::exception &ex) {
+            BLOGE("parse avoid rules error: id,%d: %s", ex.id, ex.what());
         }
     }
 
     /**
-     * @brief Load black widget configurations from JSON file
-     * 
-     * Loads black widget configurations from /sdcard/max.widget.black file.
-     * Black widgets are controls or regions that should be avoided during exploration.
-     * 
-     * Each black widget configuration contains:
-     * - activity: Activity name (optional, empty means all activities)
-     * - xpath: XPath selector to find blacklisted elements (optional)
-     * - bounds: Bounding box in format "[x1,y1][x2,y2]" or "x1,y1,x2,y2" (optional)
-     * 
-     * @note File format: JSON array of black widget objects
-     * @note If both xpath and bounds are specified, elements must match both
-     * @note Bounds can be relative (0.0-1.1) or absolute (pixels)
+     * @brief Load custom event sequence from /sdcard/max.xpath.actions.
+     * Format: JSON array of cases. Each case: activity, prob (0-1 or 1=100%), times, throttle (ms), actions: [ { xpath?, action, text? } ].
+     * Action types: CLICK, LONG_CLICK, BACK, SCROLL_TOP_DOWN, SCROLL_BOTTOM_UP, SCROLL_LEFT_RIGHT, SCROLL_RIGHT_LEFT.
      */
-    /**
-     * @brief Load black widget configurations from JSON file
-     * 
-     * Loads black widget configurations from /sdcard/max.widget.black file.
-     * Black widgets are controls or regions that should be avoided during exploration.
-     * 
-     * Each black widget configuration contains:
-     * - activity: Activity name (optional, empty means all activities)
-     * - xpath: XPath selector to find blacklisted elements (optional)
-     * - bounds: Bounding box in format "[x1,y1][x2,y2]" or "x1,y1,x2,y2" (optional)
-     * 
-     * @note File format: JSON array of black widget objects
-     * @note If both xpath and bounds are specified, elements must match both
-     * @note Bounds can be relative (0.0-1.1) or absolute (pixels)
-     * 
-     * @note Performance optimizations:
-     *       - Fixed bug: Removed duplicate sscanf calls (second call overwrites first)
-     *       - Optimized bounds parsing with format detection
-     *       - Reduced logging overhead
-     */
-    void Preference::loadBlackWidgets() {
-        std::string fileContent = fastbotx::Preference::loadFileContent(BlackWidgetFilePath);
-        if (fileContent.empty()) {
-            return;
-        }
-        
+    void Preference::loadXpathActions() {
+        std::string fileContent = loadFileContent(XpathActionsFilePath);
+        if (fileContent.empty()) return;
         try {
-            BLOG("loading black widgets  : %s", BlackWidgetFilePath.c_str());
-            ::nlohmann::json actions = ::nlohmann::json::parse(fileContent);
-            for (const ::nlohmann::json &action: actions) {
-                CustomActionPtr act = std::make_shared<CustomAction>();
-                std::string xpathstr = getJsonValue<std::string>(action, "xpath", "");
-                if (!xpathstr.empty()) {
-                    act->xpath = std::make_shared<Xpath>(xpathstr);
-                    BLOG("loading black widget %s", xpathstr.c_str());
+            BLOG("loading xpath actions: %s", XpathActionsFilePath.c_str());
+            ::nlohmann::json arr = ::nlohmann::json::parse(fileContent);
+            if (!arr.is_array()) {
+                BLOGE("max.xpath.actions is not a JSON array");
+                return;
+            }
+            _xpathActionCases.clear();
+            _xpathCaseRemainingTimes.clear();
+            _currentXpathCaseIdx = -1;
+            _currentXpathStepIdx = 0;
+            for (const ::nlohmann::json &obj : arr) {
+                XpathCase c;
+                c.activity = getJsonValue<std::string>(obj, "activity", "");
+                double p = getJsonValue<double>(obj, "prob", 1.0);
+                c.prob = (p > 1.0) ? static_cast<float>(p / 100.0) : static_cast<float>(p);  // support 1 or 100 for 100%
+                c.times = getJsonValue<int>(obj, "times", 1);
+                c.throttle = getJsonValue<int>(obj, "throttle", 0);
+                if (!obj.contains("actions") || !obj["actions"].is_array()) continue;
+                for (const ::nlohmann::json &a : obj["actions"]) {
+                    XpathActionStep step;
+                    step.xpath = getJsonValue<std::string>(a, "xpath", "");
+                    step.actionType = getJsonValue<std::string>(a, "action", "");
+                    step.text = getJsonValue<std::string>(a, "text", "");
+                    step.clearText = getJsonValue<bool>(a, "clearText", false);
+                    step.throttle = getJsonValue<int>(a, "throttle", 0);
+                    step.waitTime = getJsonValue<int>(a, "wait", 0);
+                    if (!step.actionType.empty()) c.steps.push_back(step);
                 }
-                
-                act->activity = getJsonValue<std::string>(action, "activity", "");
-                this->_blackWidgetActions.push_back(act);
-                
-                std::string boundsstr = getJsonValue<std::string>(action, "bounds", "");
-                if (!boundsstr.empty()) {
-                    act->bounds.resize(4);
-                    // Performance: Try format "[x1,y1][x2,y2]" first, then "x1,y1,x2,y2"
-                    // Bug fix: Removed duplicate sscanf - second call was overwriting first result
-                    int parsed = 0;
-                    if (boundsstr.find('[') != std::string::npos) {
-                        // Format: "[x1,y1][x2,y2]"
-                        parsed = sscanf(boundsstr.c_str(), "[%f,%f][%f,%f]", 
-                                        &act->bounds[0], &act->bounds[1],
-                                        &act->bounds[2], &act->bounds[3]);
-                    } else {
-                        // Format: "x1,y1,x2,y2"
-                        parsed = sscanf(boundsstr.c_str(), "%f,%f,%f,%f", 
-                                       &act->bounds[0], &act->bounds[1],
-                                       &act->bounds[2], &act->bounds[3]);
+                if (!c.steps.empty()) {
+                    _xpathActionCases.push_back(c);
+                    _xpathCaseRemainingTimes.push_back(c.times);
+
+                    // Pretty, human-friendly summary for each xpath action case
+                    BLOG("\nxpath action case:\n  activity=%s\n  prob=%.2f\n  times=%d",
+                         c.activity.c_str(), c.prob, c.times);
+                    for (const auto &step : c.steps) {
+                        BLOG("    action=%s xpath=%s text=%s",
+                             step.actionType.c_str(),
+                             step.xpath.c_str(),
+                             step.text.c_str());
                     }
-                    // Security: Check if parsing succeeded
-                    if (parsed != 4) {
-                        BLOGE("Failed to parse bounds: %s (parsed %d values, expected 4)", 
-                              boundsstr.c_str(), parsed);
-                        act->bounds.clear();
-                    }
-                } else {
-                    act->bounds.clear();
                 }
             }
-        } catch (nlohmann::json::exception &ex) {
-            BLOGE("parse black widgets error happened: id,%d: %s", ex.id, ex.what());
+            BLOG("loaded %zu xpath action cases", _xpathActionCases.size());
+        } catch (::nlohmann::json::exception &ex) {
+            BLOGE("parse max.xpath.actions error: id,%d: %s", ex.id, ex.what());
         }
+    }
+
+    /**
+     * @brief Get next custom action from max.xpath.actions. When a case is in progress returns next step; else may start a case by prob.
+     * When max.llm.tasks exists and LLM url/apikey are configured, xpath custom events are disabled (return nullptr).
+     */
+    ActionPtr Preference::getCustomActionFromXpath(const std::string &activity,
+                                                  const ElementPtr &rootXML) {
+        if (!rootXML || _xpathActionCases.empty()) return nullptr;
+
+        // If LLM tasks are loaded and LLM url/apikey are configured, max.xpath.actions custom events are ineffective.
+        if (!_llmTasks.empty() && !_llmRuntimeConfig.apiUrl.empty() && !_llmRuntimeConfig.apiKey.empty())
+            return nullptr;
+
+        // In progress: emit next step of current case
+        if (_currentXpathCaseIdx >= 0 && static_cast<size_t>(_currentXpathCaseIdx) < _xpathActionCases.size()) {
+            XpathCase &c = _xpathActionCases[static_cast<size_t>(_currentXpathCaseIdx)];
+            if (!c.activity.empty() && c.activity != activity) {
+                _currentXpathCaseIdx = -1;
+                _currentXpathStepIdx = 0;
+                return nullptr;
+            }
+            if (_currentXpathStepIdx < 0 || static_cast<size_t>(_currentXpathStepIdx) >= c.steps.size()) {
+                _currentXpathCaseIdx = -1;
+                _currentXpathStepIdx = 0;
+                return nullptr;
+            }
+            const XpathActionStep &step = c.steps[static_cast<size_t>(_currentXpathStepIdx)];
+            ActionType at = stringToActionType(step.actionType);
+            if (at == ActionType::ActTypeSize) {
+                _currentXpathStepIdx++;
+                return getCustomActionFromXpath(activity, rootXML);
+            }
+            auto customAction = std::make_shared<CustomAction>(at);
+            customAction->activity = activity;
+            customAction->throttle = (step.throttle > 0) ? step.throttle : c.throttle;
+            customAction->waitTime = step.waitTime;
+            customAction->allowFuzzing = false;
+            if (at == ActionType::BACK) {
+                _currentXpathStepIdx++;
+                if (static_cast<size_t>(_currentXpathStepIdx) >= c.steps.size()) {
+                    _currentXpathCaseIdx = -1;
+                    _currentXpathStepIdx = 0;
+                }
+                return customAction;
+            }
+            if (step.xpath.empty()) {
+                _currentXpathStepIdx++;
+                return getCustomActionFromXpath(activity, rootXML);
+            }
+            XpathPtr xpath = std::make_shared<Xpath>(step.xpath);
+            ElementPtr elem = findFirstMatchedElement(xpath, rootXML);
+            if (!elem) {
+                // Align with original: discard this step, return nullptr so this frame RL runs; next frame continues from next step.
+                _currentXpathStepIdx++;
+                if (static_cast<size_t>(_currentXpathStepIdx) >= c.steps.size()) {
+                    _currentXpathCaseIdx = -1;
+                    _currentXpathStepIdx = 0;
+                }
+                return nullptr;
+            }
+            RectPtr bounds = elem->getBounds();
+            if (bounds && !bounds->isEmpty()) {
+                customAction->bounds.resize(4);
+                customAction->bounds[0] = static_cast<float>(bounds->left);
+                customAction->bounds[1] = static_cast<float>(bounds->top);
+                customAction->bounds[2] = static_cast<float>(bounds->right);
+                customAction->bounds[3] = static_cast<float>(bounds->bottom);
+            }
+            if (!step.text.empty()) {
+                customAction->text = step.text;
+                customAction->clearText = step.clearText;
+            }
+            _currentXpathStepIdx++;
+            if (static_cast<size_t>(_currentXpathStepIdx) >= c.steps.size()) {
+                _currentXpathCaseIdx = -1;
+                _currentXpathStepIdx = 0;
+            }
+            return customAction;
+        }
+
+        // Not in progress: first-match by config order — first case that matches activity, has remaining times > 0, and passes prob.
+        for (size_t i = 0; i < _xpathActionCases.size(); i++) {
+            if (static_cast<size_t>(i) >= _xpathCaseRemainingTimes.size() || _xpathCaseRemainingTimes[i] <= 0)
+                continue;
+            const XpathCase &c = _xpathActionCases[i];
+            if (!c.activity.empty() && c.activity != activity) continue;
+            float eventRate = randomInt(0, 100) / 100.0f;
+            if (eventRate >= c.prob) continue;
+            _currentXpathCaseIdx = static_cast<int>(i);
+            _currentXpathStepIdx = 0;
+            _xpathCaseRemainingTimes[i]--;
+            return getCustomActionFromXpath(activity, rootXML);
+        }
+        return nullptr;
     }
 
     /**
@@ -1801,7 +1635,12 @@ namespace fastbotx {
             std::vector<std::string> texts;
             splitString(contentBlack, texts, '\n');
             this->_blackList.swap(texts);
-            BLOG("blacklist :\n %s", contentBlack.c_str());
+            BLOG("blacklist:");
+            for (const auto &t : this->_blackList) {
+                if (!t.empty()) {
+                    BLOG("    %s", t.c_str());
+                }
+            }
         }
         
         std::string contentWhite = fastbotx::Preference::loadFileContent(WhiteListFilePath);
@@ -1809,7 +1648,12 @@ namespace fastbotx {
             std::vector<std::string> textsw;
             splitString(contentWhite, textsw, '\n');
             this->_whiteList.swap(textsw);
-            BLOG("whitelist :\n %s", contentWhite.c_str());
+            BLOG("whitelist:");
+            for (const auto &t : this->_whiteList) {
+                if (!t.empty()) {
+                    BLOG("    %s", t.c_str());
+                }
+            }
         }
     }
 
@@ -1877,84 +1721,6 @@ namespace fastbotx {
     }
 
     /**
-     * @brief Load tree pruning rules from JSON file
-     * 
-     * Loads tree pruning rules from /sdcard/max.tree.pruning file.
-     * Tree pruning allows modifying element properties based on xpath matching.
-     * 
-     * Each rule contains:
-     * - activity: Activity name to apply this rule
-     * - xpath: XPath selector to match elements
-     * - resourceid: New resource ID (use InvalidProperty to skip)
-     * - text: New text (use InvalidProperty to skip)
-     * - contentdesc: New content description (use InvalidProperty to skip)
-     * - classname: New class name (use InvalidProperty to skip)
-     * 
-     * @note File format: JSON array of pruning rule objects
-     * @note Performance optimization: Groups rules by activity for faster lookup
-     */
-    /**
-     * @brief Load tree pruning rules from JSON file
-     * 
-     * Loads tree pruning rules from /sdcard/max.tree.pruning file.
-     * Tree pruning allows modifying element properties based on xpath matching.
-     * 
-     * Each rule contains:
-     * - activity: Activity name to apply this rule
-     * - xpath: XPath selector to match elements
-     * - resourceid: New resource ID (use InvalidProperty to skip)
-     * - text: New text (use InvalidProperty to skip)
-     * - contentdesc: New content description (use InvalidProperty to skip)
-     * - classname: New class name (use InvalidProperty to skip)
-     * 
-     * @note File format: JSON array of pruning rule objects
-     * 
-     * @note Performance optimizations:
-     *       - Groups rules by activity for faster lookup
-     *       - Pre-allocates vectors to avoid reallocations
-     *       - Clears old data before loading new
-     */
-    void Preference::loadTreePruning() {
-        std::string fileContent = fastbotx::Preference::loadFileContent(TreePruningFilePath);
-        if (fileContent.empty()) {
-            return;
-        }
-        
-        try {
-            ::nlohmann::json actions = ::nlohmann::json::parse(fileContent);
-            
-            // Performance optimization: Clear and rebuild activity-grouped map
-            this->_treePruningsByActivity.clear();
-            this->_treePrunings.clear();
-            
-            // Performance: Pre-allocate capacity if we know the size
-            if (actions.is_array()) {
-                size_t estimatedSize = actions.size();
-                this->_treePrunings.reserve(estimatedSize);
-            }
-            
-            for (const ::nlohmann::json &action: actions) {
-                CustomActionPtr act = std::make_shared<CustomAction>();
-                std::string xpathStr = getJsonValue<std::string>(action, "xpath", "");
-                act->xpath = std::make_shared<Xpath>(xpathStr);
-                act->activity = getJsonValue<std::string>(action, "activity", "");
-                act->resourceID = getJsonValue<std::string>(action, "resourceid", InvalidProperty);
-                act->text = getJsonValue<std::string>(action, "text", InvalidProperty);
-                act->contentDescription = getJsonValue<std::string>(action, "contentdesc",
-                                                                    InvalidProperty);
-                act->classname = getJsonValue<std::string>(action, "classname", InvalidProperty);
-                this->_treePrunings.push_back(act);
-                
-                // Performance optimization: Group by activity for faster lookup
-                this->_treePruningsByActivity[act->activity].push_back(act);
-            }
-        } catch (nlohmann::json::exception &ex) {
-            BLOGE("parse tree pruning error happened: id,%d: %s", ex.id, ex.what());
-        }
-    }
-
-
-    /**
      * @brief Load file content into string
      * 
      * Utility function to read a file's entire content into a string.
@@ -1985,7 +1751,7 @@ namespace fastbotx {
     std::string Preference::loadFileContent(const std::string &fileAbsolutePath) {
         std::ifstream fileStringReader(fileAbsolutePath, std::ios::binary | std::ios::ate);
         if (!fileStringReader.good()) {
-            LOGW("load file %s not exists!!!", fileAbsolutePath.c_str());
+            LOGW("%s not exists!!!", fileAbsolutePath.c_str());
             return std::string();
         }
         
@@ -2018,13 +1784,181 @@ namespace fastbotx {
     std::string Preference::DefaultResMappingFilePath = "/sdcard/max.mapping";
     std::string Preference::BaseConfigFilePath = "/sdcard/max.config";
     std::string Preference::InputTextConfigFilePath = "/sdcard/max.strings";
-    std::string Preference::ActionConfigFilePath = "/sdcard/max.xpath.actions";
     std::string Preference::WhiteListFilePath = "/sdcard/awl.strings";
     std::string Preference::BlackListFilePath = "/sdcard/abl.strings";
-    std::string Preference::BlackWidgetFilePath = "/sdcard/max.widget.black";
-    std::string Preference::TreePruningFilePath = "/sdcard/max.tree.pruning";
+    std::string Preference::AvoidRulesFilePath = "/sdcard/max.avoid.rules";
+    std::string Preference::XpathActionsFilePath = "/sdcard/max.xpath.actions";
     std::string Preference::ValidTextFilePath = "/sdcard/max.valid.strings";
     std::string Preference::FuzzingTextsFilePath = "/sdcard/max.fuzzing.strings";
+    std::string Preference::LlmTaskConfigFilePath = "/sdcard/max.llm.tasks";
     std::string Preference::PackageName;
+
+    /**
+     * Replaces ${VAR_NAME} in s with getenv("VAR_NAME"). Unset vars are replaced by empty string.
+     * Used when executing an action: LLM may return input text like "${LLM_LOGIN_ACCOUNT}";
+     * we substitute in patchOperate() so secrets are never sent to the LLM, only filled at execution.
+     */
+    static void substituteEnvVars(std::string &s) {
+        if (s.empty()) return;
+        std::string out;
+        out.reserve(s.size());
+        for (size_t i = 0; i < s.size(); ) {
+            if (s[i] == '$' && i + 2 < s.size() && s[i + 1] == '{') {
+                size_t end = s.find('}', i + 2);
+                if (end != std::string::npos) {
+                    std::string varName = s.substr(i + 2, end - (i + 2));
+                    const char *val = std::getenv(varName.c_str());
+                    if (val) out.append(val);
+                    i = end + 1;
+                    continue;
+                }
+            }
+            out.push_back(s[i]);
+            ++i;
+        }
+        s = std::move(out);
+    }
+
+    void Preference::loadLlmTasks() {
+        BLOG("loading max.llm.tasks: %s", LlmTaskConfigFilePath.c_str());
+        std::string fileContent = fastbotx::Preference::loadFileContent(LlmTaskConfigFilePath);
+        if (fileContent.empty()) {
+            BLOG("max.llm.tasks not found or empty: %s", LlmTaskConfigFilePath.c_str());
+            return;
+        }
+
+        try {
+            ::nlohmann::json tasks = ::nlohmann::json::parse(fileContent);
+            _llmTasks.clear();
+            _llmTaskRunCount.clear();
+            _lastLlmActivity.clear();
+
+            if (!tasks.is_array()) {
+                BLOGE("LLM task config is not an array");
+                return;
+            }
+
+            for (const ::nlohmann::json &task : tasks) {
+                auto cfg = std::make_shared<LlmTaskConfig>();
+                cfg->activity = getJsonValue<std::string>(task, "activity", "");
+                cfg->checkpointXpathString = getJsonValue<std::string>(task, "checkpoint_xpath", "");
+                cfg->taskDescription = getJsonValue<std::string>(task, "task_description", "");
+                cfg->maxSteps = getJsonValue<int>(task, "max_steps", 10);
+                cfg->maxDurationMs = getJsonValue<int>(task, "max_duration_ms", 30000);
+                cfg->safeMode = getJsonValue<bool>(task, "safe_mode", false);
+                cfg->useLlmForStepSummary = getJsonValue<bool>(task, "use_llm_step_summary", false);
+                cfg->usePlannerLayer = getJsonValue<bool>(task, "use_planner", true);
+                cfg->maxTimes = getJsonValue<int>(task, "max_times", 0);
+                cfg->resetCount = getJsonValue<bool>(task, "reset_count", false);
+
+                ::nlohmann::json forbidden = getJsonValue<::nlohmann::json>(task, "forbidden_texts",
+                                                                            ::nlohmann::json::array());
+                if (forbidden.is_array()) {
+                    for (const auto &v : forbidden) {
+                        if (v.is_string()) {
+                            cfg->forbiddenTexts.push_back(v.get<std::string>());
+                        }
+                    }
+                }
+                
+                if (!cfg->checkpointXpathString.empty()) {
+                    cfg->checkpointXpath = std::make_shared<Xpath>(cfg->checkpointXpathString);
+                }
+                
+                _llmTasks.push_back(cfg);
+
+                // Pretty, human-friendly summary for each LLM task
+                BLOG("\n  LLM task loaded:\n  activity=%s\n  checkpoint_xpath=%s\n  task=%s",
+                     cfg->activity.c_str(),
+                     cfg->checkpointXpathString.c_str(),
+                     cfg->taskDescription.c_str());
+            }
+            BLOG("loaded max.llm.tasks: %zu tasks", _llmTasks.size());
+        } catch (const ::nlohmann::json::exception &ex) {
+            BLOGE("parse LLM tasks error happened: id,%d: %s", ex.id, ex.what());
+        }
+    }
+
+    LlmTaskConfigPtr Preference::matchLlmTask(const std::string &activity,
+                                              const ElementPtr &rootXML) {
+        if (!rootXML) {
+            return nullptr;
+        }
+        if (_llmTasks.empty()) {
+            return nullptr;
+        }
+
+        // When activity switched to a different one: clear run counts for tasks (of the previous activity) that have reset_count.
+        if (!_lastLlmActivity.empty() && _lastLlmActivity != activity) {
+            for (const auto &cfg : _llmTasks) {
+                if (!cfg || cfg->activity != _lastLlmActivity || !cfg->resetCount) continue;
+                std::string taskKey = cfg->activity + "|" + cfg->checkpointXpathString;
+                _llmTaskRunCount[taskKey] = 0;
+            }
+            BLOG("LLM task run counts cleared for previous activity %s (reset_count)", _lastLlmActivity.c_str());
+        }
+        _lastLlmActivity = activity;
+
+        // 1) Filter by activity first (no tree walk); only then run checkpoint match on rootXML.
+        // Also skip tasks that have already been run maxTimes (when times > 0).
+        std::vector<LlmTaskConfigPtr> activityFiltered;
+        activityFiltered.reserve(_llmTasks.size());
+        for (const auto &cfg : _llmTasks) {
+            if (!cfg || !cfg->checkpointXpath) continue;
+            if (!cfg->activity.empty() && cfg->activity != activity) continue;
+            if (cfg->maxTimes > 0) {
+                std::string taskKey = cfg->activity + "|" + cfg->checkpointXpathString;
+                int runCount = 0;
+                auto it = _llmTaskRunCount.find(taskKey);
+                if (it != _llmTaskRunCount.end()) runCount = it->second;
+                if (runCount >= cfg->maxTimes) {
+                    BDLOG("LLM task skipped (max_times): activity=%s run_count=%d max_times=%d", cfg->activity.c_str(), runCount, cfg->maxTimes);
+                    continue;
+                }
+            }
+            activityFiltered.push_back(cfg);
+        }
+        if (activityFiltered.empty()) {
+            return nullptr;
+        }
+
+        std::vector<LlmTaskConfigPtr> candidates;
+        candidates.reserve(activityFiltered.size());
+        for (const auto &cfg : activityFiltered) {
+            ElementPtr matched = findFirstMatchedElement(cfg->checkpointXpath, rootXML);
+            if (matched) {
+                candidates.push_back(cfg);
+            }
+        }
+
+        if (candidates.empty()) {
+            BDLOG("LLM task no match: activity=%s (no checkpoint_xpath matched on current page)", activity.c_str());
+            return nullptr;
+        }
+
+        int idx = randomInt(0, static_cast<int>(candidates.size()));
+        if (idx < 0 || static_cast<size_t>(idx) >= candidates.size()) {
+            idx = 0;
+        }
+        LlmTaskConfigPtr chosen = candidates[static_cast<size_t>(idx)];
+        BLOG("LLM task matched: activity=%s checkpoint_xpath=%s", chosen->activity.c_str(), chosen->checkpointXpathString.c_str());
+        return chosen;
+    }
+
+    bool Preference::canStartLlmTask(const LlmTaskConfigPtr &cfg) const {
+        if (!cfg) return false;
+        if (cfg->maxTimes <= 0) return true;
+        std::string taskKey = cfg->activity + "|" + cfg->checkpointXpathString;
+        auto it = _llmTaskRunCount.find(taskKey);
+        int count = (it != _llmTaskRunCount.end()) ? it->second : 0;
+        return count < cfg->maxTimes;
+    }
+
+    void Preference::incrementLlmTaskRunCount(const LlmTaskConfigPtr &cfg) {
+        if (!cfg) return;
+        std::string taskKey = cfg->activity + "|" + cfg->checkpointXpathString;
+        _llmTaskRunCount[taskKey]++;
+        BLOG("LLM task session started: activity=%s checkpoint_xpath=%s (run %d, max_times %d)", cfg->activity.c_str(), cfg->checkpointXpathString.c_str(), _llmTaskRunCount[taskKey], cfg->maxTimes);
+    }
 
 } // namespace fastbotx

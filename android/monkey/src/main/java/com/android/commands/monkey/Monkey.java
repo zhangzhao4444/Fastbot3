@@ -61,7 +61,7 @@ import com.android.commands.monkey.source.MonkeySourceApeNative;
 import com.android.commands.monkey.source.MonkeySourceApeU2;
 import com.android.commands.monkey.source.MonkeySourceRandom;
 import com.android.commands.monkey.utils.Config;
-import com.android.commands.monkey.utils.ContextUtils;
+import com.android.commands.monkey.framework.APIAdapter;
 import com.android.commands.monkey.utils.Logger;
 import com.android.commands.monkey.utils.MonkeyUtils;
 import com.android.commands.monkey.utils.RandomHelper;
@@ -423,10 +423,6 @@ public class Monkey {
     private CrashInfo crashInfo = new CrashInfo();
 
 
-    /**
-     * Custom Input-Ime Method
-     */
-    private String ime = "com.android.adbkeyboard/.AdbIME";
 
     /**
      * Custom application launch intent
@@ -745,7 +741,7 @@ public class Monkey {
             Logger.println("// runing fastbot");
 
             // init framework android device
-            AndroidDevice.initializeAndroidDevice(mAm, mWm, mPm, ime);
+            AndroidDevice.initializeAndroidDevice(mAm, mWm, mPm);
             AndroidDevice.checkInteractive();
 
             if (!"".equals(mMappingFilePath) && !"max.mapping".equals(mMappingFilePath)) {
@@ -772,7 +768,7 @@ public class Monkey {
             Logger.println("// runing fastbot-U2");
 
             // init framework android device
-            AndroidDevice.initializeAndroidDevice(mAm, mWm, mPm, ime);
+            AndroidDevice.initializeAndroidDevice(mAm, mWm, mPm);
             AndroidDevice.checkInteractive();
 
             if (!"".equals(mMappingFilePath) && !"max.mapping".equals(mMappingFilePath)) {
@@ -801,7 +797,7 @@ public class Monkey {
             if (mVerbose >= 2) { // check seeding performance
                 Logger.println("// Seeded: " + mSeed);
             }
-            AndroidDevice.initializeAndroidDevice(mAm, mWm, mPm, ime);
+            AndroidDevice.initializeAndroidDevice(mAm, mWm, mPm);
             AndroidDevice.checkInteractive();
 
             mEventSource = new MonkeySourceRandom(mRandom, mMainApps, mThrottle, mRandomizeThrottle,
@@ -1120,7 +1116,7 @@ public class Monkey {
                         break;
                     case "--top-activity":
                         getSystemInterfaces();
-                        AndroidDevice.initializeAndroidDevice(mAm, mWm, mPm, ime);
+                        AndroidDevice.initializeAndroidDevice(mAm, mWm, mPm);
                         ComponentName componentName = AndroidDevice.getTopActivityComponentName();
                         if (componentName!=null){
                             Logger.println("Top activity name is:"+componentName.getClassName());
@@ -1144,9 +1140,6 @@ public class Monkey {
                         break;
                     case "--app-version":
                         appVersionCode = nextOptionData();
-                        break;
-                    case "--ime":
-                        ime = nextOptionData();
                         break;
                     case "--allow-any-starts":
                         allowAnyStarts = true;
@@ -1311,7 +1304,7 @@ public class Monkey {
      * activities
      */
     private boolean getMainApps() {
-        Context systemContext = ContextUtils.getSystemContext();
+        Context systemContext = APIAdapter.getSystemContext();
         if (systemContext == null){
             return false;
         }

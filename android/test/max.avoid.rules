@@ -1,0 +1,5 @@
+[
+  {"activity":"com.ss.android.xxx.MainActivity","xpath":"//*[@resource-id='com.xxx.go:id/aaa']","action":"avoid"},
+  {"activity":"com.ss.android.xxx.MainActivity","xpath":"//*[@resource-id='com.xxx.go:id/bbb']","action":"avoid"},
+  {"activity":"com.ss.android.xxx.SplashActivity","xpath":"//*[@resource-id='com.com.xxx.go:id/ccc' and @text='other']","action":"modify","clickable":"false"}
+]

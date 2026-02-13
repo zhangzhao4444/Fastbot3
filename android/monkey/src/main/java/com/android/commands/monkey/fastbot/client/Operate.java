@@ -29,10 +29,6 @@ public class Operate extends GsonIface {
     public String text;
     // Do you need to clear the original text before input text?
     public boolean clear;
-    // Whether to use the original adb shell to perform input,
-    // and raw input(adbkeyborad) choose one, raw input speed is faster,
-    // adb compatibility is better, in some scenarios such as security keyboard may only use adb
-    public boolean adbinput;
     public boolean rawinput;
     public boolean allowFuzzing;
     public boolean editable;
@@ -61,7 +57,6 @@ public class Operate extends GsonIface {
         o.waitTime = r.waitTime;
         o.text = r.text != null ? r.text : "";
         o.clear = r.clear;
-        o.adbinput = r.adbInput;
         o.rawinput = r.rawInput;
         o.allowFuzzing = r.allowFuzzing;
         o.editable = r.editable;

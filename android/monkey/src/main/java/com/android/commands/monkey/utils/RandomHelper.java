@@ -19,10 +19,10 @@
 package com.android.commands.monkey.utils;
 
 
-import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 
 
 /**
@@ -32,12 +32,22 @@ public class RandomHelper {
 
     static final String CHARS = " abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+~-=`:\";'{}[]|\\'<>,.?/";
     static final String DIGITS = "0123456789";
-    static String[] dateFormats = new String[]{
+    private static final String[] DATE_PATTERNS = new String[]{
             "yyyy.MM.dd",
             "HH:mm:ss",
             "yyy-MM-dd",
             "yyyy.MM.dd HH:mm:ss",
     };
+
+    // Per-thread cache of date formatters to avoid repeated SimpleDateFormat allocations.
+    private static final ThreadLocal<SimpleDateFormat[]> DATE_FORMATTERS =
+            ThreadLocal.withInitial(() -> {
+                SimpleDateFormat[] arr = new SimpleDateFormat[DATE_PATTERNS.length];
+                for (int i = 0; i < DATE_PATTERNS.length; i++) {
+                    arr[i] = new SimpleDateFormat(DATE_PATTERNS[i]);
+                }
+                return arr;
+            });
 
     public static Random getRandom() {
         return ThreadLocalRandom.current();
@@ -73,8 +83,9 @@ public class RandomHelper {
 
     private static String nextDateString() {
         long timestamp = nextLong();
+        int idx = nextInt(DATE_PATTERNS.length);
         Date date = new Date(timestamp);
-        return new SimpleDateFormat(next(dateFormats)).format(date);
+        return DATE_FORMATTERS.get()[idx].format(date);
     }
 
     public static String nextIntegerString(int maxLength) {
@@ -82,6 +93,9 @@ public class RandomHelper {
     }
 
     public static String nextIntegerString(int maxLength, boolean includeMinus) {
+        if (maxLength <= 0) {
+            return "";
+        }
         int total = nextInt(maxLength); // total may be zero
         char[] value = new char[total];
         int charTotal = DIGITS.length();
@@ -107,12 +121,15 @@ public class RandomHelper {
             case 1:
                 return nextFloatString(24, 8);
             case 2:
+            default:
                 return nextIntegerString(32);
         }
-        return nextIntegerString(32);
     }
 
     public static String nextString(int maxLength) {
+        if (maxLength <= 0) {
+            return "";
+        }
         int total = nextInt(maxLength);
         char[] value = new char[total];
         int charTotal = CHARS.length();
@@ -134,11 +151,11 @@ public class RandomHelper {
         return getRandom().nextDouble();
     }
 
-    public static Long nextLong() {
+    public static long nextLong() {
         return getRandom().nextLong();
     }
 
-    public static Float nextFloat() {
+    public static float nextFloat() {
         return getRandom().nextFloat();
     }
 
