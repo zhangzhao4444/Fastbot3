@@ -14,6 +14,7 @@ import com.android.commands.monkey.utils.Logger;
 
 import android.util.Base64;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -26,9 +27,8 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.util.Arrays;
+import java.io.IOException;
 import java.util.Iterator;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -96,7 +96,7 @@ public class AiClient {
     }
 
     public static void InitAgent(AlgorithmType agentType, String packagename) {
-        singleton.fgdsaf5d(agentType.value(), packagename, 0);
+        singleton.initAgentNative(agentType.value(), packagename, 0);
     }
 
     private boolean loaded = false;
@@ -118,34 +118,39 @@ public class AiClient {
         } catch (UnsatisfiedLinkError e) {
             Logger.errorPrintln("Error: Could not load library!");
             Logger.errorPrintln(path);
-            e.printStackTrace();
+            Logger.errorPrintln(e.toString());
             return false;
         }
         return true;
     }
 
-    private static String getAiPathFromAPK(){
+    private static boolean abiMatches(String[] abis, String abi) {
+        for (String a : abis) {
+            if (abi.equals(a)) return true;
+        }
+        return false;
+    }
+
+    private static String getAiPathFromAPK() {
         String[] abis = Build.SUPPORTED_ABIS;
-        List<String> abisList = Arrays.asList(abis);
-        if (abisList.contains("x86_64")) {
+        if (abiMatches(abis, "x86_64")) {
             return "/data/local/tmp/monkey.apk!/lib/x86_64/libfastbot_native.so";
-        } else if (abisList.contains("x86")) {
+        } else if (abiMatches(abis, "x86")) {
             return "/data/local/tmp/monkey.apk!/lib/x86/libfastbot_native.so";
-        } else if (abisList.contains("arm64-v8a")) {
+        } else if (abiMatches(abis, "arm64-v8a")) {
             return "/data/local/tmp/monkey.apk!/lib/arm64-v8a/libfastbot_native.so";
         } else {
             return "/data/local/tmp/monkey.apk!/lib/armeabi-v7a/libfastbot_native.so";
         }
     }
 
-    private static String getAiPathLocally(){
+    private static String getAiPathLocally() {
         String[] abis = Build.SUPPORTED_ABIS;
-        List<String> abisList = Arrays.asList(abis);
-        if (abisList.contains("x86_64")) {
+        if (abiMatches(abis, "x86_64")) {
             return "/data/local/tmp/x86_64/libfastbot_native.so";
-        } else if (abisList.contains("x86")) {
+        } else if (abiMatches(abis, "x86")) {
             return "/data/local/tmp/x86/libfastbot_native.so";
-        } else if (abisList.contains("arm64-v8a")) {
+        } else if (abiMatches(abis, "arm64-v8a")) {
             return "/data/local/tmp/arm64-v8a/libfastbot_native.so";
         } else {
             return "/data/local/tmp/armeabi-v7a/libfastbot_native.so";
@@ -153,41 +158,31 @@ public class AiClient {
     }
 
     private static String getAiPath(boolean fromAPK) {
-        if(Build.VERSION.SDK_INT <= com.android.commands.monkey.utils.AndroidVersions.API_22_ANDROID_5_1) {
+        if (Build.VERSION.SDK_INT <= com.android.commands.monkey.utils.AndroidVersions.API_22_ANDROID_5_1) {
             return getAiPathLocally();
-        }else {
-            if (fromAPK) {
-                return getAiPathFromAPK();
-            }else {
-                return getAiPathLocally();
-            }
+        } else {
+            return fromAPK ? getAiPathFromAPK() : getAiPathLocally();
         }
     }
 
     public static void loadResMapping(String resmapping) {
-        if (null == singleton) {
-            Logger.println("// Error: AiCore not initted!");
-            return;
-        }
         if (!singleton.loaded) {
             Logger.println("// Error: Could not load native library!");
             Logger.println("Please report this bug issue to github");
             System.exit(1);
         }
-        singleton.jdasdbil(resmapping);
+        singleton.loadResMappingNative(resmapping);
     }
 
     public static Operate getAction(String activity, String pageDesc) {
-        return singleton.b1bhkadf(activity, pageDesc);
+        return singleton.getOperate(activity, pageDesc);
     }
 
     /**
      * Optional: set a pre-captured screenshot when no LlmScreenshotProvider is registered (e.g. tests).
      */
     public static void setLastScreenshotForLlm(byte[] png) {
-        if (singleton != null) {
-            singleton.lastScreenshotForLlm = png;
-        }
+        singleton.lastScreenshotForLlm = png;
     }
 
     /**
@@ -255,7 +250,7 @@ public class AiClient {
      */
     private static String buildPromptFromPayload(String promptType, String payloadJson) {
         try {
-            JSONObject payload = new JSONObject(payloadJson != null && !payloadJson.isEmpty() ? payloadJson : "{}");
+            JSONObject payload = new JSONObject((payloadJson == null || payloadJson.isEmpty()) ? "{}" : payloadJson);
             if ("executor".equals(promptType)) {
                 return buildExecutorPrompt(payload);
             }
@@ -279,8 +274,8 @@ public class AiClient {
             sb.append("Navigation hint: this screen was already seen recently; avoid repeating the same scroll or try a different strategy.\n\n");
         }
         JSONObject plannerStep = j.optJSONObject("planner_step");
-        if (plannerStep != null && !plannerStep.optString("tool", "").isEmpty()) {
-            String tool = plannerStep.optString("tool", "");
+        String tool = plannerStep != null ? plannerStep.optString("tool", "") : "";
+        if (!tool.isEmpty()) {
             String intent = plannerStep.optString("intent", "");
             String text = plannerStep.optString("text", "");
             sb.append("=== EXECUTOR SUB-TASK (complete this fully) ===\n");
@@ -551,10 +546,10 @@ public class AiClient {
                     return;
                 }
 
-                // Fallback: schema known是 JSON 但没有 reason/intent，就少量打印一行，避免整段 JSON 噪音
+                // Fallback: content is JSON but no reason/intent; log one line to avoid full JSON noise
                 Logger.println("// [LLM content JSON] " + inner.toString());
             } catch (JSONException ignore) {
-                // inner content 不是 JSON，就直接打一行文本，避免多行噪音
+                // Content is plain text, not JSON
                 Logger.println("// [LLM content text] " + content);
             }
         } catch (JSONException e) {
@@ -609,25 +604,40 @@ public class AiClient {
                 }
             }
             int code = conn.getResponseCode();
+            InputStream in = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
             if (code < 200 || code >= 300) {
                 Logger.errorPrintln("doLlmHttpPostBody: HTTP " + code + " for url=" + url + " (expected 2xx; 404=wrong path, check max.llm.apiUrl e.g. https://.../v1/chat/completions)");
+                if (in != null) {
+                    drainStream(in);
+                }
                 return null;
             }
-            InputStream in = conn.getInputStream();
             if (in == null) return null;
-            byte[] buf = new byte[4096];
-            StringBuilder sb = new StringBuilder();
-            int n;
-            while ((n = in.read(buf)) > 0) {
-                sb.append(new String(buf, 0, n, StandardCharsets.UTF_8));
-            }
-            return sb.toString();
+            byte[] raw = readStreamToByteArray(in);
+            return raw != null ? new String(raw, StandardCharsets.UTF_8) : null;
         } catch (Exception e) {
             Logger.errorPrintln("doLlmHttpPostBody failed: " + e.getMessage());
             return null;
         } finally {
             if (conn != null) conn.disconnect();
         }
+    }
+
+    private static void drainStream(InputStream in) {
+        try {
+            byte[] buf = new byte[4096];
+            while (in.read(buf) > 0) { }
+        } catch (IOException ignored) { }
+    }
+
+    private static byte[] readStreamToByteArray(InputStream in) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] buf = new byte[4096];
+        int n;
+        while ((n = in.read(buf)) > 0) {
+            baos.write(buf, 0, n);
+        }
+        return baos.toByteArray();
     }
 
     /**
@@ -682,11 +692,11 @@ public class AiClient {
         return Operate.fromJson(operateStr);
     }
 
-    private native void jdasdbil(String b9);
+    private native void loadResMappingNative(String resMapping);
 
-    private native String b0bhkadf(String a0, String a1);
-    private native void fgdsaf5d(int b7, String b2, int t);
-    private native boolean nkksdhdk(String a0, float p1, float p2);
+    private native String getOperateJsonNative(String activity, String pageDesc);
+    private native void initAgentNative(int algorithmType, String packageName, int flags);
+    private native boolean checkPointInShieldNative(String activity, float x, float y);
 
     /**
      * Batch check: multiple points in one JNI call (performance optimization).
@@ -716,7 +726,7 @@ public class AiClient {
     public static native String getNativeVersion();
 
     public static boolean checkPointIsShield(String activity, PointF point) {
-        return singleton.nkksdhdk(activity, point.x, point.y);
+        return singleton.checkPointInShieldNative(activity, point.x, point.y);
     }
 
     /**
@@ -733,15 +743,18 @@ public class AiClient {
         return singleton.checkPointsInShieldNative(activity, xCoords, yCoords);
     }
 
-    public Operate b1bhkadf(String activity, String pageDesc) {
+    /**
+     * Gets the next Operate (action) from native layer by activity and page description XML.
+     * Called by {@link #getAction(String, String)}.
+     */
+    public Operate getOperate(String activity, String pageDesc) {
         if (!loaded) {
             Logger.println("// Error: Could not load native library!");
             Logger.println("Please report this bug issue to github");
             System.exit(1);
         }
-        String operateStr = b0bhkadf(activity, pageDesc);
-
-        if (operateStr.length() < 1) {
+        String operateStr = getOperateJsonNative(activity, pageDesc);
+        if (operateStr == null || operateStr.isEmpty()) {
             Logger.errorPrintln("native get operate failed " + operateStr);
             return null;
         }

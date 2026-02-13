@@ -92,9 +92,9 @@ static std::string getNextFuzzActionJson(int displayWidth, int displayHeight, bo
     return j.dump();
 }
 
-//getAction (XML string from Java - involves GetStringUTFChars copy)
-jstring JNICALL Java_com_bytedance_fastbot_AiClient_b0bhkadf(JNIEnv *env, jobject, jstring activity,
-                                                             jstring xmlDescOfGuiTree) {
+// getAction (XML string from Java - involves GetStringUTFChars copy)
+jstring JNICALL Java_com_bytedance_fastbot_AiClient_getOperateJsonNative(JNIEnv *env, jobject, jstring activity,
+                                                                         jstring xmlDescOfGuiTree) {
     if (nullptr == _fastbot_model) {
         _fastbot_model = fastbotx::Model::create();
     }
@@ -214,9 +214,9 @@ jobject JNICALL Java_com_bytedance_fastbot_AiClient_getActionFromBufferNativeStr
     return result;
 }
 
-// for single device, just addAgent as empty device //InitAgent
-void JNICALL Java_com_bytedance_fastbot_AiClient_fgdsaf5d(JNIEnv *env, jobject, jint agentType,
-                                                          jstring packageName, jint deviceType) {
+// InitAgent: for single device, just addAgent as empty device
+void JNICALL Java_com_bytedance_fastbot_AiClient_initAgentNative(JNIEnv *env, jobject, jint agentType,
+                                                                 jstring packageName, jint deviceType) {
     if (nullptr == _fastbot_model) {
         _fastbot_model = fastbotx::Model::create();
     }
@@ -239,9 +239,9 @@ void JNICALL Java_com_bytedance_fastbot_AiClient_fgdsaf5d(JNIEnv *env, jobject, 
         env->ReleaseStringUTFChars(packageName, packageNameCString);
 }
 
-// load ResMapping
+// loadResMapping
 void JNICALL
-Java_com_bytedance_fastbot_AiClient_jdasdbil(JNIEnv *env, jobject, jstring resMappingFilepath) {
+Java_com_bytedance_fastbot_AiClient_loadResMappingNative(JNIEnv *env, jobject, jstring resMappingFilepath) {
     if (nullptr == _fastbot_model) {
         _fastbot_model = fastbotx::Model::create();
     }
@@ -253,10 +253,10 @@ Java_com_bytedance_fastbot_AiClient_jdasdbil(JNIEnv *env, jobject, jstring resMa
     env->ReleaseStringUTFChars(resMappingFilepath, resourceMappingPath);
 }
 
-// to check if a point is in black widget area (single point)
+// single-point shield check: whether (pointX, pointY) is in black widget area
 jboolean JNICALL
-Java_com_bytedance_fastbot_AiClient_nkksdhdk(JNIEnv *env, jobject, jstring activity, jfloat pointX,
-                                             jfloat pointY) {
+Java_com_bytedance_fastbot_AiClient_checkPointInShieldNative(JNIEnv *env, jobject, jstring activity, jfloat pointX,
+                                                             jfloat pointY) {
     bool isShield = false;
     if (nullptr == _fastbot_model) {
         BLOGE("%s", "model null, check point failed!");
