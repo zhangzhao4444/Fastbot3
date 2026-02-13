@@ -32,8 +32,13 @@ import org.json.JSONObject;
 public abstract class AbstractCustomEvent implements CustomEvent {
 
     /**
-     *
+     * In-place shield for trajectory points. Apply to (x,y) and write result to out[outOffset], out[outOffset+1].
+     * Used to avoid allocating PointF[] in black-rect shielding path.
      */
+    public interface ShieldInPlace {
+        void apply(float x, float y, float[] out, int outOffset);
+    }
+
     private static final long serialVersionUID = 1L;
 
     static float[] fromPointsArray(PointF[] points) {

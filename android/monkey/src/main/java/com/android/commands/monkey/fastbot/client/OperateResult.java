@@ -14,7 +14,6 @@ public class OperateResult {
     public long waitTime;
     public String text;
     public boolean clear;
-    public boolean adbInput;
     public boolean rawInput;
     public boolean allowFuzzing;
     public boolean editable;
@@ -22,6 +21,4 @@ public class OperateResult {
     public String aid;
     public String jAction;
     public String widget;
-    /** When true, caller should retry getActionFromBuffer with screenshot in the same frame (first-step image for AutodevAgent). */
-    public boolean requestScreenshotRetry;
 }

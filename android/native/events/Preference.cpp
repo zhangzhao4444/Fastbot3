@@ -86,7 +86,6 @@ namespace fastbotx {
         opt->clear = this->clearText;
         opt->throttle = static_cast<float>(this->throttle);
         opt->waitTime = this->waitTime;
-        opt->adbInput = this->adbInput;
         opt->allowFuzzing = this->allowFuzzing;
         
         return opt;

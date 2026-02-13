@@ -10,8 +10,8 @@ import android.view.MotionEvent;
 
 import com.android.commands.monkey.events.CustomEvent;
 import com.android.commands.monkey.events.MonkeyEvent;
+import com.android.commands.monkey.events.base.MonkeyThrottleEvent;
 import com.android.commands.monkey.events.base.MonkeyTouchEvent;
-import com.android.commands.monkey.events.base.MonkeyWaitEvent;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -54,27 +54,41 @@ public class ClickEvent extends AbstractCustomEvent {
     @Override
     public List<MonkeyEvent> generateMonkeyEvents() {
         long downAt = SystemClock.uptimeMillis();
-        MonkeyEvent down, wait = null, up;
-        down = new MonkeyTouchEvent(MotionEvent.ACTION_DOWN).setDownTime(downAt).addPointer(0, x, y)
+        MonkeyEvent down = new MonkeyTouchEvent(MotionEvent.ACTION_DOWN).setDownTime(downAt).addPointer(0, x, y)
                 .setIntermediateNote(false);
-
-        wait = new MonkeyWaitEvent(waitTime);
-
-        up = new MonkeyTouchEvent(MotionEvent.ACTION_UP).setDownTime(downAt).addPointer(0, x, y)
+        MonkeyEvent up = new MonkeyTouchEvent(MotionEvent.ACTION_UP).setDownTime(downAt).addPointer(0, x, y)
                 .setIntermediateNote(false);
         if (waitTime == 0) {
             return Arrays.asList(down, up);
         }
-        return Arrays.asList(down, wait, up);
+        return Arrays.asList(down, MonkeyThrottleEvent.obtain(waitTime), up);
     }
 
+    public float getX() { return x; }
+    public float getY() { return y; }
+
+    /** Returns a new PointF. Prefer getX()/getY() or getPoint(PointF) to avoid allocation. */
     public PointF getPoint() {
         return new PointF(this.x, this.y);
+    }
+
+    /** Writes (x,y) into {@code reuse} and returns it. Use to avoid allocation. */
+    public PointF getPoint(PointF reuse) {
+        if (reuse == null) return getPoint();
+        reuse.x = x;
+        reuse.y = y;
+        return reuse;
     }
 
     public void setPoint(PointF point) {
         this.x = point.x;
         this.y = point.y;
+    }
+
+    /** Set coordinates without allocating a PointF. Prefer for shield path. */
+    public void setPoint(float x, float y) {
+        this.x = x;
+        this.y = y;
     }
 
     public JSONObject toJSONObject() throws JSONException {

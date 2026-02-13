@@ -146,12 +146,6 @@ namespace fastbotx {
                                  const std::string &deviceID = "");
 
         /**
-         * Same as getOperateOpt with optional out param requestScreenshotRetry (e.g. for same-frame retry).
-         */
-        OperatePtr getOperateOpt(const ElementPtr &element, const std::string &activity,
-                                 const std::string &deviceID, bool *requestScreenshotRetry);
-
-        /**
          * @brief Get the preference object
          * 
          * @return Shared pointer to the preference object

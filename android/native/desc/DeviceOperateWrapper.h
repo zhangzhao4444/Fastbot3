@@ -51,9 +51,6 @@ namespace fastbotx {
         /// Whether to clear text before input
         bool clear{};
         
-        /// Whether to use ADB input method
-        bool adbInput{};
-        
         /// Name/description of the operation
         std::string name;
         

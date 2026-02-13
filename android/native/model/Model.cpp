@@ -523,11 +523,6 @@ namespace fastbotx {
      */
     OperatePtr Model::getOperateOpt(const ElementPtr &element, const std::string &activity,
                                     const std::string &deviceID) {
-        return getOperateOpt(element, activity, deviceID, nullptr);
-    }
-
-    OperatePtr Model::getOperateOpt(const ElementPtr &element, const std::string &activity,
-                                    const std::string &deviceID, bool *requestScreenshotRetry) {
         // Record method start time for performance tracking
         double methodStartTimestamp = currentStamp();
         

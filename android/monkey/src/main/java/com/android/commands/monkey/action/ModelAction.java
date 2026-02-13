@@ -39,7 +39,6 @@ public class ModelAction extends Action {
     public final String className;
     public final Rect boundingBox;
     private String inputText = null;
-    private boolean useAdbInput = false;
     private boolean clearText = false;
     private boolean rawInput = false;
     private boolean isEditText = false;
@@ -92,14 +91,6 @@ public class ModelAction extends Action {
 
     public void setInputText(String str) {
         this.inputText = str;
-    }
-
-    public boolean isUseAdbInput() {
-        return useAdbInput;
-    }
-
-    public void setUseAdbInput(boolean useAdbInput) {
-        this.useAdbInput = useAdbInput;
     }
 
     public boolean isClearText() {

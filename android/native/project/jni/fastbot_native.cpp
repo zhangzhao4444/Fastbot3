@@ -176,11 +176,8 @@ jobject JNICALL Java_com_bytedance_fastbot_AiClient_getActionFromBufferNativeStr
 
     fastbotx::ElementPtr elem = parseTreeFromBuffer(static_cast<const char *>(addr), len);
     if (!elem) return nullptr;
-    bool requestScreenshotRetry = false;
-    fastbotx::OperatePtr opt = _fastbot_model->getOperateOpt(elem, activityString, "", &requestScreenshotRetry);
-    if (!opt) return nullptr;
-    // When native asks for retry with screenshot (first-step image), return NOP result with flag so Java retries in same frame
-    if (opt == fastbotx::DeviceOperateWrapper::OperateNop && !requestScreenshotRetry) return nullptr;
+    fastbotx::OperatePtr opt = _fastbot_model->getOperateOpt(elem, activityString, "");
+    if (!opt || opt == fastbotx::DeviceOperateWrapper::OperateNop) return nullptr;
 
     jclass cls = env->FindClass("com/android/commands/monkey/fastbot/client/OperateResult");
     if (!cls) return nullptr;
@@ -200,7 +197,6 @@ jobject JNICALL Java_com_bytedance_fastbot_AiClient_getActionFromBufferNativeStr
     env->SetObjectField(result, env->GetFieldID(cls, "text", "Ljava/lang/String;"),
                         opt->getText().empty() ? nullptr : env->NewStringUTF(opt->getText().c_str()));
     env->SetBooleanField(result, env->GetFieldID(cls, "clear", "Z"), opt->clear ? JNI_TRUE : JNI_FALSE);
-    env->SetBooleanField(result, env->GetFieldID(cls, "adbInput", "Z"), opt->adbInput ? JNI_TRUE : JNI_FALSE);
     env->SetBooleanField(result, env->GetFieldID(cls, "rawInput", "Z"), opt->getRawInput() ? JNI_TRUE : JNI_FALSE);
     env->SetBooleanField(result, env->GetFieldID(cls, "allowFuzzing", "Z"), opt->allowFuzzing ? JNI_TRUE : JNI_FALSE);
     env->SetBooleanField(result, env->GetFieldID(cls, "editable", "Z"), opt->editable ? JNI_TRUE : JNI_FALSE);
@@ -212,8 +208,6 @@ jobject JNICALL Java_com_bytedance_fastbot_AiClient_getActionFromBufferNativeStr
                         opt->getJAction().empty() ? nullptr : env->NewStringUTF(opt->getJAction().c_str()));
     env->SetObjectField(result, env->GetFieldID(cls, "widget", "Ljava/lang/String;"),
                         opt->widget.empty() ? nullptr : env->NewStringUTF(opt->widget.c_str()));
-    env->SetBooleanField(result, env->GetFieldID(cls, "requestScreenshotRetry", "Z"),
-                         requestScreenshotRetry ? JNI_TRUE : JNI_FALSE);
 
     env->DeleteLocalRef(cls);
     if (posArr) env->DeleteLocalRef(posArr);

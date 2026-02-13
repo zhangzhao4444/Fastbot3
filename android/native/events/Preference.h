@@ -43,7 +43,6 @@ namespace fastbotx {
         bool clearText{};
         int throttle{};
         int waitTime{};
-        bool adbInput{};
 
         ~CustomAction() override = default;
     };

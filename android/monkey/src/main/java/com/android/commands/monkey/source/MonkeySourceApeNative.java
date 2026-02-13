@@ -81,7 +81,6 @@ import com.android.commands.monkey.events.base.MonkeyRotationEvent;
 import com.android.commands.monkey.events.base.MonkeySchemaEvent;
 import com.android.commands.monkey.events.base.MonkeyThrottleEvent;
 import com.android.commands.monkey.events.base.MonkeyTouchEvent;
-import com.android.commands.monkey.events.base.MonkeyWaitEvent;
 import com.android.commands.monkey.events.base.mutation.MutationAirplaneEvent;
 import com.android.commands.monkey.events.base.mutation.MutationAlwaysFinishActivityEvent;
 import com.android.commands.monkey.events.base.mutation.MutationWifiEvent;
@@ -634,10 +633,6 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                 if (operate == null) {
                     operate = AiClient.getAction(topActivityName.getClassName(), stringOfGuiTree);
                 }
-                // Screenshot is now captured on demand when native triggers LLM request; no retry path needed.
-                if (operate != null && operate.requestScreenshotRetry && stringOfGuiTree != null && !stringOfGuiTree.isEmpty()) {
-                    operate = getActionFromXmlBufferWithScreenshot(topActivityName.getClassName(), stringOfGuiTree);
-                }
                 if (operate == null) {
                     generateThrottleEvent(mThrottle);
                     return;
@@ -648,7 +643,7 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                 ActionType type = operate.act;
                 if (mVerbose > 0) {
                     Logger.println("action type: " + type.toString());
-                    Logger.println("rpc cost time: " + (System.currentTimeMillis() - rpc_start));
+                    Logger.println("rpc cost time: " + (System.currentTimeMillis() - rpc_start) + " ms");
                 }
 
                 mReusableRect.set(0, 0, 0, 0);
@@ -700,7 +695,6 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                         modelAction.setClearText(operate.clear);
                         modelAction.setEditText(operate.editable);
                         modelAction.setRawInput(operate.rawinput);
-                        modelAction.setUseAdbInput(operate.adbinput);
                         break;
                     case LONG_CLICK:
                         modelAction.setWaitTime(operate.waitTime);

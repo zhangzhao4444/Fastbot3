@@ -434,18 +434,6 @@ public class AndroidDevice {
         return null;
     }
 
-    /** Best-effort: true if IME window height is non-zero. May be false when run as app_process (no IME client). Prefer model isEditText when available. */
-    public static boolean isVirtualKeyboardOpened() {
-        try {
-            int height = getInputMethodManager().getInputMethodWindowVisibleHeight();
-            return height != 0;
-        } catch (IllegalArgumentException e) {
-            // No IME client (e.g. app_process): server throws "unknown client".
-            Logger.warningPrintln("getInputMethodWindowVisibleHeight failed (no IME client): " + e.getMessage());
-            return false;
-        }
-    }
-
     /** If the display is not interactive, sends KEYCODE_WAKEUP to wake the device (no toggle); then rechecks and logs. */
     public static void checkInteractive() {
         try {

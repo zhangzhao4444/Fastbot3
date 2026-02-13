@@ -60,7 +60,6 @@ import com.android.commands.monkey.events.base.MonkeyKeyEvent;
 import com.android.commands.monkey.events.base.MonkeySchemaEvent;
 import com.android.commands.monkey.events.base.MonkeyThrottleEvent;
 import com.android.commands.monkey.events.base.MonkeyTouchEvent;
-import com.android.commands.monkey.events.base.MonkeyWaitEvent;
 import com.android.commands.monkey.events.base.mutation.MutationAirplaneEvent;
 import com.android.commands.monkey.events.base.mutation.MutationAlwaysFinishActivityEvent;
 import com.android.commands.monkey.events.base.mutation.MutationWifiEvent;
@@ -220,8 +219,10 @@ public abstract class MonkeySourceApeBase {
     }
 
     protected final void addEvents(List<MonkeyEvent> events) {
+        if (events == null || events.isEmpty()) return;
+        mQ.addLastAll(events);
         for (int i = 0; i < events.size(); i++) {
-            addEvent(events.get(i));
+            events.get(i).setEventId(mEventId++);
         }
     }
 
@@ -423,7 +424,7 @@ public abstract class MonkeySourceApeBase {
         long downAt = SystemClock.uptimeMillis();
         addEvent(new MonkeyTouchEvent(MotionEvent.ACTION_DOWN).setDownTime(downAt).addPointer(0, p1.x, p1.y).setIntermediateNote(false));
         if (waitTime > 0) {
-            addEvent(new MonkeyWaitEvent(waitTime));
+            addEvent(MonkeyThrottleEvent.obtain(waitTime));
         }
         addEvent(new MonkeyTouchEvent(MotionEvent.ACTION_UP).setDownTime(downAt).addPointer(0, p1.x, p1.y).setIntermediateNote(false));
     }
@@ -448,7 +449,7 @@ public abstract class MonkeySourceApeBase {
             long downAt = SystemClock.uptimeMillis();
             addEvent(new MonkeyTouchEvent(MotionEvent.ACTION_DOWN).setDownTime(downAt).addPointer(0, p.x, p.y).setIntermediateNote(false));
             if (waitTime > 0) {
-                addEvent(new MonkeyWaitEvent(waitTime));
+                addEvent(MonkeyThrottleEvent.obtain(waitTime));
             }
             addEvent(new MonkeyTouchEvent(MotionEvent.ACTION_UP).setDownTime(downAt).addPointer(0, p.x, p.y).setIntermediateNote(false));
         }
@@ -487,14 +488,13 @@ public abstract class MonkeySourceApeBase {
             float alpha = i / (float) steps;
             addEvent(new MonkeyTouchEvent(MotionEvent.ACTION_MOVE).setDownTime(downAt)
                     .addPointer(0, lerp(start.x, end.x, alpha), lerp(start.y, end.y, alpha)).setIntermediateNote(true).setType(1));
-            addEvent(new MonkeyWaitEvent(waitTime));
+            addEvent(MonkeyThrottleEvent.obtain(waitTime));
         }
         addEvent(new MonkeyTouchEvent(MotionEvent.ACTION_UP).setDownTime(downAt).addPointer(0, end.x, end.y).setIntermediateNote(false).setType(1));
     }
 
     protected void doInput(ModelAction action) {
         String inputText = action.getInputText();
-        boolean useAdbInput = action.isUseAdbInput();
         // Only send IME/text input when the action target is an editable widget (EditText).
         // Otherwise e.g. clicking a button ("获取短信验证码") would focus the button and
         // commitText() would go nowhere, so nothing appears in the UI.
@@ -509,13 +509,8 @@ public abstract class MonkeySourceApeBase {
                 }
                 return;
             }
-            if (!useAdbInput) {
-                if (mVerbose > 0) Logger.println("MonkeyIMEEvent added " + inputText);
-                addEvent(new MonkeyIMEEvent(inputText));
-            } else {
-                if (mVerbose > 0) Logger.println("MonkeyCommandEvent added " + inputText);
-                addEvent(new MonkeyCommandEvent("input text " + inputText));
-            }
+            if (mVerbose > 0) Logger.println("MonkeyIMEEvent added " + inputText);
+            addEvent(new MonkeyIMEEvent(inputText));
         } else if (inputText != null && !inputText.equals("")) {
             if (mVerbose > 0) Logger.println("Skip IME input for non-edit widget: " + inputText);
         } else {
@@ -524,7 +519,7 @@ public abstract class MonkeySourceApeBase {
                 return;
             }
             lastInputTimestamp = timestamp;
-            if (action.isEditText() || AndroidDevice.isVirtualKeyboardOpened()) {
+            if (action.isEditText()) {
                 generateKeyEvent(KeyEvent.KEYCODE_ESCAPE);
             }
         }
@@ -672,29 +667,29 @@ public abstract class MonkeySourceApeBase {
     protected void generateFuzzingEvents(FuzzAction action) {
         List<CustomEvent> events = action.getFuzzingEvents();
         long throttle = action.getThrottle();
+        PointF shieldReuse = new PointF();
         for (CustomEvent event : events) {
             if (event instanceof ClickEvent) {
-                PointF point = ((ClickEvent) event).getPoint();
-                point = shieldBlackRect(point);
-                ((ClickEvent) event).setPoint(point);
+                ClickEvent click = (ClickEvent) event;
+                shieldReuse.set(click.getX(), click.getY());
+                PointF s = shieldBlackRect(shieldReuse);
+                click.setPoint(s.x, s.y);
             } else if (event instanceof DragEvent) {
                 DragEvent drag = (DragEvent) event;
-                PointF[] pts = drag.getPoints();
-                if (pts != null) {
-                    for (int i = 0; i < pts.length; i++) {
-                        pts[i] = shieldBlackRect(pts[i]);
-                    }
-                    drag.setPoints(pts);
-                }
+                drag.applyShieldInPlace((x, y, out, off) -> {
+                    shieldReuse.set(x, y);
+                    PointF s = shieldBlackRect(shieldReuse);
+                    out[off] = s.x;
+                    out[off + 1] = s.y;
+                });
             } else if (event instanceof PinchOrZoomEvent) {
                 PinchOrZoomEvent pinch = (PinchOrZoomEvent) event;
-                PointF[] pts = pinch.getPoints();
-                if (pts != null) {
-                    for (int i = 0; i < pts.length; i++) {
-                        pts[i] = shieldBlackRect(pts[i]);
-                    }
-                    pinch.setPoints(pts);
-                }
+                pinch.applyShieldInPlace((x, y, out, off) -> {
+                    shieldReuse.set(x, y);
+                    PointF s = shieldBlackRect(shieldReuse);
+                    out[off] = s.x;
+                    out[off + 1] = s.y;
+                });
             }
             for (MonkeyEvent me : event.generateMonkeyEvents()) {
                 if (me == null) throw new RuntimeException();

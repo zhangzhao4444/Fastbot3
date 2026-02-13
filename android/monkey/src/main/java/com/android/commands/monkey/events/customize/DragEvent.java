@@ -10,8 +10,8 @@ import android.view.MotionEvent;
 
 import com.android.commands.monkey.events.CustomEvent;
 import com.android.commands.monkey.events.MonkeyEvent;
+import com.android.commands.monkey.events.base.MonkeyThrottleEvent;
 import com.android.commands.monkey.events.base.MonkeyTouchEvent;
-import com.android.commands.monkey.events.base.MonkeyWaitEvent;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -41,7 +41,8 @@ public class DragEvent extends AbstractCustomEvent {
         }
     }
 
-    private DragEvent(float[] values) {
+    /** Internal use: construct from raw float[x0,y0,...] values (used by JSON/fuzzer). */
+    public DragEvent(float[] values) {
         this.values = values;
     }
 
@@ -57,6 +58,13 @@ public class DragEvent extends AbstractCustomEvent {
         }
     }
 
+    /** Apply shield in-place to values (x,y pairs). Avoids allocating PointF[]. */
+    public void applyShieldInPlace(AbstractCustomEvent.ShieldInPlace shield) {
+        for (int i = 0; i < values.length >> 1; i++) {
+            shield.apply(values[i * 2], values[i * 2 + 1], values, i * 2);
+        }
+    }
+
     public static CustomEvent fromJSONObject(JSONObject jEvent) throws JSONException {
         JSONArray jValues = jEvent.getJSONArray("values");
         float[] values = new float[jValues.length()];
@@ -68,24 +76,24 @@ public class DragEvent extends AbstractCustomEvent {
 
     @Override
     public List<MonkeyEvent> generateMonkeyEvents() {
-        int index = 0;
-        PointF[] points = toPointsArray(values);
-        final int size = points.length;
-        List<MonkeyEvent> events = new ArrayList<MonkeyEvent>(size);
+        final int pointCount = values.length >> 1;
+        if (pointCount < 2) return new ArrayList<MonkeyEvent>(0);
+        List<MonkeyEvent> events = new ArrayList<MonkeyEvent>(pointCount * 2 - 1);
         long downAt = SystemClock.uptimeMillis();
-        PointF p = points[index++];
-        events.add(new MonkeyTouchEvent(MotionEvent.ACTION_DOWN).setDownTime(downAt).addPointer(0, p.x, p.y)
+        float x = values[0], y = values[1];
+        events.add(new MonkeyTouchEvent(MotionEvent.ACTION_DOWN).setDownTime(downAt).addPointer(0, x, y)
                 .setIntermediateNote(false));
-
-        long waitTime = swipeDuration / size;
-        for (; index < size - 1; index++) {
-            p = points[index];
-            events.add(new MonkeyTouchEvent(MotionEvent.ACTION_MOVE).setDownTime(downAt).addPointer(0, p.x, p.y)
+        long waitTime = swipeDuration / pointCount;
+        for (int i = 1; i < pointCount - 1; i++) {
+            x = values[i * 2];
+            y = values[i * 2 + 1];
+            events.add(new MonkeyTouchEvent(MotionEvent.ACTION_MOVE).setDownTime(downAt).addPointer(0, x, y)
                     .setIntermediateNote(true));
-            events.add(new MonkeyWaitEvent(waitTime));
+            events.add(MonkeyThrottleEvent.obtain(waitTime));
         }
-        p = points[index];
-        events.add(new MonkeyTouchEvent(MotionEvent.ACTION_UP).setDownTime(downAt).addPointer(0, p.x, p.y)
+        x = values[(pointCount - 1) * 2];
+        y = values[(pointCount - 1) * 2 + 1];
+        events.add(new MonkeyTouchEvent(MotionEvent.ACTION_UP).setDownTime(downAt).addPointer(0, x, y)
                 .setIntermediateNote(false));
         return events;
     }
