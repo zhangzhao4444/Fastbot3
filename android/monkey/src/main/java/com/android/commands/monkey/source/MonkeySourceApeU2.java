@@ -274,7 +274,6 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
      * @return the first event in the queue
      */
     public MonkeyEvent getNextEvent() {
-        checkAppActivity();
         if (checkMonkeyStepDone()){
             if (shouldProfile()){
                 Logger.println("[MonkeySourceApeU2] Profiling coverage...");
@@ -286,6 +285,7 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
             }
         }
         if (!hasEvent()) {
+            checkAppActivity();
             try {
                 if (mVerbose > 3){
                     Logger.println("[MonkeySourceApeU2] wait semaphore: stepMonkey");

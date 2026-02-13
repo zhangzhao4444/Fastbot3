@@ -8,7 +8,6 @@ import com.android.commands.monkey.fastbot.client.Operate;
 import com.android.commands.monkey.source.CoverageData;
 import com.android.commands.monkey.source.MonkeySourceApeU2;
 import com.google.gson.Gson;
-import com.google.gson.JsonObject;
 
 import java.io.File;
 import java.io.IOException;
@@ -205,8 +204,12 @@ public class ProxyServer extends NanoHTTPD {
                 JSONObject jsonRPCBody = new JSONObject(requestBody);
                 String screenshot_file = "";
                 if (takeScreenshots){
-                    okhttp3.Response screenshotResponse = scriptDriverClient.takeScreenshot();
-                    screenshot_file = saveScreenshot(screenshotResponse);
+                    if (jsonRPCBody.getString("kind").equals("invariant")){
+                        screenshot_file = peekImageQueue();
+                    } else {
+                        okhttp3.Response screenshotResponse = scriptDriverClient.takeScreenshot();
+                        screenshot_file = saveScreenshot(screenshotResponse);
+                    }
                 }
                 recordLog(jsonRPCBody, screenshot_file);
                 String state = jsonRPCBody.getString("state");
@@ -300,7 +303,7 @@ public class ProxyServer extends NanoHTTPD {
             try {
                 body = hierarchyResponse.body().string();
             } catch (IOException e) {
-                return getNoContentResponse();
+                return getEmptyResponse();
             }
             this.hierarchyResponseCache = body;
             if (!this.hierarchyResponseCache.isEmpty()){
@@ -314,15 +317,16 @@ public class ProxyServer extends NanoHTTPD {
             String contentType = hierarchyResponse.header("Content-Type", "application/json");
             return newFixedLengthResponse(status, contentType, body);
         } else {
-            return getNoContentResponse();
+            return getEmptyResponse();
         }
     }
 
-    private Response getNoContentResponse(){
+    private Response getEmptyResponse(){
+        String emptyResultJson = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"\"}";
         return newFixedLengthResponse(
-                Response.Status.NO_CONTENT,
-                "text/plain",
-                ""
+                Response.Status.OK,
+                "application/json",
+                emptyResultJson
         );
     }
 
@@ -461,7 +465,7 @@ public class ProxyServer extends NanoHTTPD {
             String contentType = okhttpResponse.header("Content-Type", "application/json");
             return newFixedLengthResponse(status, contentType, body);
         } else {
-            return getNoContentResponse();
+            return getEmptyResponse();
         }
     }
 
