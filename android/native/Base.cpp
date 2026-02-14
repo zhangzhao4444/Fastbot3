@@ -32,6 +32,7 @@ namespace fastbotx {
             "SCROLL_RIGHT_LEFT",
             "SCROLL_BOTTOM_UP_N",
             "SHELL_EVENT",
+            "DEEP_LINK",
             "HOVER"
     };
 

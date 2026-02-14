@@ -83,6 +83,9 @@ namespace fastbotx {
         static std::shared_ptr<Action> NOP;
         static std::shared_ptr<Action> ACTIVATE;
         static std::shared_ptr<Action> RESTART;
+        static std::shared_ptr<Action> CLEAN_RESTART;
+        static std::shared_ptr<Action> FUZZ;
+        static std::shared_ptr<Action> DEEP_LINK;
 
         FuncGetID(Action);
 

@@ -44,9 +44,9 @@ import android.app.IActivityManager;
 import android.app.UiAutomation;
 import android.app.UiAutomationConnection;
 import android.content.ComponentName;
+import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageInfo;
-import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.PointF;
 import android.graphics.Rect;
@@ -111,11 +111,10 @@ import java.nio.charset.CoderResult;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
+import java.util.Set;
 import java.util.Random;
 import java.util.Stack;
 import java.util.concurrent.TimeoutException;
@@ -162,6 +161,7 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
             imageThread.start();
         }
         connect();
+        AndroidDevice.setMainApps(mMainApps);
         Logger.println("// device uuid is " + did);
     }
 
@@ -657,35 +657,49 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                     takeScreenshot(screenshotFile);
                 }
 
-                ModelAction modelAction = new ModelAction(type, topActivityName, mReusablePointFloats, mReusableRect);
-                modelAction.setThrottle(operate.throttle);
+                // When native returns FUZZ (e.g. DFSAgent blockTimes > 5), generate random click fuzzing actions
+                if (type == ActionType.FUZZ) {
+                    fuzzingAction = generateFuzzingAction(fullFuzzing);
+                    generateEventsForAction(fuzzingAction);
+                } else if (type == ActionType.DEEP_LINK) {
+                    // Delm-style: generate deep-link schema event(s); fallback to FUZZ if none
+                    if (!generateDeepLinkEvents()) {
+                        Logger.println("action type: DEEP_LINK, no uri available, fallback to FUZZ");
+                        fuzzingAction = generateFuzzingAction(fullFuzzing);
+                        generateEventsForAction(fuzzingAction);
+                    }
+                } else {
+                    ModelAction modelAction = new ModelAction(type, topActivityName, mReusablePointFloats, mReusableRect);
+                    modelAction.setThrottle(operate.throttle);
 
-                // Complete the info for specific action type
-                switch (type) {
-                    case CLICK:
-                        modelAction.setInputText(operate.text);
-                        modelAction.setClearText(operate.clear);
-                        modelAction.setEditText(operate.editable);
-                        modelAction.setRawInput(operate.rawinput);
-                        break;
-                    case LONG_CLICK:
-                        modelAction.setWaitTime(operate.waitTime);
-                        break;
-                    case SHELL_EVENT:
-                        modelAction.setShellCommand(operate.text);
-                        modelAction.setWaitTime(operate.waitTime);
-                        break;
-                    default:
-                        break;
+                    // Complete the info for specific action type
+                    switch (type) {
+                        case CLICK:
+                            modelAction.setInputText(operate.text);
+                            modelAction.setClearText(operate.clear);
+                            modelAction.setEditText(operate.editable);
+                            modelAction.setRawInput(operate.rawinput);
+                            break;
+                        case LONG_CLICK:
+                            modelAction.setWaitTime(operate.waitTime);
+                            break;
+                        case SHELL_EVENT:
+                            modelAction.setShellCommand(operate.text);
+                            modelAction.setWaitTime(operate.waitTime);
+                            break;
+                        default:
+                            break;
+                    }
+
+                    generateEventsForAction(modelAction);
                 }
-
-                generateEventsForAction(modelAction);
 
                 // check if could select next fuzz action from full fuzz-able action options.
                 switch (type) {
                     case RESTART:
                     case CLEAN_RESTART:
                     case CRASH:
+                    case DEEP_LINK:
                         fullFuzzing = false;
                         break;
                     case BACK:
@@ -741,6 +755,23 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
         super.generateEventsForAction(action);
         long throttle = (action instanceof FuzzAction ? 0 : action.getThrottle());
         generateThrottleEvent(throttle);
+    }
+
+    /**
+     * Generate deep-link event(s) (Delm-style escape when stuck or in tarpit).
+     * Uses {@link AndroidDevice} deep link cache; picks an untried URI and enqueues a {@link MonkeySchemaEvent}.
+     *
+     * @return true if at least one deep-link schema event was enqueued, false to fall back to FUZZ
+     */
+    @Override
+    protected boolean generateDeepLinkEvents() {
+        String uri = AndroidDevice.pickNextDeepLinkUri();
+        if (uri == null) return false;
+        String pkg = AndroidDevice.getDeepLinkMainPackage();
+        addEvent(new MonkeySchemaEvent(uri, pkg));
+        generateThrottleEvent(throttleForExecPreSchema);
+        Logger.println("action type: DEEP_LINK, uri: " + uri);
+        return true;
     }
 
     /** When simplify, prefers native fuzz (performance §3.3). */

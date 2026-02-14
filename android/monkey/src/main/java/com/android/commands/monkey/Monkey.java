@@ -347,9 +347,9 @@ public class Monkey {
     private boolean mUseApeU2;
 
     /**
-     * use fastbot-native reuse nq algorithmic decision
+     * agent type string from --agent / --agent-u2 (e.g. "double-sarsa", "dfs", "reuseq")
      */
-    private boolean mUseApeNativeReuse;
+    private String mAgentType;
 
     /**
      * outputdir for test result
@@ -759,9 +759,21 @@ public class Monkey {
                 ((MonkeySourceApeNative) mEventSource).startMutation(mWm, mAm, mVerbose);
             }
             ((MonkeySourceApeNative) mEventSource).setAttribute(mMainApps.get(0).getPackageName(), appVersionCode, mMainIntentAction, mMainIntentData, mMainQuickAppActivity);
-            if (mUseApeNativeReuse) {
-                Logger.println("// init with reuse agent");
-                ((MonkeySourceApeNative) mEventSource).initReuseAgent();
+            if (mAgentType != null && !mAgentType.isEmpty()) {
+                AiClient.AlgorithmType algo = AiClient.AlgorithmType.DoubleSarsa;
+                if ("dfs".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.Dfs;
+                    Logger.println("// init with DFS agent (AlgorithmType.Dfs)");
+                } else if ("double-sarsa".equalsIgnoreCase(mAgentType) || "reuseq".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.DoubleSarsa;
+                    Logger.println("// init with DoubleSarsaAgent (AlgorithmType.DoubleSarsa)");
+                } else if ("bfs".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.Bfs;
+                    Logger.println("// init with BFS agent (AlgorithmType.Bfs)");
+                } else {
+                    Logger.println("// unknown agent type: " + mAgentType + ", default to DoubleSarsaAgent (DoubleSarsa)");
+                }
+                ((MonkeySourceApeNative) mEventSource).initAgent(algo);
             }
         } else if (mUseApeU2) {
             // fastbot monkey
@@ -786,9 +798,21 @@ public class Monkey {
                 ((MonkeySourceApeU2) mEventSource).startMutation(mWm, mAm, mVerbose);
             }
             ((MonkeySourceApeU2) mEventSource).setAttribute(mMainApps.get(0).getPackageName(), appVersionCode, mMainIntentAction, mMainIntentData, mMainQuickAppActivity);
-            if (mUseApeNativeReuse) {
-                Logger.println("// init with reuse agent");
-                ((MonkeySourceApeU2) mEventSource).initReuseAgent();
+            if (mAgentType != null && !mAgentType.isEmpty()) {
+                AiClient.AlgorithmType algo = AiClient.AlgorithmType.DoubleSarsa;
+                if ("dfs".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.Dfs;
+                    Logger.println("// init with DFS agent (AlgorithmType.Dfs)");
+                } else if ("double-sarsa".equalsIgnoreCase(mAgentType) || "reuseq".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.DoubleSarsa;
+                    Logger.println("// init with DoubleSarsaAgent (AlgorithmType.DoubleSarsa)");
+                } else if ("bfs".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.Bfs;
+                    Logger.println("// init with BFS agent (AlgorithmType.Bfs)");
+                } else {
+                    Logger.println("// unknown agent type: " + mAgentType + ", default to DoubleSarsaAgent (DoubleSarsa)");
+                }
+                ((MonkeySourceApeU2) mEventSource).initAgent(algo);
             }
 
         } else {
@@ -990,16 +1014,12 @@ public class Monkey {
                     case "--agent":
                         mUseApeNative = true;
                         agentType = nextOptionData();
-                        if ("reuseq".equals(agentType)) {
-                            mUseApeNativeReuse = true;
-                        }
+                        mAgentType = agentType;
                         break;
                     case "--agent-u2":
                         mUseApeU2 = true;
                         agentType = nextOptionData();
-                        if ("reuseq".equals(agentType)) {
-                            mUseApeNativeReuse = true;
-                        }
+                        mAgentType = agentType;
                         break;
                     case "--replay-log":
                         String logFile = nextOptionData();

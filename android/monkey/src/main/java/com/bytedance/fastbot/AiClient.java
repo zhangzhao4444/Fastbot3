@@ -77,12 +77,19 @@ public class AiClient {
         }
     }
 
+    /**
+     * Agent algorithm types (must align with native fastbotx::AlgorithmType).
+     *
+     * Random:       placeholder for future random agent (currently unused).
+     * Dfs:          depth-first-search exploration agent.
+     * Bfs:          breadth-first-search exploration agent (reserved).
+     * DoubleSarsa:  Double SARSA reinforcement learning agent with reuse model.
+     */
     public enum AlgorithmType {
         Random(0),
-        SataRL(1),
-        SataNStep(2),
-        NStepQ(3),
-        Reuse(4);
+        Dfs(2),
+        Bfs(4),
+        DoubleSarsa(8);
 
         private final int _value;
 

@@ -245,8 +245,9 @@ namespace fastbotx {
         SCROLL_RIGHT_LEFT,
         SCROLL_BOTTOM_UP_N,
         SHELL_EVENT,
+        DEEP_LINK,  // Try launch unexplored activity via deep link (Delm-style escape)
         Hover,
-        ActTypeSize // 18
+        ActTypeSize
     };
     extern const std::string actName[];
 
@@ -282,11 +283,19 @@ namespace fastbotx {
     };
 
 
+    /**
+     * Agent algorithm types.
+     *
+     * Random:    placeholder for future purely random agent (currently unused).
+     * DFS:       Depth-First Search exploration agent.
+     * BFS:       Breadth-First Search exploration agent (reserved, not yet implemented).
+     * DoubleSarsa: Double SARSA reinforcement learning agent with reuse model.
+     */
     enum AlgorithmType {
         Random = 0,
-        Reuse = 4,
-        Server = 6,
-        DoubleSarsa = 8  ///< Double SARSA reinforcement learning algorithm
+        DFS = 2,
+        BFS = 4,
+        DoubleSarsa = 8
     };
 
 

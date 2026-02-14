@@ -313,8 +313,8 @@ namespace fastbotx {
         AbstractAgentPtr Model::getOrCreateAgent(const std::string &deviceID) {
         // Create a default agent if map is empty
         if (this->_deviceIDAgentMap.empty()) {
-            BLOG("%s", "use reuseAgent as the default agent");
-            this->addAgent(ModelConstants::DefaultDeviceID, AlgorithmType::Reuse);
+            BLOG("%s", "use DoubleSarsaAgent as the default agent");
+            this->addAgent(ModelConstants::DefaultDeviceID, AlgorithmType::DoubleSarsa);
         }
         
         // Use find() instead of [] to avoid creating unnecessary map entries
@@ -442,11 +442,15 @@ namespace fastbotx {
             double endGeneratingActionTimestamp = currentStamp();
             actionCost = endGeneratingActionTimestamp - startGeneratingActionTimestamp;
             
-            // If this is a model action and state exists, mark it as visited and update agent
-            if (action->isModelAct() && state) {
-                action->visit(this->_graph->getTimestamp());
-                // Update agent's current state/action with new state/action
-                agent->moveForward(state);
+            // Update agent state so block counter and DFS stack stay in sync (including after FUZZ)
+            if (state) {
+                if (action->isModelAct()) {
+                    action->visit(this->_graph->getTimestamp());
+                    agent->moveForward(state);
+                } else if (action->getActionType() == ActionType::FUZZ) {
+                    // FUZZ is not isModelAct(); still call moveForward so DFSAgent sees same/different state
+                    agent->moveForward(state);
+                }
             }
         }
         
@@ -847,5 +851,6 @@ namespace fastbotx {
         this->_deviceIDAgentMap.clear();
     }
 
-}
-#endif //Model_CPP_
+}  // namespace fastbotx
+
+#endif  // Model_CPP_

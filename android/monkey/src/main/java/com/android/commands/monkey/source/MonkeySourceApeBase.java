@@ -71,6 +71,7 @@ import com.android.commands.monkey.fastbot.client.ActionType;
 import com.android.commands.monkey.framework.AndroidDevice;
 import com.android.commands.monkey.provider.SchemaProvider;
 import com.android.commands.monkey.provider.ShellProvider;
+import com.bytedance.fastbot.AiClient;
 import com.android.commands.monkey.utils.Config;
 import com.android.commands.monkey.utils.Logger;
 import com.android.commands.monkey.utils.MonkeyUtils;
@@ -248,8 +249,12 @@ public abstract class MonkeySourceApeBase {
         this.quickActivity = quickActivity;
     }
 
-    public void initReuseAgent() {
-        AiClient.InitAgent(AiClient.AlgorithmType.Reuse, this.packageName);
+    /**
+     * Initialize native agent with the given algorithm type.
+     * (DoubleSarsa for reuse-model agent, DFS/BFS etc. for exploration agents.)
+     */
+    public void initAgent(AiClient.AlgorithmType type) {
+        AiClient.InitAgent(type, this.packageName);
     }
 
     public File getOutputDir() {
@@ -603,6 +608,16 @@ public abstract class MonkeySourceApeBase {
         }
     }
 
+    /**
+     * Generate deep-link schema event(s) when action is DEEP_LINK.
+     * Base: no-op (returns false). Native overrides to collect URIs and add MonkeySchemaEvent(uri, pkg).
+     *
+     * @return true if at least one event was enqueued, false to allow fallback to FUZZ
+     */
+    protected boolean generateDeepLinkEvents() {
+        return false;
+    }
+
     protected void generateActivityScrollEvents() {
         if (startAfterDoScrollAction) {
             int i = startAfterDoScrollActionTimes;
@@ -638,6 +653,9 @@ public abstract class MonkeySourceApeBase {
                 break;
             case CLEAN_RESTART:
                 restartPackage(randomlyPickMainApp(), true, "start action(CLEAN_RESTART)");
+                break;
+            case DEEP_LINK:
+                generateDeepLinkEvents();
                 break;
             case NOP:
                 generateThrottleEvent(action.getThrottle());

@@ -12,6 +12,7 @@
 #include "utils.hpp"
 #include "Model.h"
 #include "DoubleSarsaAgent.h"
+#include "DFSAgent.h"
 #include "json.hpp"
 #include "Preference.h"
 
@@ -43,8 +44,18 @@ namespace fastbotx {
     AbstractAgentPtr
     AgentFactory::create(AlgorithmType agentT, const ModelPtr &model, DeviceType /*deviceType*/) {
         AbstractAgentPtr agent = nullptr;
+
+        // For AlgorithmType::DFS, use a simple DFS-based exploration agent.
+        if (agentT == AlgorithmType::DFS) {
+            DFSAgentPtr dfsAgent = std::make_shared<DFSAgent>(model);
+            agent = dfsAgent;
+            BLOG("Created DFSAgent (depth-first exploration)");
+            return agent;
+        }
+
+        // Default / Reuse / DoubleSarsa: use DoubleSarsaAgent with periodic model saving.
         DoubleSarsaAgentPtr doubleSarsaAgent = std::make_shared<DoubleSarsaAgent>(model);
-        
+
         // Start background thread to periodically save model
         // Parameter explanation:
         // - 3000: Start after 3 second delay (avoid frequent saves during initialization)
@@ -53,10 +64,10 @@ namespace fastbotx {
         // - weak_ptr: Use weak_ptr to avoid circular references, thread exits when Agent is destructed
         threadDelayExec(3000, false, &DoubleSarsaAgent::threadModelStorage,
                         std::weak_ptr<fastbotx::DoubleSarsaAgent>(doubleSarsaAgent));
-        
+
         agent = doubleSarsaAgent;
         BLOG("Created DoubleSarsaAgent");
-        
+
         return agent;
     }
 

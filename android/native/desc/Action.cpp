@@ -120,6 +120,9 @@ namespace fastbotx {
     std::shared_ptr<Action> Action::NOP = std::make_shared<Action>(ActionType::NOP);
     std::shared_ptr<Action> Action::ACTIVATE = std::make_shared<Action>(ActionType::ACTIVATE);
     std::shared_ptr<Action> Action::RESTART = std::make_shared<Action>(ActionType::RESTART);
+    std::shared_ptr<Action> Action::CLEAN_RESTART = std::make_shared<Action>(ActionType::CLEAN_RESTART);
+    std::shared_ptr<Action> Action::FUZZ = std::make_shared<Action>(ActionType::FUZZ);
+    std::shared_ptr<Action> Action::DEEP_LINK = std::make_shared<Action>(ActionType::DEEP_LINK);
 
     PropertyIDPrefixImpl(Action, "g0a");
     const int Action::DefaultValue = 0;
