@@ -770,6 +770,9 @@ public class Monkey {
                 } else if ("bfs".equalsIgnoreCase(mAgentType)) {
                     algo = AiClient.AlgorithmType.Bfs;
                     Logger.println("// init with BFS agent (AlgorithmType.Bfs)");
+                } else if ("frontier".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.Frontier;
+                    Logger.println("// init with Frontier agent (AlgorithmType.Frontier)");
                 } else {
                     Logger.println("// unknown agent type: " + mAgentType + ", default to DoubleSarsaAgent (DoubleSarsa)");
                 }
@@ -809,6 +812,9 @@ public class Monkey {
                 } else if ("bfs".equalsIgnoreCase(mAgentType)) {
                     algo = AiClient.AlgorithmType.Bfs;
                     Logger.println("// init with BFS agent (AlgorithmType.Bfs)");
+                } else if ("frontier".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.Frontier;
+                    Logger.println("// init with Frontier agent (AlgorithmType.Frontier)");
                 } else {
                     Logger.println("// unknown agent type: " + mAgentType + ", default to DoubleSarsaAgent (DoubleSarsa)");
                 }

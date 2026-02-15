@@ -116,6 +116,13 @@ namespace fastbotx {
         inline size_t stateSize() const { return this->_states.size(); }
 
         /**
+         * @brief Get the set of all states in the graph (read-only).
+         * Used e.g. by FrontierAgent for global frontier candidate collection.
+         * @return Const reference to the state set
+         */
+        const StatePtrSet &getStates() const { return this->_states; }
+
+        /**
          * @brief Get the current timestamp of the graph
          * 
          * @return Current timestamp

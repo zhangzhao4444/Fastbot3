@@ -178,7 +178,7 @@ adb -s <device_serial> shell CLASSPATH=/sdcard/monkeyq.jar:/sdcard/framework.jar
 |-----------|-------------|
 | `-s <device_serial>` | Device ID (required if multiple devices are connected; check with `adb devices`) |
 | `-p <package_name>` | App package under test (e.g. from `adb shell pm list packages`) |
-| `--agent <type>` | Strategy: **`reuseq`** or **`double-sarsa`** — Double SARSA (default, recommended); **`bfs`** — BFS breadth-first exploration; **`dfs`** — DFS depth-first exploration |
+| `--agent <type>` | Strategy: **`reuseq`** or **`double-sarsa`** — Double SARSA (default, recommended); **`bfs`** — BFS breadth-first exploration; **`dfs`** — DFS depth-first exploration; **`frontier`** — Frontier-based exploration (infoGain × distance, MA-SLAM style) |
 | `--running-minutes <duration>` | Total test duration in minutes |
 | `--throttle <delay_ms>` | Delay between actions in milliseconds |
 

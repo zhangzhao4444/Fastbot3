@@ -290,12 +290,14 @@ namespace fastbotx {
      * DFS:       Depth-First Search exploration agent.
      * BFS:       Breadth-First Search exploration agent (layer-by-layer exploration).
      * DoubleSarsa: Double SARSA reinforcement learning agent with reuse model.
+     * Frontier:  Frontier-based exploration agent (prioritize unvisited/low-visit actions).
      */
     enum AlgorithmType {
         Random = 0,
         DFS = 2,
         BFS = 4,
-        DoubleSarsa = 8
+        DoubleSarsa = 8,
+        Frontier = 16
     };
 
 

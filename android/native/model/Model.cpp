@@ -818,6 +818,10 @@ namespace fastbotx {
                 BLOG("state abstraction: batch done refined=0 (all already finest or skipped)");
             }
         }
+        // Notify agents so they can clear hash-dependent caches (e.g. FrontierAgent _outEdges/path)
+        for (const auto &kv : _deviceIDAgentMap) {
+            if (kv.second) kv.second->onStateAbstractionChanged();
+        }
     }
 #endif
 

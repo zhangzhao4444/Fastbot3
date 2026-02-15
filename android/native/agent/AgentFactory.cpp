@@ -14,6 +14,7 @@
 #include "DoubleSarsaAgent.h"
 #include "DFSAgent.h"
 #include "BFSAgent.h"
+#include "FrontierAgent.h"
 #include "json.hpp"
 #include "Preference.h"
 
@@ -59,6 +60,14 @@ namespace fastbotx {
             BFSAgentPtr bfsAgent = std::make_shared<BFSAgent>(model);
             agent = bfsAgent;
             BLOG("Created BFSAgent (breadth-first exploration)");
+            return agent;
+        }
+
+        // For AlgorithmType::Frontier, use frontier-based exploration agent.
+        if (agentT == AlgorithmType::Frontier) {
+            FrontierAgentPtr frontierAgent = std::make_shared<FrontierAgent>(model);
+            agent = frontierAgent;
+            BLOG("Created FrontierAgent (frontier-based exploration)");
             return agent;
         }
 
