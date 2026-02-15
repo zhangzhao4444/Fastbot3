@@ -13,6 +13,7 @@
 #include "Model.h"
 #include "DoubleSarsaAgent.h"
 #include "DFSAgent.h"
+#include "BFSAgent.h"
 #include "json.hpp"
 #include "Preference.h"
 
@@ -50,6 +51,14 @@ namespace fastbotx {
             DFSAgentPtr dfsAgent = std::make_shared<DFSAgent>(model);
             agent = dfsAgent;
             BLOG("Created DFSAgent (depth-first exploration)");
+            return agent;
+        }
+
+        // For AlgorithmType::BFS, use BFS-based exploration agent (layer-by-layer).
+        if (agentT == AlgorithmType::BFS) {
+            BFSAgentPtr bfsAgent = std::make_shared<BFSAgent>(model);
+            agent = bfsAgent;
+            BLOG("Created BFSAgent (breadth-first exploration)");
             return agent;
         }
 

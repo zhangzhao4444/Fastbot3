@@ -288,7 +288,7 @@ namespace fastbotx {
      *
      * Random:    placeholder for future purely random agent (currently unused).
      * DFS:       Depth-First Search exploration agent.
-     * BFS:       Breadth-First Search exploration agent (reserved, not yet implemented).
+     * BFS:       Breadth-First Search exploration agent (layer-by-layer exploration).
      * DoubleSarsa: Double SARSA reinforcement learning agent with reuse model.
      */
     enum AlgorithmType {

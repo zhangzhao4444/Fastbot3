@@ -120,6 +120,8 @@ namespace fastbotx {
         static constexpr size_t kRecentActivityWindowSize = 50;
         static constexpr size_t kTarpitMinWindowSize = 30;   // need at least this many steps to decide tarpit
         static constexpr int kTarpitMaxDistinctActivities = 3; // distinct activities in window <= this => tarpit
+        static constexpr int kCoverageDrivenDeepLinkInterval = 25;  // try DEEP_LINK every N select steps (Delm-style coverage)
+        int _selectCallCount = 0;  // steps since last DEEP_LINK; used for coverage-driven DEEP_LINK
         std::deque<std::string> _recentActivities;
         /// True when distinct activities in recent window <= kTarpitMaxDistinctActivities and window >= kTarpitMinWindowSize
         bool inTarpit() const;
