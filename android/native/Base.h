@@ -291,13 +291,16 @@ namespace fastbotx {
      * BFS:       Breadth-First Search exploration agent (layer-by-layer exploration).
      * DoubleSarsa: Double SARSA reinforcement learning agent with reuse model.
      * Frontier:  Frontier-based exploration agent (prioritize unvisited/low-visit actions).
+     * ICM:        Curiosity-driven agent (WebRLED-style dual novelty: episode + global).
      */
     enum AlgorithmType {
         Random = 0,
         DFS = 2,
         BFS = 4,
         DoubleSarsa = 8,
-        Frontier = 16
+        Frontier = 16,
+        ICM = 32,
+        GoExplore = 64
     };
 
 

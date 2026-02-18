@@ -773,6 +773,12 @@ public class Monkey {
                 } else if ("frontier".equalsIgnoreCase(mAgentType)) {
                     algo = AiClient.AlgorithmType.Frontier;
                     Logger.println("// init with Frontier agent (AlgorithmType.Frontier)");
+                } else if ("icm".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.ICM;
+                    Logger.println("// init with ICM agent (AlgorithmType.ICM, curiosity-driven)");
+                } else if ("goexplore".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.GoExplore;
+                    Logger.println("// init with GOExplore agent (AlgorithmType.GoExplore, standalone Go-Explore style)");
                 } else {
                     Logger.println("// unknown agent type: " + mAgentType + ", default to DoubleSarsaAgent (DoubleSarsa)");
                 }
@@ -815,6 +821,12 @@ public class Monkey {
                 } else if ("frontier".equalsIgnoreCase(mAgentType)) {
                     algo = AiClient.AlgorithmType.Frontier;
                     Logger.println("// init with Frontier agent (AlgorithmType.Frontier)");
+                } else if ("icm".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.ICM;
+                    Logger.println("// init with ICM agent (AlgorithmType.ICM, curiosity-driven)");
+                } else if ("goexplore".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.GoExplore;
+                    Logger.println("// init with GOExplore agent (AlgorithmType.GoExplore, standalone Go-Explore style)");
                 } else {
                     Logger.println("// unknown agent type: " + mAgentType + ", default to DoubleSarsaAgent (DoubleSarsa)");
                 }

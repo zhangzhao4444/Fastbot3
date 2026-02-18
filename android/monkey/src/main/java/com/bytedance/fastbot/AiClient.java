@@ -85,13 +85,17 @@ public class AiClient {
      * Bfs:          breadth-first-search exploration agent (reserved).
      * DoubleSarsa:  Double SARSA reinforcement learning agent with reuse model.
      * Frontier:     frontier-based exploration agent (infoGain × distance, MA-SLAM style).
+     * ICM:          curiosity-driven agent (WebRLED-style dual novelty + ε-greedy).
+     * GoExplore:    standalone Go-Explore style agent (archive + return to cell + explore).
      */
     public enum AlgorithmType {
         Random(0),
         Dfs(2),
         Bfs(4),
         DoubleSarsa(8),
-        Frontier(16);
+        Frontier(16),
+        ICM(32),
+        GoExplore(64);
 
         private final int _value;
 

@@ -23,7 +23,20 @@
 #define LOGE(fmt, ...) __android_log_print(ANDROID_LOG_ERROR,TAG ,fmt, ##__VA_ARGS__)
 #define LOGF(fmt, ...) __android_log_print(ANDROID_LOG_FATAL,TAG ,fmt, ##__VA_ARGS__)
 #else
-#define Time_Format_Now (getTimeFormatStr().c_str())
+#include <ctime>
+inline const char *getLogTimeStr() {
+    static thread_local char buf[80];
+    time_t now = time(nullptr);
+    struct tm t{};
+#ifdef _WIN32
+    localtime_s(&t, &now);
+#else
+    localtime_r(&now, &t);
+#endif
+    strftime(buf, sizeof(buf), "%Y-%m-%d %T", &t);
+    return buf;
+}
+#define Time_Format_Now getLogTimeStr()
 #define LOGD(fmt, ...) printf(TAG "[%s] DEBUG[%s][%s][%d]:" fmt "\n", Time_Format_Now, __FILE__, __FUNCTION__, __LINE__, ##__VA_ARGS__)
 #define LOGI(fmt, ...) printf(TAG "[%s] :" fmt "\n", Time_Format_Now ,##__VA_ARGS__)
 #define LOGW(fmt, ...) printf(TAG "[%s] WARNING:" fmt "\n", Time_Format_Now, ##__VA_ARGS__)

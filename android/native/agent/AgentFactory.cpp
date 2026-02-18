@@ -15,6 +15,8 @@
 #include "DFSAgent.h"
 #include "BFSAgent.h"
 #include "FrontierAgent.h"
+#include "GOExploreAgent.h"
+#include "ICMAgent.h"
 #include "json.hpp"
 #include "Preference.h"
 
@@ -68,6 +70,22 @@ namespace fastbotx {
             FrontierAgentPtr frontierAgent = std::make_shared<FrontierAgent>(model);
             agent = frontierAgent;
             BLOG("Created FrontierAgent (frontier-based exploration)");
+            return agent;
+        }
+
+        // For AlgorithmType::ICM, use curiosity-driven agent (WebRLED-style dual novelty).
+        if (agentT == AlgorithmType::ICM) {
+            ICMAgentPtr icmAgent = std::make_shared<ICMAgent>(model);
+            agent = icmAgent;
+            BLOG("Created ICMAgent (curiosity-driven, WebRLED-style)");
+            return agent;
+        }
+
+        // For AlgorithmType::GoExplore, use standalone Go-Explore style agent (archive + return + explore).
+        if (agentT == AlgorithmType::GoExplore) {
+            GOExploreAgentPtr goExploreAgent = std::make_shared<GOExploreAgent>(model);
+            agent = goExploreAgent;
+            BLOG("Created GOExploreAgent (standalone Go-Explore style)");
             return agent;
         }
 
