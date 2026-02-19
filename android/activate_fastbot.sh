@@ -39,7 +39,7 @@ adb shell "export LLM_LOGIN_ACCOUNT='18801391111';
 export LLM_LOGIN_PASSWORD='123456'; 
 export MAX_LLM_API_URL=${MAX_LLM_API_URL};
 export MAX_LLM_API_KEY=${MAX_LLM_API_KEY}; 
-CLASSPATH='/sdcard/monkeyq.jar:/sdcard/framework.jar:/sdcard/fastbot-thirdpart.jar:/sdcard/kea2-thirdpart.jar' exec app_process /system/bin com.android.commands.monkey.Monkey -p com.jingdong.app.mall --agent doublesarsa --running-minutes 10 --throttle 100 -v -v -v --output-directory /sdcard/my-fastbot-logs"
+CLASSPATH='/sdcard/monkeyq.jar:/sdcard/framework.jar:/sdcard/fastbot-thirdpart.jar:/sdcard/kea2-thirdpart.jar' exec app_process /system/bin com.android.commands.monkey.Monkey -p com.jingdong.app.mall --agent icm --running-minutes 10 --throttle 100 -v -v -v --output-directory /sdcard/my-fastbot-logs"
 
 
 LOGS_LOCAL="$SCRIPT_DIR/logs"

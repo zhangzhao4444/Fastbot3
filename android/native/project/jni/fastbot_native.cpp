@@ -224,16 +224,21 @@ void JNICALL Java_com_bytedance_fastbot_AiClient_initAgentNative(JNIEnv *env, jo
     auto agentPointer = _fastbot_model->addAgent("", algorithmType,
                                                  (fastbotx::DeviceType) deviceType);
     const char *packageNameCString = "";
-    if (env)
+    if (env && packageName) {
         packageNameCString = env->GetStringUTFChars(packageName, nullptr);
+    }
     _fastbot_model->setPackageName(std::string(packageNameCString));
 
     BLOG("init agent with type %d, %s,  %d", agentType, packageNameCString, deviceType);
-    auto doubleSarsaAgentPtr = std::dynamic_pointer_cast<fastbotx::DoubleSarsaAgent>(agentPointer);
-    if (doubleSarsaAgentPtr) {
-        doubleSarsaAgentPtr->loadReuseModel(std::string(packageNameCString));
-    } else {
-        BLOGE("Double SARSA: Failed to cast agent to DoubleSarsaAgent");
+    // Reuse model is only supported by DoubleSarsaAgent for now.
+    // Other agents (BFS/DFS/Frontier/ICM/GoExplore/...) should not attempt to load reuse model.
+    if (algorithmType == fastbotx::AlgorithmType::DoubleSarsa) {
+        auto doubleSarsaAgentPtr = std::dynamic_pointer_cast<fastbotx::DoubleSarsaAgent>(agentPointer);
+        if (doubleSarsaAgentPtr) {
+            doubleSarsaAgentPtr->loadReuseModel(std::string(packageNameCString));
+        } else {
+            BLOGE("Double SARSA: Failed to cast agent to DoubleSarsaAgent");
+        }
     }
     if (env)
         env->ReleaseStringUTFChars(packageName, packageNameCString);
