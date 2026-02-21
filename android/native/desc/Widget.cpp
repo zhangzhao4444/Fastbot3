@@ -197,6 +197,62 @@ namespace fastbotx {
             this->_contextDesc.clear(); // Explicitly clear to avoid unnecessary allocation
         }
         
+        // Filter long Chinese text: if text or contentDesc has more than 8 Chinese characters, clear it
+        // This prevents long text from interfering with state abstraction or embedding
+        auto countChineseChars = [](const std::string &str) -> size_t {
+            size_t count = 0;
+            for (size_t i = 0; i < str.length(); ) {
+                unsigned char c = static_cast<unsigned char>(str[i]);
+                // UTF-8 encoding:
+                // - ASCII (0x00-0x7F): 1 byte
+                // - 2-byte sequence: 0xC0-0xDF (not Chinese)
+                // - 3-byte sequence: 0xE0-0xEF (most Chinese/CJK characters are here)
+                // - 4-byte sequence: 0xF0-0xF7 (rare CJK characters)
+                if ((c & 0xF0) == 0xE0) {  // 3-byte UTF-8 sequence
+                    // Check if it's a valid 3-byte sequence
+                    if (i + 2 < str.length()) {
+                        unsigned char c1 = static_cast<unsigned char>(str[i + 1]);
+                        unsigned char c2 = static_cast<unsigned char>(str[i + 2]);
+                        // Valid continuation bytes: 0x80-0xBF
+                        if ((c1 & 0xC0) == 0x80 && (c2 & 0xC0) == 0x80) {
+                            // CJK Unified Ideographs range: 0xE4-0xE9 (most common)
+                            // Also include 0xE0-0xE3 and 0xEA-0xEF for extended CJK ranges
+                            if (c >= 0xE0 && c <= 0xEF) {
+                                count++;
+                            }
+                            i += 3;
+                            continue;
+                        }
+                    }
+                    i++;  // Invalid sequence, skip one byte
+                } else if ((c & 0xF8) == 0xF0) {  // 4-byte UTF-8 sequence (CJK Extension B/C/D, rare)
+                    if (i + 3 < str.length()) {
+                        unsigned char c1 = static_cast<unsigned char>(str[i + 1]);
+                        unsigned char c2 = static_cast<unsigned char>(str[i + 2]);
+                        unsigned char c3 = static_cast<unsigned char>(str[i + 3]);
+                        // Valid continuation bytes
+                        if ((c1 & 0xC0) == 0x80 && (c2 & 0xC0) == 0x80 && (c3 & 0xC0) == 0x80) {
+                            count++;  // Count rare 4-byte CJK characters
+                            i += 4;
+                            continue;
+                        }
+                    }
+                    i++;  // Invalid sequence, skip one byte
+                } else {
+                    i++;  // ASCII or other, skip one byte
+                }
+            }
+            return count;
+        };
+        
+        const size_t MAX_CHINESE_CHARS = 8;
+        if (countChineseChars(this->_text) > MAX_CHINESE_CHARS) {
+            this->_text.clear();
+        }
+        if (countChineseChars(this->_contextDesc) > MAX_CHINESE_CHARS) {
+            this->_contextDesc.clear();
+        }
+        
         // Performance optimization: Use fast string hash function instead of std::hash
         // This provides better performance for typical UI strings (short to medium length)
         // compute for only 1 time (base + component hashes for dynamic abstraction)
