@@ -237,6 +237,17 @@ namespace fastbotx {
         AbstractAgentPtr getOrCreateAgent(const std::string &deviceID);
         
         /**
+         * @brief Build a state from element without adding to the graph (for moveForward-before-addState flow).
+         * 
+         * @param element XML Element object of the current page
+         * @param agent The agent to use for state creation
+         * @param activityPtr Shared pointer to activity name string
+         * @return Shared pointer to the created state (not yet in graph)
+         */
+        StatePtr buildStateOnly(const ElementPtr &element, const AbstractAgentPtr &agent,
+                               const stringPtr &activityPtr);
+
+        /**
          * @brief Create a new state from element and add it to the graph
          * 
          * @param element XML Element object of the current page

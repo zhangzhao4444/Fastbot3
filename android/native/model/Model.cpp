@@ -352,21 +352,15 @@ namespace fastbotx {
      * @param activityPtr Shared pointer to activity name string
      * @return Shared pointer to the created/existing state, or nullptr if element is null
      */
-    StatePtr Model::createAndAddState(const ElementPtr &element, const AbstractAgentPtr &agent,
-                                      const stringPtr &activityPtr) {
-        // Validate input
+    StatePtr Model::buildStateOnly(const ElementPtr &element, const AbstractAgentPtr &agent,
+                                   const stringPtr &activityPtr) {
         if (nullptr == element) {
             return nullptr;
         }
-        
-        // Create state according to the agent's algorithm type
-        // The state includes all possible actions based on widgets in the element
         std::string activityStr = activityPtr ? *activityPtr : "";
         WidgetKeyMask mask = getActivityKeyMask(activityStr);
         StatePtr state = StateFactory::createState(agent->getAlgorithmType(), activityPtr, element, mask);
-
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
-        // Update text stats from newly built state (before addState) for accurate "skip Text" check (§22)
         if (state && !activityStr.empty()) {
             const auto textMask = static_cast<WidgetKeyMask>(WidgetKeyAttr::Text);
             ActivityLastStateTextStats &st = _activityLastStateTextStats[activityStr];
@@ -379,14 +373,15 @@ namespace fastbotx {
             }
         }
 #endif
+        return state;
+    }
 
-        // Add state to graph (may return existing state if duplicate)
-        // The graph handles deduplication based on state hash
+    StatePtr Model::createAndAddState(const ElementPtr &element, const AbstractAgentPtr &agent,
+                                      const stringPtr &activityPtr) {
+        StatePtr state = buildStateOnly(element, agent, activityPtr);
+        if (!state) return nullptr;
         state = this->_graph->addState(state);
-
-        // Mark state as visited with current graph timestamp
         state->visit(this->_graph->getTimestamp());
-
         return state;
     }
 
@@ -446,15 +441,10 @@ namespace fastbotx {
             double endGeneratingActionTimestamp = currentStamp();
             actionCost = endGeneratingActionTimestamp - startGeneratingActionTimestamp;
             
-            // Update agent state so block counter and DFS stack stay in sync (including after FUZZ)
-            if (state) {
-                if (action->isModelAct()) {
-                    action->visit(this->_graph->getTimestamp());
-                    agent->moveForward(state);
-                } else if (action->getActionType() == ActionType::FUZZ) {
-                    // FUZZ is not isModelAct(); still call moveForward so DFSAgent sees same/different state
-                    agent->moveForward(state);
-                }
+            // moveForward is now called at the start of the next getOperateOpt (before addState),
+            // so (fromState, actionTaken, nextState) is correct for AIG/updateKnowledge.
+            if (state && action->isModelAct()) {
+                action->visit(this->_graph->getTimestamp());
             }
         }
         
@@ -555,11 +545,16 @@ namespace fastbotx {
         // Step 4: Get or create agent for this device (creates default if needed)
         AbstractAgentPtr agent = getOrCreateAgent(deviceID);
         
-        // Step 5: Create state from element and add to graph
-        // The graph handles deduplication if a similar state already exists
-        // currentStamp() returns ms; record build-state-only duration for log
+        // Step 5: Build state, notify agent of transition (moveForward) before adding to graph, then add state
+        // moveForward(currentState) must run before addState so agent still has previous _newState/_newAction
+        // for (fromState, actionTaken, nextState) → updateKnowledge / AIG edges (see FIND_NAVIGATE_PATH_CODE_REVIEW §7).
         double buildStateStartTimestamp = currentStamp();
-        StatePtr state = createAndAddState(element, agent, activityPtr);
+        StatePtr state = buildStateOnly(element, agent, activityPtr);
+        if (state) {
+            agent->moveForward(state);
+            state = this->_graph->addState(state);
+            state->visit(this->_graph->getTimestamp());
+        }
         double buildStateEndTimestamp = currentStamp();
         bool fromLlm = (_llmTaskAgent && _llmTaskAgent->inSession());
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
