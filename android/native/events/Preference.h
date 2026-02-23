@@ -94,7 +94,7 @@ namespace fastbotx {
 
         /**
          * Resolve the page: apply black widgets, tree pruning, valid texts, etc. to the element tree.
-         * Call this before using the element for state/AutodevAgent when custom actions (max.xpath.actions) are not used.
+         * Call this before using the element for state/LLMTaskAgent when custom actions (max.xpath.actions) are not used.
          */
         void resolvePage(const std::string &activity, const ElementPtr &rootXML);
 

@@ -144,7 +144,7 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
     /** Reusable list for generateFuzzingAction simplify path (PERFORMANCE_OPTIMIZATION_ITEMS §8.3). */
     private final List<CustomEvent> mReusableFuzzEvents = new ArrayList<>();
 
-    // Cached screenshot state for LLM-based AutodevAgent (PNG bytes in memory, throttled by time/activity)
+    // Cached screenshot state for LLM-based LLMTaskAgent (PNG bytes in memory, throttled by time/activity)
     private long mLastLlmScreenshotTime = 0L;
     private String mLastLlmScreenshotActivity = "";
     private byte[] mLastLlmScreenshotPng = null;
@@ -213,7 +213,7 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
     }
 
     /**
-     * Capture a screenshot as PNG bytes for LLM-based AutodevAgent, with simple
+     * Capture a screenshot as PNG bytes for LLM-based LLMTaskAgent, with simple
      * throttling to avoid taking a screenshot every step.
      *
      * Strategy:

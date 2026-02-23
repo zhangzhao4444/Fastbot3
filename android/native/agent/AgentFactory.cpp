@@ -17,6 +17,7 @@
 #include "FrontierAgent.h"
 #include "GOExploreAgent.h"
 #include "ICMAgent.h"
+#include "LLMExplorerAgent.h"
 #include "StateEncoder.h"
 #include "json.hpp"
 #include "Preference.h"
@@ -97,6 +98,14 @@ namespace fastbotx {
             GOExploreAgentPtr goExploreAgent = std::make_shared<GOExploreAgent>(model);
             agent = goExploreAgent;
             BLOG("Created GOExploreAgent (standalone Go-Explore style)");
+            return agent;
+        }
+
+        // For AlgorithmType::LLMExplorer, use AIG-based knowledge-guided exploration (no per-step LLM).
+        if (agentT == AlgorithmType::LLMExplorer) {
+            LLMExplorerAgentPtr llmExplorerAgent = std::make_shared<LLMExplorerAgent>(model);
+            agent = llmExplorerAgent;
+            BLOG("Created LLMExplorerAgent (AIG, app-wide exploration)");
             return agent;
         }
 

@@ -779,6 +779,9 @@ public class Monkey {
                 } else if ("goexplore".equalsIgnoreCase(mAgentType)) {
                     algo = AiClient.AlgorithmType.GoExplore;
                     Logger.println("// init with GOExplore agent (AlgorithmType.GoExplore, standalone Go-Explore style)");
+                } else if ("llmexplorer".equalsIgnoreCase(mAgentType) || "llm_explorer".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.LLMExplorer;
+                    Logger.println("// init with LLMExplorer agent (AlgorithmType.LLMExplorer, AIG knowledge-guided)");
                 } else {
                     Logger.println("// unknown agent type: " + mAgentType + ", default to DoubleSarsaAgent (DoubleSarsa)");
                 }
@@ -827,6 +830,9 @@ public class Monkey {
                 } else if ("goexplore".equalsIgnoreCase(mAgentType)) {
                     algo = AiClient.AlgorithmType.GoExplore;
                     Logger.println("// init with GOExplore agent (AlgorithmType.GoExplore, standalone Go-Explore style)");
+                } else if ("llmexplorer".equalsIgnoreCase(mAgentType) || "llm_explorer".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.LLMExplorer;
+                    Logger.println("// init with LLMExplorer agent (AlgorithmType.LLMExplorer, AIG knowledge-guided)");
                 } else {
                     Logger.println("// unknown agent type: " + mAgentType + ", default to DoubleSarsaAgent (DoubleSarsa)");
                 }

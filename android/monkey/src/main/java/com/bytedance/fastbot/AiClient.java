@@ -87,6 +87,7 @@ public class AiClient {
      * Frontier:     frontier-based exploration agent (infoGain × distance, MA-SLAM style).
      * ICM:          curiosity-driven agent (WebRLED-style dual novelty + ε-greedy).
      * GoExplore:    standalone Go-Explore style agent (archive + return to cell + explore).
+     * LLMExplorer:  AIG-based knowledge-guided exploration (app-wide action selection + navigation).
      */
     public enum AlgorithmType {
         Random(0),
@@ -95,7 +96,8 @@ public class AiClient {
         DoubleSarsa(8),
         Frontier(16),
         ICM(32),
-        GoExplore(64);
+        GoExplore(64),
+        LLMExplorer(128);
 
         private final int _value;
 
@@ -212,12 +214,20 @@ public class AiClient {
      * @return response body string, or null on failure
      */
     public String doLlmHttpPostFromPrompt(String url, String apiKey, String prompt, String model, int maxTokens) {
+        return doLlmHttpPostFromPromptInternal(url, apiKey, prompt, model, maxTokens, null);
+    }
+
+    /**
+     * Internal: do LLM HTTP POST and log timing + response by promptType.
+     * promptType null = direct prompt (legacy); non-null = executor/planner/step_summary/knowledge_org/content_aware_input.
+     */
+    private String doLlmHttpPostFromPromptInternal(String url, String apiKey, String prompt, String model, int maxTokens, String promptType) {
         if (url == null || url.isEmpty()) {
             Logger.errorPrintln("doLlmHttpPostFromPrompt: url null or empty");
             return null;
         }
         long tStart = System.currentTimeMillis();
-        String body = buildLlmRequestBody(prompt, model, maxTokens);
+        String body = buildLlmRequestBody(prompt, model, maxTokens, promptType);
         if (body == null) {
             Logger.errorPrintln("doLlmHttpPostFromPrompt: buildLlmRequestBody returned null");
             return null;
@@ -230,10 +240,18 @@ public class AiClient {
         long buildMs = tAfterBuild - tStart;
         long requestMs = tEnd - tAfterBuild;
         long totalMs = tEnd - tStart;
-        Logger.println("// [LLM timing] (ms) buildPrompt+body: " + buildMs + ", request: " + requestMs + ", total: " + totalMs);
+        if (promptType != null) {
+            Logger.println("// [LLM timing] (ms) promptType=" + promptType + " buildPrompt+body: " + buildMs + ", request: " + requestMs + ", total: " + totalMs);
+        } else {
+            Logger.println("// [LLM timing] (ms) buildPrompt+body: " + buildMs + ", request: " + requestMs + ", total: " + totalMs);
+        }
         if (result != null) {
             saveLlmRawToFile(ts + "-resp.json", result);
-            logLlmResponseMessage(result);
+            if ("knowledge_org".equals(promptType) || "content_aware_input".equals(promptType)) {
+                logLlmExplorerResponse(promptType, result);
+            } else {
+                logLlmResponseMessage(result);
+            }
         } else {
             Logger.errorPrintln("doLlmHttpPostFromPrompt: doLlmHttpPostBody returned null (check HTTP code / network above)");
         }
@@ -242,7 +260,7 @@ public class AiClient {
 
     /**
      * LLM HTTP POST with prompt assembled in Java from payload JSON (reduces JNI string copy).
-     * promptType: "executor" | "planner" | "step_summary".
+     * promptType: "executor" | "planner" | "step_summary" (LLMTaskAgent) | "knowledge_org" | "content_aware_input" (LLMExplorerAgent).
      * Called from native via JNI when using predictWithPayload.
      */
     public String doLlmHttpPostFromPayload(String url, String apiKey, String promptType, String payloadJson, String model, int maxTokens) {
@@ -255,11 +273,11 @@ public class AiClient {
             Logger.errorPrintln("doLlmHttpPostFromPayload: buildPromptFromPayload returned null");
             return null;
         }
-        return doLlmHttpPostFromPrompt(url, apiKey, prompt, model, maxTokens);
+        return doLlmHttpPostFromPromptInternal(url, apiKey, prompt, model, maxTokens, promptType);
     }
 
     /**
-     * Build full prompt string from payload JSON (matches C++ AutodevAgent prompt content).
+     * Build full prompt string from payload JSON (matches C++ LLMTaskAgent prompt content).
      */
     private static String buildPromptFromPayload(String promptType, String payloadJson) {
         try {
@@ -272,6 +290,12 @@ public class AiClient {
             }
             if ("step_summary".equals(promptType)) {
                 return buildStepSummaryPrompt(payload);
+            }
+            if ("knowledge_org".equals(promptType)) {
+                return buildKnowledgeOrgPrompt(payload);
+            }
+            if ("content_aware_input".equals(promptType)) {
+                return buildContentAwareInputPrompt(payload);
             }
             Logger.errorPrintln("buildPromptFromPayload: unknown promptType=" + promptType);
             return null;
@@ -422,6 +446,52 @@ public class AiClient {
         return sb.toString();
     }
 
+    /**
+     * LLMExplorerAgent knowledge organization: same prompt as C++ tryLlmKnowledgeOrganization.
+     * Payload: {"elements": [{"class":"","resource_id":"","text":"","content_desc":""}, ...], "max_index": N}.
+     */
+    private static String buildKnowledgeOrgPrompt(JSONObject j) throws JSONException {
+        int maxIndex = j.optInt("max_index", 0);
+        StringBuilder sb = new StringBuilder();
+        sb.append("You are helping an Android GUI testing agent. Group the following UI elements by function: elements that do the same thing (e.g. same button type, same list item) should be in the same group.\n\n");
+        sb.append("Keep REASONING to 1-2 sentences only, then immediately output the JSON line.\n\n");
+        sb.append("Required JSON format (must be valid, complete, and parseable JSON):\n");
+        sb.append("JSON: {\"groups\": [[0,1], [2], [3,4], ...], \"functions\": [\"desc for group 0\", \"desc for group 1\", ...]}\n");
+        sb.append("- \"groups\": array of arrays; each inner array is 0-based element indices (0 to ").append(maxIndex).append("); one group per cluster.\n");
+        sb.append("- \"functions\": array of strings; one string per group, same order as groups; short label (e.g. \"navigate back\", \"open settings\").\n");
+        sb.append("Important: Output the complete JSON in one go—include every group and every function label. Close the \"functions\" array with ] before the final }. Correct: ..., \"last label\"]} . Wrong: ..., \"last label\"} . Truncated or incomplete JSON will cause parse failure.\n\n");
+        sb.append("Elements:\n");
+        JSONArray elements = j.optJSONArray("elements");
+        if (elements != null) {
+            for (int i = 0; i < elements.length(); i++) {
+                JSONObject el = elements.optJSONObject(i);
+                if (el != null) {
+                    sb.append("Element ").append(i).append(": class=").append(el.optString("class", ""))
+                            .append(" resource-id=").append(el.optString("resource_id", ""))
+                            .append(" text=").append(el.optString("text", ""))
+                            .append(" content-desc=").append(el.optString("content_desc", "")).append("\n");
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * LLMExplorerAgent content-aware input: same prompt as C++ getInputTextForAction.
+     * Payload: {"package":"", "activity":"", "class":"", "resource_id":"", "text":"", "content_desc":""}.
+     */
+    private static String buildContentAwareInputPrompt(JSONObject j) throws JSONException {
+        StringBuilder sb = new StringBuilder();
+        sb.append("You are helping an Android GUI testing agent. Generate a single short, contextually appropriate input value for the given input field (e.g. username, email, phone, search term). Reply with only the input text, no quotes or explanation.\n");
+        sb.append("App package: ").append(j.optString("package", "")).append("\n");
+        sb.append("Activity: ").append(j.optString("activity", "")).append("\n");
+        sb.append("Input field: class=").append(j.optString("class", ""))
+                .append(" resource-id=").append(j.optString("resource_id", ""))
+                .append(" text/hint=").append(j.optString("text", ""))
+                .append(" content-desc=").append(j.optString("content_desc", "")).append("\n");
+        return sb.toString();
+    }
+
     private static void saveLlmRawToFile(String filename, String content) {
         if (content == null || sLlmDumpDirectory == null) return;
         try {
@@ -435,26 +505,43 @@ public class AiClient {
         }
     }
 
-    private String buildLlmRequestBody(String prompt, String model, int maxTokens) {
+    /**
+     * Build request body. System prompt is chosen by promptType so LLMTaskAgent (executor/planner/step_summary)
+     * and LLMExplorerAgent (knowledge_org/content_aware_input) get appropriate instructions.
+     * @param promptType null = legacy; "knowledge_org" | "content_aware_input" use different system prompt.
+     */
+    private String buildLlmRequestBody(String prompt, String model, int maxTokens, String promptType) {
         try {
+            // LLMExplorerAgent (knowledge_org / content_aware_input): skip screenshot for performance testing; text-only request.
+            boolean skipImage = "knowledge_org".equals(promptType) || "content_aware_input".equals(promptType);
             long t0 = System.currentTimeMillis();
             byte[] img = null;
-            if (sLlmScreenshotProvider != null) {
-                img = sLlmScreenshotProvider.captureForLlm();
-            }
-            if (img == null || img.length == 0) {
-                img = lastScreenshotForLlm;
+            if (!skipImage) {
+                if (sLlmScreenshotProvider != null) {
+                    img = sLlmScreenshotProvider.captureForLlm();
+                }
+                if (img == null || img.length == 0) {
+                    img = lastScreenshotForLlm;
+                }
             }
             long t1 = System.currentTimeMillis();
             long screenshotMs = t1 - t0;
+            String systemContent;
+            if ("knowledge_org".equals(promptType)) {
+                systemContent = "You are a GUI testing agent. For this task output a short REASONING line, then a line starting with JSON: followed by a single, complete and parseable JSON object with \"groups\" (array of index arrays) and \"functions\" (array of strings). You must output the full JSON in one response—no truncation; incomplete JSON will cause parse failure.";
+            } else if ("content_aware_input".equals(promptType)) {
+                systemContent = "You are a GUI testing agent. Reply with only the requested input text, no quotes or explanation.";
+            } else {
+                systemContent = "You are a GUI testing agent that must respond with a strict JSON action object.";
+            }
             StringBuilder sb = new StringBuilder();
             sb.append("{\"model\":");
             sb.append(escapeJson(model != null ? model : ""));
             sb.append(",\"max_tokens\":").append(Math.max(0, maxTokens));
             sb.append(",\"stream\":false,\"messages\":[");
-            sb.append("{\"role\":\"system\",\"content\":\"You are a GUI testing agent that must respond with a strict JSON action object.\"},");
+            sb.append("{\"role\":\"system\",\"content\":").append(escapeJson(systemContent)).append("},");
             sb.append("{\"role\":\"user\",\"content\":");
-            if (img != null && img.length > 0) {
+            if (!skipImage && img != null && img.length > 0) {
                 String b64 = Base64.encodeToString(img, Base64.NO_WRAP);
                 String mime = isPngBytes(img) ? "image/png" : "image/jpeg";
                 sb.append("[{\"type\":\"text\",\"text\":");
@@ -568,6 +655,77 @@ public class AiClient {
         } catch (JSONException e) {
             // Logger.errorPrintln("logLlmResponseMessage: JSON parse failed " + e.getMessage());
             // Logger.println("// [LLM raw response]\n" + response);
+        }
+    }
+
+    /**
+     * Log LLMExplorerAgent LLM response (knowledge_org / content_aware_input), aligned with LLMTaskAgent log style.
+     * <p>
+     * For knowledge_org: LLM returns {"groups": [[0,1],[2],...], "functions": ["desc1", ...]}.
+     * - action_clusters (groups): number of semantic clusters; each cluster groups similar UI actions (e.g. same "back" behavior).
+     * - cluster_descriptions (functions): short natural-language label per cluster (e.g. "navigate back", "share content").
+     */
+    private void logLlmExplorerResponse(String promptType, String response) {
+        if (response == null || response.isEmpty()) return;
+        try {
+            JSONObject root = new JSONObject(response);
+            JSONArray choices = root.optJSONArray("choices");
+            if (choices == null || choices.length() == 0) return;
+            JSONObject choice0 = choices.optJSONObject(0);
+            if (choice0 == null) return;
+            JSONObject message = choice0.optJSONObject("message");
+            String content = null;
+            if (message != null) content = message.optString("content", null);
+            if (content == null || content.isEmpty()) {
+                content = choice0.optString("content", choice0.optString("message", ""));
+            }
+            if (content == null || content.isEmpty()) return;
+
+            if ("knowledge_org".equals(promptType)) {
+                try {
+                    // 1) Print REASONING content (text before JSON: or {"groups")
+                    int jsonMarkerPos = content.indexOf("JSON:");
+                    int bracePos = content.indexOf("{\"groups\"");
+                    int jsonStart = (jsonMarkerPos >= 0 && (bracePos < 0 || jsonMarkerPos <= bracePos))
+                            ? jsonMarkerPos : bracePos;
+                    if (jsonStart >= 0) {
+                        String reasoning = content.substring(0, jsonStart).trim();
+                        if (reasoning.startsWith("REASONING:")) reasoning = reasoning.substring(10).trim();
+                        if (!reasoning.isEmpty()) {
+                            Logger.println("// [LLM Explorer knowledge_org] reasoning: " + reasoning);
+                        }
+                    }
+                    String toParse = content;
+                    if (jsonStart >= 0) {
+                        toParse = content.substring(jsonStart);
+                        if (toParse.startsWith("JSON:")) toParse = toParse.substring(5).trim();
+                    }
+                    JSONObject inner = new JSONObject(toParse);
+                    JSONArray groups = inner.optJSONArray("groups");
+                    JSONArray functions = inner.optJSONArray("functions");
+                    int n = groups != null ? groups.length() : 0;
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("// [LLM Explorer knowledge_org] action_clusters=").append(n)
+                            .append(" (semantic groups of UI actions on this screen)");
+                    if (functions != null && functions.length() > 0) {
+                        sb.append(", cluster_descriptions=[");
+                        for (int i = 0; i < functions.length(); i++) {
+                            if (i > 0) sb.append(", ");
+                            sb.append("\"").append(functions.optString(i, "").replace("\\", "\\\\").replace("\"", "\\\"")).append("\"");
+                        }
+                        sb.append("]");
+                    }
+                    Logger.println(sb.toString());
+                } catch (JSONException e) {
+                    Logger.println("// [LLM Explorer knowledge_org] content (parse failed): " + (content.length() > 80 ? content.substring(0, 77) + "..." : content));
+                }
+            } else if ("content_aware_input".equals(promptType)) {
+                String suggested = content.trim();
+                if (suggested.length() > 60) suggested = suggested.substring(0, 57) + "...";
+                Logger.println("// [LLM Explorer content_aware_input] suggested=" + suggested);
+            }
+        } catch (JSONException e) {
+            // ignore outer parse
         }
     }
 

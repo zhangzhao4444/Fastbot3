@@ -2,13 +2,13 @@
  * @authors Zhao Zhang
  */
 
-# Fastbot3 AutodevAgent 基于 LLM 的 task 自动驱动技术
+# Fastbot3 LLMTaskAgent 基于 LLM 的 task 自动驱动技术
 
 ---
 
 ## 1. 概述
 
-**AutodevAgent** 是一个基于大语言模型（LLM）的 GUI 测试智能体，在满足“检查点”条件时接管动作选择，执行预定义任务（如登录流程、特定业务步骤），并将 LLM 输出转换为与现有 Fastbot 一致的 `ActionPtr`，由 Model 转成 `Operate` 在 Java 层执行。Agent 本身不直接执行任何操作，只负责“选动作”。
+**LLMTaskAgent** 是一个基于大语言模型（LLM）的 GUI 测试智能体，在满足“检查点”条件时接管动作选择，执行预定义任务（如登录流程、特定业务步骤），并将 LLM 输出转换为与现有 Fastbot 一致的 `ActionPtr`，由 Model 转成 `Operate` 在 Java 层执行。Agent 本身不直接执行任何操作，只负责“选动作”。
 
 核心特性：
 
@@ -16,6 +16,19 @@
 - **可选 Planner/Executor 分层**：Planner 输出语义步骤，Executor 根据当前 UI 执行具体动作。
 - **单 LLM 双角色**：同一 LLM 依次担任 Planner 与 Executor（若启用 Planner 层），每次请求为单轮调用。
 - **会话与安全**：会话有步数、时长、连续失败上限；支持 safe_mode 与 forbidden_texts 避免误点敏感控件。
+
+### 1.1 命名说明（Naming）
+
+当前类名 **LLMTaskAgent** 偏内部/产品向（“autodev” 含义不直观），从“看名知意”角度有改进空间。若希望命名更直白，可考虑（仅建议，不强制重命名）：
+
+| 候选名称 | 含义 | 优点 | 注意 |
+|----------|------|------|------|
+| **LLMTaskAgent** | 基于 LLM 的“任务”驱动 Agent | 直接体现 LLM + 配置任务（max.llm.tasks） | 与“探索”类 Agent 区分清晰 |
+| **LlmCheckpointAgent** | 检查点触发时的 LLM Agent | 突出“检查点匹配后接管” | 略长 |
+| **LlmCustomEventAgent** | LLM 自定义事件 Agent | 与 README/配置“LLM custom events”一致 | 偏配置语义 |
+| **LlmSessionAgent** | 基于会话的 LLM Agent | 突出会话状态（Planner/Executor、todos） | “Session”较泛 |
+
+**已采用**：**LLMTaskAgent**（简短、体现“LLM + 预配置任务”）。
 
 ---
 
@@ -34,7 +47,7 @@
     +------------------------------------------------------------------------+
     |                         Native (C++)                                    |
     |  +-------------------+     +------------------+     +----------------+  |
-    |  | fastbot_native.cpp| --> | Model            | --> | AutodevAgent   |  |
+    |  | fastbot_native.cpp| --> | Model            | --> | LLMTaskAgent   |  |
     |  | parseTreeFromBuffer     | getOperateOpt()  |     | selectNextAction  |
     |  +-------------------+     +------------------+     +--------+--------+ |
     |                              |         ^                     |          |
@@ -61,12 +74,12 @@
 **数据流简要**：
 
 1. Java 传入当前 Activity、UI 树（Buffer）；**不传截图**（图在 C++ 回调 Java 发 LLM 请求时由 Java 按需截屏）。JNI 调用 `Model::getOperateOpt(elem, activity, deviceID, &requestScreenshotRetry)`。
-2. Model 先建状态、再问 **AutodevAgent** 是否在本步给出动作：`selectNextAction(element, activity, deviceID, preMatchedLlmTask)`（无 screenshot 参数）。
-3. AutodevAgent 内采用 **Payload 路径**：C++ 用 `buildExecutorPayload` / `buildPlannerPayload` / `buildStepSummaryPayload` 生成 JSON，经 `predictWithPayload(promptType, payloadJson, ...)` 调 JNI；Java `doLlmHttpPostFromPayload` 按 8.3 契约拼出与 C++ 原 prompt 等价的字符串，再截屏、拼 body、发 HTTP。会话状态与 historySummaries 仍在 C++，仅「拼好的 prompt 文本」在 Java 侧生成。
-4. 若 AutodevAgent 返回非空 `ActionPtr`，本步用该动作，跳过 RL；否则走原有 `selectAction(state, agent, ...)`。
+2. Model 先建状态、再问 **LLMTaskAgent** 是否在本步给出动作：`selectNextAction(element, activity, deviceID, preMatchedLlmTask)`（无 screenshot 参数）。
+3. LLMTaskAgent 内采用 **Payload 路径**：C++ 用 `buildExecutorPayload` / `buildPlannerPayload` / `buildStepSummaryPayload` 生成 JSON，经 `predictWithPayload(promptType, payloadJson, ...)` 调 JNI；Java `doLlmHttpPostFromPayload` 按 8.3 契约拼出与 C++ 原 prompt 等价的字符串，再截屏、拼 body、发 HTTP。会话状态与 historySummaries 仍在 C++，仅「拼好的 prompt 文本」在 Java 侧生成。
+4. 若 LLMTaskAgent 返回非空 `ActionPtr`，本步用该动作，跳过 RL；否则走原有 `selectAction(state, agent, ...)`。
 5. 最终 `convertActionToOperate(action, state)` 得到 `Operate`，经 JNI 转成 `OperateResult` 返回 Java 执行。
 
-**AutodevAgent 内部分工**：内部维护 `_preference`、`_llmClient`、`_session`（LlmSessionState）。`selectNextAction` 依次：判断是否在会话、是否过期 → 可选 Planner 出一步子任务 → Executor 根据当前 UI 出动作 → 解析 JSON → `convertToAction` → 记录历史并返回。详细分支与条件见**第 3 节**，算法细节见**第 4 节**。
+**LLMTaskAgent 内部分工**：内部维护 `_preference`、`_llmClient`、`_session`（LlmSessionState）。`selectNextAction` 依次：判断是否在会话、是否过期 → 可选 Planner 出一步子任务 → Executor 根据当前 UI 出动作 → 解析 JSON → `convertToAction` → 记录历史并返回。详细分支与条件见**第 3 节**，算法细节见**第 4 节**。
 
 ---
 
@@ -264,7 +277,7 @@
 
 ## 6. 配置与调用链小结
 
-- **LLM 开关与运行时**：`Preference::getLlmRuntimeConfig()`（max.llm.enabled、apiUrl、apiKey、model、maxTokens、timeoutMs 等）。Model 构造时若 enabled 则创建 `HttpLlmClient` 并传入 AutodevAgent。
+- **LLM 开关与运行时**：`Preference::getLlmRuntimeConfig()`（max.llm.enabled、apiUrl、apiKey、model、maxTokens、timeoutMs 等）。Model 构造时若 enabled 则创建 `HttpLlmClient` 并传入 LLMTaskAgent。
 - **任务配置**：路径与字段（activity、checkpoint_xpath、task_description、max_steps、safe_mode、forbidden_texts、use_planner 等）见 **4.1**。
 - **调用链**：与**第 2 节**数据流一致；Java path 下完整 LLM 请求链路见 **8.1**。
 
@@ -272,7 +285,7 @@
 
 ## 7. safe_mode 与 forbidden_texts
 
-用于在 AutodevAgent 执行 CLICK/INPUT 时**避免误点敏感控件**（如「注销」「删除账号」「确认退出」等），一旦命中则视为安全违规，**立即终止当前会话**并不再执行该步动作。
+用于在 LLMTaskAgent 执行 CLICK/INPUT 时**避免误点敏感控件**（如「注销」「删除账号」「确认退出」等），一旦命中则视为安全违规，**立即终止当前会话**并不再执行该步动作。
 
 ### 7.1 含义与配置
 
@@ -288,7 +301,7 @@
 
 **触发时机**：仅在「把 LLM 输出转成具体动作」时做检查，即 **CLICK / INPUT** 在 `convertToAction()` 里已通过 `findTargetElement` 找到目标元素、且尚未根据 bounds 构造 `CustomAction` 之前。
 
-**代码位置**：`AutodevAgent.cpp` 中 `convertToAction()`，约 665–680 行：
+**代码位置**：`LLMTaskAgent.cpp` 中 `convertToAction()`，约 665–680 行：
 
 1. 若当前会话的 `taskConfig->safeMode` 为 false，则**不做**任何 forbidden 检查，直接继续用目标元素构造点击/输入动作。
 2. 若 `safeMode == true`：
@@ -335,7 +348,7 @@ Java: getNextEvent
       → Model::getOperateOpt(elem, activity, "", &requestScreenshotRetry)
         → matchLlmTask(activity, element)  // raw tree, 得到 preMatchedLlmTask
         → resolvePage(activity, element)
-        → AutodevAgent::selectNextAction(element, activity, deviceId, preMatchedLlmTask)
+        → LLMTaskAgent::selectNextAction(element, activity, deviceId, preMatchedLlmTask)
           → maybeStartSession(...)  // 若未在会话且 preMatchedLlmTask 非空则启动会话
           → [可选] Planner: buildPlannerPayload() → _llmClient->predictWithPayload("planner", payload, noImages, plannerResponse)
           → buildExecutorPayload() → 构造 Executor payload（含 screen_fingerprint、history_summaries、todos、scratchpad、planner_step 等）

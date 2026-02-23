@@ -300,7 +300,8 @@ namespace fastbotx {
         DoubleSarsa = 8,
         Frontier = 16,
         ICM = 32,
-        GoExplore = 64
+        GoExplore = 64,
+        LLMExplorer = 128
     };
 
 

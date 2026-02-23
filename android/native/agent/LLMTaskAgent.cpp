@@ -2,7 +2,7 @@
  * @authors Zhao Zhang
  */
 
-#include "AutodevAgent.h"
+#include "LLMTaskAgent.h"
 
 #include <algorithm>
 #include <chrono>
@@ -23,7 +23,7 @@ namespace fastbotx {
             return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
         }
 
-        // Centralized limits (see AUTODEV_AGENT_CODE_REVIEW.md)
+        // Centralized limits (see LLM_TASK_AGENT_CODE_REVIEW.md)
         constexpr size_t kMaxHistory = 10;
         constexpr size_t kMaxHistoryEntries = 20;
         constexpr size_t kMaxScreenHashes = 15;
@@ -34,21 +34,21 @@ namespace fastbotx {
         constexpr size_t kMaxSummaryLen = 200;
     }
 
-    AutodevAgent::AutodevAgent(const PreferencePtr &preference,
+    LLMTaskAgent::LLMTaskAgent(const PreferencePtr &preference,
                                std::shared_ptr<LlmClient> llmClient)
         : _preference(preference),
           _llmClient(std::move(llmClient)),
           _session(nullptr) {
     }
 
-    bool AutodevAgent::inSession() const {
+    bool LLMTaskAgent::inSession() const {
         return _session != nullptr;
     }
 
-    void AutodevAgent::resetSession() {
+    void LLMTaskAgent::resetSession() {
         if (_session && _session->taskConfig) {
             long long durationMs = currentTimeMillis() - _session->startTimestampMs;
-            BDLOG("AutodevAgent: Session end | activity=%s | stepCount=%d | durationMs=%lld | reason=%s | task=%s",
+            BDLOG("LLMTaskAgent: Session end | activity=%s | stepCount=%d | durationMs=%lld | reason=%s | task=%s",
                   _session->activity.c_str(), _session->stepCount, durationMs,
                   _session->abortReason.empty() ? "reset" : _session->abortReason.c_str(),
                   _session->taskConfig->taskDescription.substr(0, 60).c_str());
@@ -56,7 +56,7 @@ namespace fastbotx {
         _session.reset();
     }
 
-    bool AutodevAgent::maybeStartSession(const ElementPtr &rootXml,
+    bool LLMTaskAgent::maybeStartSession(const ElementPtr &rootXml,
                                          const std::string &activity,
                                          const std::string &deviceId,
                                          LlmTaskConfigPtr preMatchedTask) {
@@ -96,7 +96,7 @@ namespace fastbotx {
         return true;
     }
 
-    bool AutodevAgent::isSessionExpired() const {
+    bool LLMTaskAgent::isSessionExpired() const {
         if (!_session || !_session->taskConfig) {
             return true;
         }
@@ -132,7 +132,7 @@ namespace fastbotx {
         return false;
     }
 
-    AutodevAgent::InteractiveElementsResult AutodevAgent::getScreenFingerprintWithElements(const ElementPtr &rootXml) const {
+    LLMTaskAgent::InteractiveElementsResult LLMTaskAgent::getScreenFingerprintWithElements(const ElementPtr &rootXml) const {
         InteractiveElementsResult result;
         if (!rootXml) return result;
         result.elements.reserve(64);
@@ -155,11 +155,11 @@ namespace fastbotx {
         return result;
     }
 
-    std::string AutodevAgent::getScreenFingerprint(const ElementPtr &rootXml) const {
+    std::string LLMTaskAgent::getScreenFingerprint(const ElementPtr &rootXml) const {
         return getScreenFingerprintWithElements(rootXml).fingerprint;
     }
 
-    std::string AutodevAgent::buildPrompt(const ElementPtr &rootXml,
+    std::string LLMTaskAgent::buildPrompt(const ElementPtr &rootXml,
                                           const std::string &activity,
                                           std::string *outCurrentScreenHash,
                                           const std::string *precomputedFingerprint) const {
@@ -271,7 +271,7 @@ namespace fastbotx {
 
     // Planner JSON format (must match parsePlannerResponse): one object with "tool", "intent", "text".
     // Aligned with android_world PLANNER_SYSTEM_PROMPT: semantic tools only; Executor has no memory.
-    std::string AutodevAgent::buildPlannerPrompt() const {
+    std::string LLMTaskAgent::buildPlannerPrompt() const {
         std::ostringstream oss;
         if (!_session || !_session->taskConfig) return "";
         oss << "You are an expert PLANNER for Android GUI automation. You output ONE semantic step per response. "
@@ -303,7 +303,7 @@ namespace fastbotx {
         return oss.str();
     }
 
-    std::string AutodevAgent::buildExecutorPayload(const ElementPtr &rootXml,
+    std::string LLMTaskAgent::buildExecutorPayload(const ElementPtr &rootXml,
                                                    const std::string &activity,
                                                    std::string *outCurrentScreenHash,
                                                    const std::string *precomputedFingerprint) const {
@@ -374,7 +374,7 @@ namespace fastbotx {
         return j.dump();
     }
 
-    std::string AutodevAgent::buildPlannerPayload() const {
+    std::string LLMTaskAgent::buildPlannerPayload() const {
         using nlohmann::json;
         if (!_session || !_session->taskConfig) return "{}";
         json j;
@@ -407,7 +407,7 @@ namespace fastbotx {
         return j.dump();
     }
 
-    std::string AutodevAgent::buildStepSummaryPayload(const StepHistoryEntry &entry) const {
+    std::string LLMTaskAgent::buildStepSummaryPayload(const StepHistoryEntry &entry) const {
         using nlohmann::json;
         json j;
         j["step_index"] = entry.stepIndex;
@@ -450,13 +450,13 @@ namespace fastbotx {
     }
 
     // Parses Planner JSON: object with tool (required), intent, text (see buildPlannerPrompt).
-    bool AutodevAgent::parsePlannerResponse(const std::string &response, PlannerStep &outStep) const {
+    bool LLMTaskAgent::parsePlannerResponse(const std::string &response, PlannerStep &outStep) const {
         nlohmann::json j;
         if (!tryParseResponseToJson(response, j)) return false;
         return parsePlannerResponseFromJson(&j, outStep);
     }
 
-    bool AutodevAgent::parsePlannerResponseFromJson(const void *jsonPtr, PlannerStep &outStep) const {
+    bool LLMTaskAgent::parsePlannerResponseFromJson(const void *jsonPtr, PlannerStep &outStep) const {
         if (!jsonPtr) return false;
         using nlohmann::json;
         const auto &j = *static_cast<const json *>(jsonPtr);
@@ -563,23 +563,23 @@ namespace fastbotx {
         }
     }
 
-    bool AutodevAgent::parseLlmResponseFromJson(const void *jsonPtr, LlmActionSpec &outSpec,
+    bool LLMTaskAgent::parseLlmResponseFromJson(const void *jsonPtr, LlmActionSpec &outSpec,
                                                 const std::string &rawResponsePrefix) const {
         if (!jsonPtr) return false;
         using nlohmann::json;
         const auto &j = *static_cast<const nlohmann::json *>(jsonPtr);
         if (!j.is_object()) {
-            BDLOGE("AutodevAgent: LLM response is not a JSON object; prefix=%.80s", rawResponsePrefix.c_str());
+            BDLOGE("LLMTaskAgent: LLM response is not a JSON object; prefix=%.80s", rawResponsePrefix.c_str());
             return false;
         }
         outSpec = LlmActionSpec();
         outSpec.taskStatus = j.value("task_status", "");
             if (outSpec.taskStatus.empty()) {
-                BDLOGE("AutodevAgent: missing task_status");
+                BDLOGE("LLMTaskAgent: missing task_status");
                 return false;
             }
             if (!isValidTaskStatus(outSpec.taskStatus)) {
-                BDLOGE("AutodevAgent: invalid task_status '%s' (must be ONGOING/COMPLETED/ABORT)", outSpec.taskStatus.c_str());
+                BDLOGE("LLMTaskAgent: invalid task_status '%s' (must be ONGOING/COMPLETED/ABORT)", outSpec.taskStatus.c_str());
                 return false;
             }
 
@@ -593,18 +593,18 @@ namespace fastbotx {
             }
 
             if (!j.contains("action") || !j["action"].is_object()) {
-                BDLOGE("AutodevAgent: missing action object");
+                BDLOGE("LLMTaskAgent: missing action object");
                 return false;
             }
             const json &action = j["action"];
 
             outSpec.actionType = action.value("action_type", "");
             if (outSpec.actionType.empty()) {
-                BDLOGE("AutodevAgent: missing action_type");
+                BDLOGE("LLMTaskAgent: missing action_type");
                 return false;
             }
             if (!isValidActionType(outSpec.actionType)) {
-                BDLOGE("AutodevAgent: invalid action_type '%s' (must be CLICK/INPUT/SCROLL/BACK/WAIT/STATUS)", outSpec.actionType.c_str());
+                BDLOGE("LLMTaskAgent: invalid action_type '%s' (must be CLICK/INPUT/SCROLL/BACK/WAIT/STATUS)", outSpec.actionType.c_str());
                 return false;
             }
 
@@ -615,7 +615,7 @@ namespace fastbotx {
                 outSpec.targetValue = target.value("value", "");
             }
             if (needTarget && (outSpec.targetBy.empty() || outSpec.targetValue.empty())) {
-                BDLOGE("AutodevAgent: invalid target selector (by=%s, value=%s) for action_type=%s",
+                BDLOGE("LLMTaskAgent: invalid target selector (by=%s, value=%s) for action_type=%s",
                        outSpec.targetBy.c_str(), outSpec.targetValue.c_str(), outSpec.actionType.c_str());
                 return false;
             }
@@ -639,17 +639,17 @@ namespace fastbotx {
             return true;
     }
 
-    bool AutodevAgent::parseLlmResponse(const std::string &response,
+    bool LLMTaskAgent::parseLlmResponse(const std::string &response,
                                         LlmActionSpec &outSpec) const {
         nlohmann::json j;
         if (!tryParseResponseToJson(response, j)) {
-            BDLOGE("AutodevAgent: parse LLM response failed; raw prefix: %s", truncateForLog(response, 200).c_str());
+            BDLOGE("LLMTaskAgent: parse LLM response failed; raw prefix: %s", truncateForLog(response, 200).c_str());
             return false;
         }
         return parseLlmResponseFromJson(&j, outSpec, truncateForLog(response, 200));
     }
 
-    ElementPtr AutodevAgent::findFirstMatchedElement(const XpathPtr &xpathSelector,
+    ElementPtr LLMTaskAgent::findFirstMatchedElement(const XpathPtr &xpathSelector,
                                                      const ElementPtr &elementXml) const {
         if (!xpathSelector || !elementXml) {
             return nullptr;
@@ -667,7 +667,7 @@ namespace fastbotx {
         return nullptr;
     }
 
-    ElementPtr AutodevAgent::findTargetElement(const std::string &by,
+    ElementPtr LLMTaskAgent::findTargetElement(const std::string &by,
                                                const std::string &value,
                                                const ElementPtr &rootXml) const {
         if (!rootXml) {
@@ -731,7 +731,7 @@ namespace fastbotx {
     }
 
     /** Use interactiveElements for INDEX when provided to avoid second DFS; otherwise findTargetElement. */
-    ElementPtr AutodevAgent::resolveTargetElement(const std::string &by, const std::string &value,
+    ElementPtr LLMTaskAgent::resolveTargetElement(const std::string &by, const std::string &value,
                                                   const ElementPtr &rootXml,
                                                   const std::vector<ElementPtr> *interactiveElements) const {
         if (by == "INDEX" && interactiveElements && !interactiveElements->empty()) {
@@ -743,7 +743,7 @@ namespace fastbotx {
         return findTargetElement(by, value, rootXml);
     }
 
-    ActionPtr AutodevAgent::convertToAction(const LlmActionSpec &spec,
+    ActionPtr LLMTaskAgent::convertToAction(const LlmActionSpec &spec,
                                             const ElementPtr &rootXml,
                                             const std::string &activity,
                                             ConvertFailureReason *outFailure,
@@ -830,7 +830,7 @@ namespace fastbotx {
 
         // Handle CLICK and INPUT: require a target element.
         if (spec.actionType != "CLICK" && spec.actionType != "INPUT") {
-            BDLOGE("AutodevAgent: unsupported action_type '%s'", spec.actionType.c_str());
+            BDLOGE("LLMTaskAgent: unsupported action_type '%s'", spec.actionType.c_str());
             if (outFailure) {
                 *outFailure = ConvertFailureReason::Other;
             }
@@ -846,7 +846,7 @@ namespace fastbotx {
         }
         
         if (!targetElem) {
-            BDLOGE("AutodevAgent: target element not found (by=%s, value=%s)", 
+            BDLOGE("LLMTaskAgent: target element not found (by=%s, value=%s)", 
                    spec.targetBy.c_str(), spec.targetValue.c_str());
             if (outFailure) {
                 *outFailure = ConvertFailureReason::NotFound;
@@ -862,7 +862,7 @@ namespace fastbotx {
                 const std::string desc = targetElem->getContentDesc();
                 for (const auto &f : forbidden) {
                     if (!f.empty() && (txt.find(f) != std::string::npos || desc.find(f) != std::string::npos)) {
-                        BDLOGE("AutodevAgent: target element contains forbidden text '%s' (safety abort)", f.c_str());
+                        BDLOGE("LLMTaskAgent: target element contains forbidden text '%s' (safety abort)", f.c_str());
                         if (outFailure) {
                             *outFailure = ConvertFailureReason::Forbidden;
                         }
@@ -874,7 +874,7 @@ namespace fastbotx {
 
         RectPtr bounds = targetElem->getBounds();
         if (!bounds || bounds->isEmpty()) {
-            BDLOGE("AutodevAgent: target element has empty bounds");
+            BDLOGE("LLMTaskAgent: target element has empty bounds");
             if (outFailure) {
                 *outFailure = ConvertFailureReason::Other;
             }
@@ -897,7 +897,7 @@ namespace fastbotx {
         return customAction;
     }
 
-    void AutodevAgent::appendLocalSummary(const LlmActionSpec &spec) {
+    void LLMTaskAgent::appendLocalSummary(const LlmActionSpec &spec) {
         if (!_session) {
             return;
         }
@@ -914,7 +914,7 @@ namespace fastbotx {
         }
     }
 
-    std::string AutodevAgent::requestStepSummaryFromLlm(const StepHistoryEntry &entry) const {
+    std::string LLMTaskAgent::requestStepSummaryFromLlm(const StepHistoryEntry &entry) const {
         if (!_llmClient || !_session || !_session->taskConfig) {
             return {};
         }
@@ -922,14 +922,14 @@ namespace fastbotx {
             return {};
         }
         std::string payload = buildStepSummaryPayload(entry);
-        BDLOG("AutodevAgent: [StepSummary] payload len=%zu", payload.size());
+        BDLOG("LLMTaskAgent: [StepSummary] payload len=%zu", payload.size());
         std::string response;
         std::vector<ImageData> noImages;
         if (!_llmClient->predictWithPayload("step_summary", payload, noImages, response)) {
-            BDLOGE("AutodevAgent: LLM step summary request failed");
+            BDLOGE("LLMTaskAgent: LLM step summary request failed");
             return {};
         }
-        BDLOG("AutodevAgent: [StepSummary] raw response:\n%s", truncateForLog(response, kMaxRawResponseLogLen).c_str());
+        BDLOG("LLMTaskAgent: [StepSummary] raw response:\n%s", truncateForLog(response, kMaxRawResponseLogLen).c_str());
         // Trim and take first line (up to 200 chars) as summary
         auto trim = [](std::string &s) {
             while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
@@ -950,7 +950,7 @@ namespace fastbotx {
         return response;
     }
 
-    void AutodevAgent::applyTodoUpdatesFromResponse(const std::string &response) {
+    void LLMTaskAgent::applyTodoUpdatesFromResponse(const std::string &response) {
         if (!_session) return;
         try {
             using nlohmann::json;
@@ -961,7 +961,7 @@ namespace fastbotx {
         }
     }
 
-    void AutodevAgent::applyTodoUpdatesFromJson(const void *jsonPtr) {
+    void LLMTaskAgent::applyTodoUpdatesFromJson(const void *jsonPtr) {
         if (!_session || !jsonPtr) return;
         const auto &j = *static_cast<const nlohmann::json *>(jsonPtr);
         if (!j.is_object() || !j.contains("todo_updates") || !j["todo_updates"].is_array()) return;
@@ -995,7 +995,7 @@ namespace fastbotx {
             _session->todos = std::move(merged);
     }
 
-    void AutodevAgent::applyScratchpadUpdatesFromResponse(const std::string &response) {
+    void LLMTaskAgent::applyScratchpadUpdatesFromResponse(const std::string &response) {
         if (!_session) return;
         try {
             using nlohmann::json;
@@ -1006,7 +1006,7 @@ namespace fastbotx {
         }
     }
 
-    void AutodevAgent::applyScratchpadUpdatesFromJson(const void *jsonPtr) {
+    void LLMTaskAgent::applyScratchpadUpdatesFromJson(const void *jsonPtr) {
         if (!_session || !jsonPtr) return;
         const auto &j = *static_cast<const nlohmann::json *>(jsonPtr);
         if (!j.is_object() || !j.contains("scratchpad_updates") || !j["scratchpad_updates"].is_array()) return;
@@ -1023,12 +1023,12 @@ namespace fastbotx {
         }
     }
 
-    ActionPtr AutodevAgent::selectNextAction(const ElementPtr &rootXml,
+    ActionPtr LLMTaskAgent::selectNextAction(const ElementPtr &rootXml,
                                              const std::string &activity,
                                              const std::string &deviceId,
                                              LlmTaskConfigPtr preMatchedLlmTask) {
         if (!_llmClient) {
-            // LLM client is not configured yet; AutodevAgent is effectively disabled.
+            // LLM client is not configured yet; LLMTaskAgent is effectively disabled.
             return nullptr;
         }
 
@@ -1046,7 +1046,7 @@ namespace fastbotx {
         // 2) Check session limits (max_steps, max_duration, consecutive_failures).
         if (isSessionExpired()) {
             std::string reason = _session->abortReason.empty() ? "unknown" : _session->abortReason;
-            BDLOGE("AutodevAgent: Session expired (reason=%s, stepCount=%d, consecutiveFailures=%d)", 
+            BDLOGE("LLMTaskAgent: Session expired (reason=%s, stepCount=%d, consecutiveFailures=%d)", 
                    reason.c_str(), _session->stepCount, _session->consecutiveFailures);
             _session->aborted = true;
             if (_session->abortReason.empty()) {
@@ -1060,15 +1060,15 @@ namespace fastbotx {
         if (_session->taskConfig->usePlannerLayer && _session->currentPlannerStep.tool.empty()) {
             std::string plannerPayload = buildPlannerPayload();
             if (plannerPayload.empty()) {
-                BDLOGE("AutodevAgent: buildPlannerPayload failed");
+                BDLOGE("LLMTaskAgent: buildPlannerPayload failed");
                 return nullptr;
             }
-            BDLOG("AutodevAgent: [Planner] payload len=%zu", plannerPayload.size());
+            BDLOG("LLMTaskAgent: [Planner] payload len=%zu", plannerPayload.size());
             std::string plannerResponse;
             std::vector<ImageData> noImages;
             if (!_llmClient->predictWithPayload("planner", plannerPayload, noImages, plannerResponse)) {
                 _session->consecutiveFailures += 1;
-                BDLOGE("AutodevAgent: Planner LLM predict failed (consecutiveFailures=%d); check HttpLlmClient/LLM Java HTTP logs for cause (disabled? runner not registered? Java null? response parse?)", _session->consecutiveFailures);
+                BDLOGE("LLMTaskAgent: Planner LLM predict failed (consecutiveFailures=%d); check HttpLlmClient/LLM Java HTTP logs for cause (disabled? runner not registered? Java null? response parse?)", _session->consecutiveFailures);
                 if (isSessionExpired()) {
                     _session->abortReason = "llm_error";
                     _session->aborted = true;
@@ -1076,11 +1076,11 @@ namespace fastbotx {
                 }
                 return nullptr;
             }
-            BDLOG("AutodevAgent: [Planner] raw response:\n%s", truncateForLog(plannerResponse, kMaxRawResponseLogLen).c_str());
+            BDLOG("LLMTaskAgent: [Planner] raw response:\n%s", truncateForLog(plannerResponse, kMaxRawResponseLogLen).c_str());
             nlohmann::json plannerJson;
             if (!tryParseResponseToJson(plannerResponse, plannerJson)) {
                 _session->consecutiveFailures += 1;
-                BDLOGE("AutodevAgent: Failed to parse Planner response (consecutiveFailures=%d)", _session->consecutiveFailures);
+                BDLOGE("LLMTaskAgent: Failed to parse Planner response (consecutiveFailures=%d)", _session->consecutiveFailures);
                 if (isSessionExpired()) {
                     _session->abortReason = "parse_error";
                     _session->aborted = true;
@@ -1091,7 +1091,7 @@ namespace fastbotx {
             PlannerStep step;
             if (!parsePlannerResponseFromJson(&plannerJson, step)) {
                 _session->consecutiveFailures += 1;
-                BDLOGE("AutodevAgent: Failed to parse Planner response (consecutiveFailures=%d)", _session->consecutiveFailures);
+                BDLOGE("LLMTaskAgent: Failed to parse Planner response (consecutiveFailures=%d)", _session->consecutiveFailures);
                 if (isSessionExpired()) {
                     _session->abortReason = "parse_error";
                     _session->aborted = true;
@@ -1104,11 +1104,11 @@ namespace fastbotx {
             if (step.tool == "finish_task") {
                 _session->completed = true;
                 _session->abortReason = "completed";
-                BDLOG("AutodevAgent: Planner requested finish_task (stepCount=%d)", _session->stepCount);
+                BDLOG("LLMTaskAgent: Planner requested finish_task (stepCount=%d)", _session->stepCount);
                 resetSession();
                 return nullptr;
             }
-            BDLOG("AutodevAgent: Planner step: %s intent=%s text=%.40s", step.tool.c_str(), step.intent.c_str(), step.text.c_str());
+            BDLOG("LLMTaskAgent: Planner step: %s intent=%s text=%.40s", step.tool.c_str(), step.intent.c_str(), step.text.c_str());
         }
 
         // 3) Build payload and call LLM (Executor); Java assembles prompt from payload to reduce JNI copy.
@@ -1124,7 +1124,7 @@ namespace fastbotx {
         std::string rawResponse;
         std::vector<ImageData> images;  // Empty on Java path; image obtained in Java on demand.
 
-        BDLOG("AutodevAgent: [Executor] payload len=%zu", executorPayload.size());
+        BDLOG("LLMTaskAgent: [Executor] payload len=%zu", executorPayload.size());
         bool ok = _llmClient->predictWithPayload("executor", executorPayload, images, rawResponse);
         if (!ok) {
             _session->consecutiveFailures += 1;
@@ -1133,10 +1133,10 @@ namespace fastbotx {
                 if (_session->plannerStepFailureCount >= kMaxPlannerStepFailures) {
                     _session->currentPlannerStep = PlannerStep();
                     _session->plannerStepFailureCount = 0;
-                    BDLOG("AutodevAgent: Planner step failed %d times, asking Planner for next step", kMaxPlannerStepFailures);
+                    BDLOG("LLMTaskAgent: Planner step failed %d times, asking Planner for next step", kMaxPlannerStepFailures);
                 }
             }
-            BDLOGE("AutodevAgent: Executor LLM predict failed (consecutiveFailures=%d); check HttpLlmClient/LLM Java HTTP logs for cause", _session->consecutiveFailures);
+            BDLOGE("LLMTaskAgent: Executor LLM predict failed (consecutiveFailures=%d); check HttpLlmClient/LLM Java HTTP logs for cause", _session->consecutiveFailures);
             if (isSessionExpired()) {
                 _session->abortReason = "llm_error";
                 _session->aborted = true;
@@ -1145,7 +1145,7 @@ namespace fastbotx {
             return nullptr;
         }
 
-        BDLOG("AutodevAgent: [Executor] raw response:\n%s", truncateForLog(rawResponse, kMaxRawResponseLogLen).c_str());
+        BDLOG("LLMTaskAgent: [Executor] raw response:\n%s", truncateForLog(rawResponse, kMaxRawResponseLogLen).c_str());
 
         // Parse once (with extract fallback) and reuse for spec + todo_updates + scratchpad_updates (avoid apply*FromResponse double parse).
         nlohmann::json parsedResponse;
@@ -1165,10 +1165,10 @@ namespace fastbotx {
                     if (_session->plannerStepFailureCount >= kMaxPlannerStepFailures) {
                         _session->currentPlannerStep = PlannerStep();
                         _session->plannerStepFailureCount = 0;
-                        BDLOG("AutodevAgent: Planner step failed %d times, asking Planner for next step", kMaxPlannerStepFailures);
+                        BDLOG("LLMTaskAgent: Planner step failed %d times, asking Planner for next step", kMaxPlannerStepFailures);
                     }
                 }
-                BDLOGE("AutodevAgent: Failed to parse LLM response (consecutiveFailures=%d) responsePrefix=%.80s",
+                BDLOGE("LLMTaskAgent: Failed to parse LLM response (consecutiveFailures=%d) responsePrefix=%.80s",
                        _session->consecutiveFailures, rawResponse.empty() ? "" : rawResponse.c_str());
                 if (isSessionExpired()) {
                     _session->abortReason = "parse_error";
@@ -1189,14 +1189,14 @@ namespace fastbotx {
         if (spec.taskStatus == "COMPLETED") {
             _session->completed = true;
             _session->abortReason = "completed";
-            BDLOG("AutodevAgent: Task completed successfully (stepCount=%d)", _session->stepCount);
+            BDLOG("LLMTaskAgent: Task completed successfully (stepCount=%d)", _session->stepCount);
             resetSession();
             return nullptr;
         }
         if (spec.taskStatus == "ABORT") {
             _session->aborted = true;
             _session->abortReason = "llm_abort";
-            BDLOG("AutodevAgent: LLM requested abort (stepCount=%d)", _session->stepCount);
+            BDLOG("LLMTaskAgent: LLM requested abort (stepCount=%d)", _session->stepCount);
             resetSession();
             return nullptr;
         }
@@ -1208,7 +1208,7 @@ namespace fastbotx {
             if (convertFailure == ConvertFailureReason::Forbidden) {
                 _session->aborted = true;
                 _session->abortReason = "safety_forbidden";
-                BDLOGE("AutodevAgent: Safety abort (forbidden text), terminating session (stepCount=%d)", _session->stepCount);
+                BDLOGE("LLMTaskAgent: Safety abort (forbidden text), terminating session (stepCount=%d)", _session->stepCount);
                 resetSession();
                 return nullptr;
             }
@@ -1218,10 +1218,10 @@ namespace fastbotx {
                 if (_session->plannerStepFailureCount >= kMaxPlannerStepFailures) {
                     _session->currentPlannerStep = PlannerStep();
                     _session->plannerStepFailureCount = 0;
-                    BDLOG("AutodevAgent: Planner step failed %d times, asking Planner for next step", kMaxPlannerStepFailures);
+                    BDLOG("LLMTaskAgent: Planner step failed %d times, asking Planner for next step", kMaxPlannerStepFailures);
                 }
             }
-            BDLOGE("AutodevAgent: Failed to convert action (consecutiveFailures=%d, actionType=%s, targetBy=%s, targetValue=%s)", 
+            BDLOGE("LLMTaskAgent: Failed to convert action (consecutiveFailures=%d, actionType=%s, targetBy=%s, targetValue=%s)", 
                    _session->consecutiveFailures, spec.actionType.c_str(), 
                    spec.targetBy.c_str(), spec.targetValue.c_str());
             if (isSessionExpired()) {
@@ -1262,7 +1262,7 @@ namespace fastbotx {
             _session->historySummaries.erase(_session->historySummaries.begin());
         }
 
-        BDLOG("AutodevAgent: step %d action=%s target=%s/%s reason=%.40s",
+        BDLOG("LLMTaskAgent: step %d action=%s target=%s/%s reason=%.40s",
               _session->stepCount, spec.actionType.c_str(), spec.targetBy.c_str(), spec.targetValue.c_str(),
               spec.reason.empty() ? "" : spec.reason.c_str());
         // v3: clear Planner sub-task so next step will ask Planner again for the next semantic step

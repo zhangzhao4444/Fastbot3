@@ -1155,7 +1155,7 @@ namespace fastbotx {
             BLOGE("Failed to load xpath actions: %s", ex.what());
         }
         
-        // 5.1 LLM tasks (AutodevAgent tasks)
+        // 5.1 LLM tasks (LLMTaskAgent tasks)
         try {
             loadLlmTasks();
         } catch (const std::exception &ex) {

@@ -1,5 +1,5 @@
 /*
- * Shared LLM-related types used by AutodevAgent and Preference.
+ * Shared LLM-related types used by LLMTaskAgent and Preference.
  */
  /**
  * @authors Zhao Zhang
@@ -55,7 +55,7 @@ namespace fastbotx {
         std::string checkpointXpathString;    ///< Original checkpoint XPath string
         XpathPtr checkpointXpath;             ///< Parsed XPath object
         std::string taskDescription;          ///< Natural language task description
-        int maxSteps{10};                     ///< Maximum allowed AutodevAgent steps
+        int maxSteps{10};                     ///< Maximum allowed LLMTaskAgent steps
         int maxDurationMs{30000};             ///< Maximum duration in milliseconds
         bool safeMode{false};                 ///< Whether to enable conservative behavior (forbidden_texts check)
         std::vector<std::string> forbiddenTexts; ///< Texts that must not be clicked
@@ -108,7 +108,7 @@ namespace fastbotx {
     };
 
     /**
-     * Per-session state for a running AutodevAgent task.
+     * Per-session state for a running LLMTaskAgent task.
      */
     struct LlmSessionState {
         LlmTaskConfigPtr taskConfig;

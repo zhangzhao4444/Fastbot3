@@ -48,6 +48,10 @@ namespace fastbotx {
         return DefaultWidgetKeyMask;
     }
 
+    std::shared_ptr<LlmClient> Model::getLlmClient() const {
+        return _llmTaskAgent ? _llmTaskAgent->getLlmClient() : nullptr;
+    }
+
     void Model::setActivityKeyMask(const std::string &activity, WidgetKeyMask mask) {
         _activityKeyMask[activity] = mask;
     }
@@ -135,7 +139,7 @@ namespace fastbotx {
         this->_preference = Preference::inst();
         this->_netActionParam.netActionTaskid = 0;
 
-        // Initialize AutodevAgent with HTTP LLM client if LLM is enabled in config.
+        // Initialize LLMTaskAgent with HTTP LLM client if LLM is enabled in config.
         LlmRuntimeConfig llmCfg;
         if (this->_preference) {
             llmCfg = this->_preference->getLlmRuntimeConfig();
@@ -143,11 +147,11 @@ namespace fastbotx {
         std::shared_ptr<LlmClient> client = nullptr;
         if (llmCfg.enabled) {
             client = std::make_shared<HttpLlmClient>(llmCfg);
-            BLOG("AutodevAgent: HTTP LLM client initialized with model %s", llmCfg.model.c_str());
+            BLOG("LLMTaskAgent: HTTP LLM client initialized with model %s", llmCfg.model.c_str());
         } else {
-            BLOG("AutodevAgent: LLM is disabled in config");
+            BLOG("LLMTaskAgent: LLM is disabled in config");
         }
-        this->_autodevAgent = std::make_shared<AutodevAgent>(this->_preference, client);
+        this->_llmTaskAgent = std::make_shared<LLMTaskAgent>(this->_preference, client);
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
         this->_transitionLog.resize(MaxTransitionLogSize);
         BLOG("state abstraction: enabled (check interval=%d, batch every %d steps)",
@@ -557,7 +561,7 @@ namespace fastbotx {
         double buildStateStartTimestamp = currentStamp();
         StatePtr state = createAndAddState(element, agent, activityPtr);
         double buildStateEndTimestamp = currentStamp();
-        bool fromLlm = (_autodevAgent && _autodevAgent->inSession());
+        bool fromLlm = (_llmTaskAgent && _llmTaskAgent->inSession());
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
         if (!fromLlm) {
             recordTransition(agent, state);
@@ -570,17 +574,17 @@ namespace fastbotx {
 #endif
         // Step 5b: Removed — image now stays in Java (setLastScreenshotForLlm + doLlmHttpPostFromPrompt).
         // Native no longer returns NOP when screenshotBytes is empty; Java always has the image when needed.
-        // Step 6: Optionally delegate to AutodevAgent before RL (pass pre-matched task from raw tree).
+        // Step 6: Optionally delegate to LLMTaskAgent before RL (pass pre-matched task from raw tree).
         ActionPtr llmAction = nullptr;
-        if (this->_autodevAgent) {
-            llmAction = this->_autodevAgent->selectNextAction(element, activity, deviceID, preMatchedLlmTask);
+        if (this->_llmTaskAgent) {
+            llmAction = this->_llmTaskAgent->selectNextAction(element, activity, deviceID, preMatchedLlmTask);
         }
 
         // Step 7: Select action (either LLM, custom, restart, or from agent)
         double actionCost = 0.0;
         ActionPtr action;
         if (llmAction) {
-            // When AutodevAgent returns an action, we bypass RL for this step.
+            // When LLMTaskAgent returns an action, we bypass RL for this step.
             action = llmAction;
         } else {
             action = selectAction(state, agent, customAction, actionCost);
@@ -596,7 +600,14 @@ namespace fastbotx {
         if (llmAction) {
             opt->allowFuzzing = false;
         }
-        
+        // Optional: agent-provided LLM-generated input text (e.g. LLMExplorerAgent content-aware input)
+        if (agent) {
+            std::string agentInputText = agent->getInputTextForAction(state, action);
+            if (!agentInputText.empty()) {
+                opt->setText(agentInputText);
+            }
+        }
+
         // Record end time and log performance metrics (currentStamp returns ms, keep ms for log)
         double methodEndTimestamp = currentStamp();
         double buildStateCostMs = buildStateEndTimestamp - buildStateStartTimestamp;

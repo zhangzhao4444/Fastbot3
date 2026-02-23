@@ -16,7 +16,7 @@
 #include "AbstractAgent.h"
 #include "AgentFactory.h"
 #include "Preference.h"
-#include "agent/AutodevAgent.h"
+#include "agent/LLMTaskAgent.h"
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -151,6 +151,12 @@ namespace fastbotx {
          * @return Shared pointer to the preference object
          */
         PreferencePtr getPreference() const { return this->_preference; }
+
+        /**
+         * @brief Get the shared LLM client (if any) used by LLMTaskAgent.
+         * Other agents (e.g. LLMExplorerAgent) may use it for content-aware input or knowledge org.
+         */
+        std::shared_ptr<LlmClient> getLlmClient() const;
 
         /**
          * @brief Get widget key mask for an activity (dynamic state abstraction).
@@ -289,10 +295,10 @@ namespace fastbotx {
         /// Parameters for communicating with network-based action models
         NetActionParam _netActionParam;
 
-        /// Optional LLM-based GUI agent (AutodevAgent). When configured with a concrete
+        /// Optional LLM-based GUI agent (LLMTaskAgent). When configured with a concrete
         /// LlmClient implementation, this agent can temporarily take over action
         /// selection for predefined tasks (e.g. login flows).
-        std::shared_ptr<AutodevAgent> _autodevAgent;
+        std::shared_ptr<LLMTaskAgent> _llmTaskAgent;
 
         /// Coverage tracking: visited activities and step count (performance optimization)
         std::unordered_set<std::string> _visitedActivities;
