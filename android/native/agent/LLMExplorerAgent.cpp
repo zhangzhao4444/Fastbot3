@@ -47,14 +47,17 @@ namespace fastbotx {
         _groupToActionHashes.clear();
         _groupFunction.clear();
         _llmGroupingDoneForState.clear();
-        _unexploredActionKeys.clear();
+        _unexploredAbsIdActionPairs.clear();
+        _navFailedActionKeys.clear();
         _contentAwareInputCache.clear();
         _contentAwareInputCacheOrder.clear();
         _navActionHashes.clear();
         _navTargetAbsId = 0;
+        _navTargetActionHash = 0;
         _navRetryAfterRestart = false;
         _navFailedEdgeKey = 0;
         _navRetryRestartCount = 0;
+        _navStepsInSession = 0;
         BDLOG("LLMExplorerAgent: state abstraction changed, cleared AIG and knowledge");
     }
 
@@ -106,7 +109,11 @@ namespace fastbotx {
             uintptr_t key = kActionFlagKey(absStateId, actHash);
             if (_actionFlags.find(key) == _actionFlags.end()) {
                 _actionFlags[key] = LLMExplorerActionFlag::Unexplored;
-                _unexploredActionKeys.insert(key);
+                bool found = false;
+                for (const auto &p : _unexploredAbsIdActionPairs) {
+                    if (p.first == absStateId && p.second == actHash) { found = true; break; }
+                }
+                if (!found) _unexploredAbsIdActionPairs.push_back({absStateId, actHash});
             }
             _absStateToActionHashes[absStateId].insert(actHash);
         }
@@ -186,6 +193,7 @@ namespace fastbotx {
         auto applyParsedKnowledgeOrg = [this, absStateId, &validActions](const nlohmann::json &j) -> uintptr_t {
             if (!j.contains("groups") || !j["groups"].is_array()) return 0;
             uintptr_t groupId = 0;
+            bool hadSmallGroups = false;
             for (const auto &group : j["groups"]) {
                 if (!group.is_array()) continue;
                 std::unordered_set<uintptr_t> hashes;
@@ -194,24 +202,36 @@ namespace fastbotx {
                     if (i < 0 || i >= static_cast<int>(validActions.size())) continue;
                     uintptr_t actHash = validActions[static_cast<size_t>(i)]->hash();
                     hashes.insert(actHash);
-                    _actionToGroup[kActionFlagKey(absStateId, actHash)] = groupId;
                 }
-                if (!hashes.empty()) {
+                if (hashes.empty()) continue;
+                // Align with official: MIN_SIZE_SAME_FUNCTION_ELEMENT_GROUP=5 — only merge groups of size >= 5.
+                if (hashes.size() >= kMinSameFunctionGroupSize) {
+                    for (uintptr_t actHash : hashes) {
+                        _actionToGroup[kActionFlagKey(absStateId, actHash)] = groupId;
+                    }
                     _groupToActionHashes[kGroupKey(absStateId, groupId)].insert(hashes.begin(), hashes.end());
                     groupId++;
-                }
-            }
-            if (groupId == 0) return 0;
-            if (j.contains("functions") && j["functions"].is_array()) {
-                const auto &funcArr = j["functions"];
-                for (size_t g = 0; g < funcArr.size() && g < groupId; ++g) {
-                    if (funcArr[g].is_string()) {
-                        std::string f = funcArr[g].get<std::string>();
-                        if (!f.empty()) _groupFunction[kGroupKey(absStateId, static_cast<uintptr_t>(g))] = f;
+                } else {
+                    hadSmallGroups = true;
+                    for (uintptr_t actHash : hashes) {
+                        _actionToGroup[kActionFlagKey(absStateId, actHash)] = actHash;
+                        _groupToActionHashes[kGroupKey(absStateId, actHash)].insert(actHash);
                     }
                 }
             }
-            return groupId;
+            if (groupId > 0) {
+                if (j.contains("functions") && j["functions"].is_array()) {
+                    const auto &funcArr = j["functions"];
+                    for (size_t g = 0; g < funcArr.size() && g < groupId; ++g) {
+                        if (funcArr[g].is_string()) {
+                            std::string f = funcArr[g].get<std::string>();
+                            if (!f.empty()) _groupFunction[kGroupKey(absStateId, static_cast<uintptr_t>(g))] = f;
+                        }
+                    }
+                }
+                return groupId;
+            }
+            return hadSmallGroups ? 1 : 0;
         };
 
         try {
@@ -275,7 +295,7 @@ namespace fastbotx {
                                         ? LLMExplorerActionFlag::Ineffective
                                         : LLMExplorerActionFlag::Explored;
         _actionFlags[flagKey] = newFlag;
-        _unexploredActionKeys.erase(flagKey);
+        removeUnexploredPair(srcAbsId, actHash);
         size_t groupSize = 1;
         uintptr_t groupId = actHash;
         auto itGroup = _actionToGroup.find(flagKey);
@@ -287,7 +307,7 @@ namespace fastbotx {
             for (uintptr_t h : itMembers->second) {
                 uintptr_t k = kActionFlagKey(srcAbsId, h);
                 _actionFlags[k] = newFlag;
-                _unexploredActionKeys.erase(k);
+                removeUnexploredPair(srcAbsId, h);
             }
         }
 
@@ -326,22 +346,23 @@ namespace fastbotx {
         }
 
         BDLOG("LLMExplorerAgent: explore current absId=%llu has no unexplored, try app_wide", (unsigned long long) currentAbsId);
-        if (_unexploredActionKeys.empty()) {
-            BDLOG("LLMExplorerAgent: explore app_wide empty, no unexplored anywhere -> fallbackPickAction");
+        std::vector<std::pair<uintptr_t, uintptr_t>> candidates;
+        for (const auto &p : _unexploredAbsIdActionPairs) {
+            uintptr_t key = kActionFlagKey(p.first, p.second);
+            if (_navFailedActionKeys.find(key) != _navFailedActionKeys.end()) continue;
+            candidates.push_back(p);
+        }
+        if (candidates.empty()) {
+            BDLOG("LLMExplorerAgent: explore app_wide empty (or all nav-failed), no unexplored -> fallbackPickAction");
             return {0, 0};
         }
-        std::vector<std::pair<uintptr_t, uintptr_t>> allUnexplored;
-        allUnexplored.reserve(_unexploredActionKeys.size());
-        for (uintptr_t key : _unexploredActionKeys) {
-            allUnexplored.push_back({key >> 32, key & 0xFFFFFFFFu});
-        }
-        std::uniform_int_distribution<size_t> dist(0, allUnexplored.size() - 1);
+        std::uniform_int_distribution<size_t> dist(0, candidates.size() - 1);
         size_t idx = dist(_rng);
-        uintptr_t targetAbsId = allUnexplored[idx].first;
-        uintptr_t chosenActionHash = allUnexplored[idx].second;
+        uintptr_t targetAbsId = candidates[idx].first;
+        uintptr_t chosenActionHash = candidates[idx].second;
         BDLOG("LLMExplorerAgent: explore from_app_wide currentAbsId=%llu targetAbsId=%llu n=%zu chosenActionHash=0x%llx",
-              (unsigned long long) currentAbsId, (unsigned long long) targetAbsId, allUnexplored.size(), (unsigned long long) chosenActionHash);
-        return allUnexplored[idx];
+              (unsigned long long) currentAbsId, (unsigned long long) targetAbsId, candidates.size(), (unsigned long long) chosenActionHash);
+        return {targetAbsId, chosenActionHash};
     }
 
     bool LLMExplorerAgent::findNavigatePath(uintptr_t currentAbsId, uintptr_t targetAbsId,
@@ -354,6 +375,7 @@ namespace fastbotx {
         std::deque<uintptr_t> q;
         q.push_back(currentAbsId);
         while (!q.empty()) {
+            if (parent.size() > kMaxBFSDepth) return false;
             uintptr_t u = q.front();
             q.pop_front();
             auto itActions = _absStateToActionHashes.find(u);
@@ -391,6 +413,15 @@ namespace fastbotx {
         return nullptr;
     }
 
+    void LLMExplorerAgent::removeUnexploredPair(uintptr_t absId, uintptr_t actHash) {
+        auto it = std::remove_if(_unexploredAbsIdActionPairs.begin(), _unexploredAbsIdActionPairs.end(),
+                                 [absId, actHash](const std::pair<uintptr_t, uintptr_t> &p) {
+                                     return p.first == absId && p.second == actHash;
+                                 });
+        if (it != _unexploredAbsIdActionPairs.end())
+            _unexploredAbsIdActionPairs.erase(it, _unexploredAbsIdActionPairs.end());
+    }
+
     ActionPtr LLMExplorerAgent::fallbackPickAction() const {
         StatePtr state = this->_newState;
         if (!state) return nullptr;
@@ -426,6 +457,7 @@ namespace fastbotx {
         if (actionTaken && !_navActionHashes.empty()) {
             if (actionTaken->hash() == _navActionHashes.front()) {
                 _navActionHashes.pop_front();
+                _navStepsInSession++;
             }
         }
 
@@ -471,18 +503,22 @@ namespace fastbotx {
         if (blockTimes > kBlockCleanRestartThreshold) {
             _navActionHashes.clear();
             _navTargetAbsId = 0;
+            _navTargetActionHash = 0;
             _navRetryAfterRestart = false;
             _navFailedEdgeKey = 0;
             _navRetryRestartCount = 0;
+            _navStepsInSession = 0;
             BDLOG("LLMExplorerAgent: blocked %d steps, CLEAN_RESTART", blockTimes);
             return Action::CLEAN_RESTART;
         }
         if (blockTimes > kBlockDeepLinkThreshold) {
             _navActionHashes.clear();
             _navTargetAbsId = 0;
+            _navTargetActionHash = 0;
             _navRetryAfterRestart = false;
             _navFailedEdgeKey = 0;
             _navRetryRestartCount = 0;
+            _navStepsInSession = 0;
             BDLOG("LLMExplorerAgent: blocked %d steps, DEEP_LINK", blockTimes);
             return Action::DEEP_LINK;
         }
@@ -498,9 +534,11 @@ namespace fastbotx {
             if (validNonBack == 0 && backAction && (!_validateFilter || _validateFilter->include(backAction))) {
                 _navActionHashes.clear();
                 _navTargetAbsId = 0;
+                _navTargetActionHash = 0;
                 _navRetryAfterRestart = false;
                 _navFailedEdgeKey = 0;
                 _navRetryRestartCount = 0;
+                _navStepsInSession = 0;
                 BDLOG("LLMExplorerAgent: blocked %d steps, BACK", blockTimes);
                 return backAction;
             }
@@ -539,9 +577,11 @@ namespace fastbotx {
                     BDLOG("LLMExplorerAgent: remove failed edge from AIG, give up nav target=%llu", (unsigned long long) _navTargetAbsId);
                 }
                 _navTargetAbsId = 0;
+                _navTargetActionHash = 0;
                 _navRetryAfterRestart = false;
                 _navFailedEdgeKey = 0;
                 _navRetryRestartCount = 0;
+                _navStepsInSession = 0;
             } else {
                 _navRetryRestartCount++;
                 BDLOG("LLMExplorerAgent: nav unreachable, CLEAN_RESTART retry %d/%d", _navRetryRestartCount, kMaxNavRetryRestarts);
@@ -550,18 +590,35 @@ namespace fastbotx {
         }
 
         if (!_navActionHashes.empty()) {
-            uintptr_t nextActionHash = _navActionHashes.front();
-            ActivityStateActionPtr a = findInState(nextActionHash);
-            if (a && (!_validateFilter || _validateFilter->include(a))) {
-                BDLOG("LLMExplorerAgent: nav step (remaining %zu)", _navActionHashes.size());
-                return a;
+            if (_navStepsInSession >= kMaxNavStepsPerSession) {
+                if (_navTargetAbsId != 0 && _navTargetActionHash != 0) {
+                    _navFailedActionKeys.insert(kActionFlagKey(_navTargetAbsId, _navTargetActionHash));
+                    BDLOG("LLMExplorerAgent: nav steps exceeded %d, mark target failed and clear nav", kMaxNavStepsPerSession);
+                }
+                _navActionHashes.clear();
+                _navTargetAbsId = 0;
+                _navTargetActionHash = 0;
+                _navStepsInSession = 0;
+            } else {
+                uintptr_t nextActionHash = _navActionHashes.front();
+                ActivityStateActionPtr a = findInState(nextActionHash);
+                if (a && (!_validateFilter || _validateFilter->include(a))) {
+                    BDLOG("LLMExplorerAgent: nav step (remaining %zu)", _navActionHashes.size());
+                    return a;
+                }
+                if (_navTargetAbsId != 0 && _navTargetActionHash != 0) {
+                    _navFailedActionKeys.insert(kActionFlagKey(_navTargetAbsId, _navTargetActionHash));
+                    BDLOG("LLMExplorerAgent: nav step action not in state, mark target failed");
+                }
+                BDLOG("LLMExplorerAgent: nav step action not in state (remaining %zu), clear nav", _navActionHashes.size());
+                _navActionHashes.clear();
+                _navTargetAbsId = 0;
+                _navTargetActionHash = 0;
+                _navRetryAfterRestart = false;
+                _navFailedEdgeKey = 0;
+                _navRetryRestartCount = 0;
+                _navStepsInSession = 0;
             }
-            BDLOG("LLMExplorerAgent: nav step action not in state (remaining %zu), clear nav", _navActionHashes.size());
-            _navActionHashes.clear();
-            _navTargetAbsId = 0;
-            _navRetryAfterRestart = false;
-            _navFailedEdgeKey = 0;
-            _navRetryRestartCount = 0;
         }
 
         std::pair<uintptr_t, uintptr_t> exploreChoice = selectExploreAction(state, currentAbsId);
@@ -583,7 +640,9 @@ namespace fastbotx {
             if (findNavigatePath(currentAbsId, targetAbsId, pathHashes) && !pathHashes.empty()) {
                 _navActionHashes.assign(pathHashes.begin(), pathHashes.end());
                 _navTargetAbsId = targetAbsId;
+                _navTargetActionHash = chosenActionHash;
                 _navRetryRestartCount = 0;
+                _navStepsInSession = 0;
                 uintptr_t firstHash = _navActionHashes.front();
                 ActivityStateActionPtr firstAction = findInState(firstHash);
                 if (firstAction && (!_validateFilter || _validateFilter->include(firstAction))) {
@@ -593,10 +652,12 @@ namespace fastbotx {
                 }
                 _navActionHashes.clear();
                 _navTargetAbsId = 0;
+                _navTargetActionHash = 0;
                 BDLOG("LLMExplorerAgent: start nav first action invalid, clear nav");
             } else {
                 _navActionHashes.clear();
                 _navTargetAbsId = 0;
+                _navTargetActionHash = 0;
                 BDLOG("LLMExplorerAgent: findNavigatePath failed current=%llu target=%llu, fallback",
                       (unsigned long long) currentAbsId, (unsigned long long) targetAbsId);
             }

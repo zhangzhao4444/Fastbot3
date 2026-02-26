@@ -85,6 +85,9 @@ namespace fastbotx {
         /// Find in state an action with the given hash.
         ActivityStateActionPtr findActionByHash(const StatePtr &state, uintptr_t actionHash) const;
 
+        /// Remove one (absId, actHash) from _unexploredAbsIdActionPairs (for updateKnowledge).
+        void removeUnexploredPair(uintptr_t absId, uintptr_t actHash);
+
         ActionPtr fallbackPickAction() const;
 
         mutable std::mt19937 _rng{std::random_device{}()};
@@ -119,8 +122,10 @@ namespace fastbotx {
         std::unordered_map<uintptr_t, std::string> _groupFunction;
         /// States for which we have already run LLM grouping (or 1:1 fallback).
         std::unordered_set<uintptr_t> _llmGroupingDoneForState;
-        /// Unexplored action keys (kActionFlagKey) for O(1) app-wide unexplored selection instead of scanning _actionFlags.
-        std::unordered_set<uintptr_t> _unexploredActionKeys;
+        /// App-wide unexplored: full (absId, actHash) for random pick (avoids truncating hash in key).
+        std::vector<std::pair<uintptr_t, uintptr_t>> _unexploredAbsIdActionPairs;
+        /// Nav-failed: kActionFlagKey(absId, actHash) to skip in app-wide selection (align with official repo nav_failed_actions).
+        std::unordered_set<uintptr_t> _navFailedActionKeys;
 
         /// Content-aware input cache: key = activity + "\t" + resource_id + "\t" + text + "\t" + content_desc; value = LLM-suggested text. FIFO eviction when size exceeds limit.
         mutable std::unordered_map<std::string, std::string> _contentAwareInputCache;
@@ -131,12 +136,16 @@ namespace fastbotx {
         std::deque<uintptr_t> _navActionHashes;
         /// Target abstract state id for current nav (0 when not navigating). Used for UpdateNavigatePath and restart retry.
         uintptr_t _navTargetAbsId = 0;
+        /// Action hash we want to execute on target state (for nav-failed marking when nav is abandoned).
+        uintptr_t _navTargetActionHash = 0;
         /// Fault-tolerant: after path failure, retry from current (or after CLEAN_RESTART) before giving up.
         bool _navRetryAfterRestart = false;
         /// Edge that led to wrong state; removed from AIG when we give up after retries.
         uintptr_t _navFailedEdgeKey = 0;
         /// Number of CLEAN_RESTARTs done for this nav retry (capped by kMaxNavRetryRestarts).
         int _navRetryRestartCount = 0;
+        /// Nav steps taken in current nav session; exceed kMaxNavStepsPerSession -> clear nav and mark target failed (official: MAX_NAVIGATE_NUM_AT_ONE_TIME=10).
+        int _navStepsInSession = 0;
 
         static constexpr int kBlockBackThreshold = 5;
         static constexpr int kBlockDeepLinkThreshold = 10;
@@ -144,6 +153,10 @@ namespace fastbotx {
         static constexpr int kMaxBFSDepth = 256;
         /// Max restarts for nav retry before removing failed edge (paper: fault-tolerant navigation).
         static constexpr int kMaxNavRetryRestarts = 1;
+        /// Max nav steps in one session before giving up and marking target as nav-failed (official: MAX_NAVIGATE_NUM_AT_ONE_TIME=10).
+        static constexpr int kMaxNavStepsPerSession = 10;
+        /// Min group size to apply LLM same-function grouping (official: MIN_SIZE_SAME_FUNCTION_ELEMENT_GROUP=5).
+        static constexpr size_t kMinSameFunctionGroupSize = 5;
     };
 
     using LLMExplorerAgentPtr = std::shared_ptr<LLMExplorerAgent>;

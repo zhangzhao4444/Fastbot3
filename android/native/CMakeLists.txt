@@ -76,6 +76,9 @@ file( GLOB SRC_LIST
       "thirdpart/xxhash/*.cpp"
       "thirdpart/json/*.hpp")
 
+# LVQExplorerAgent.cpp was removed; exclude from build in case of stale GLOB/cache
+list(REMOVE_ITEM SRC_LIST "agent/LVQExplorerAgent.cpp")
+
 message(STATUS ${SRC_LIST})
 
 # Ensure output directories exist
