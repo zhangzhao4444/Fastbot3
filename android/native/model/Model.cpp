@@ -767,6 +767,9 @@ namespace fastbotx {
     }
 
     void Model::runRefinementAndCoarseningIfScheduled() {
+        if (Preference::inst() && Preference::inst()->useStaticReuseAbstraction()) {
+            return;
+        }
         if (_stepCountSinceLastCheck < static_cast<size_t>(RefinementCheckInterval)) return;
         BLOG("state abstraction: batch at step %zu (interval=%d)", _stepCountSinceLastCheck, (int)RefinementCheckInterval);
         // Coarsen check for activities refined in a previous batch (oldStateToNewStates accumulated over last K steps)

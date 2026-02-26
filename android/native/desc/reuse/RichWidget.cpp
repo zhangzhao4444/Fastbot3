@@ -10,6 +10,7 @@
 
 #include "RichWidget.h"
 #include "../utils.hpp"
+#include "../events/Preference.h"
 #include <algorithm>
 #include <utility>
 
@@ -73,35 +74,53 @@ namespace fastbotx {
      * @return Valid text from widget or its children/offspring, empty if none found
      */
     std::string RichWidget::getValidTextFromWidgetAndChildren(const ElementPtr &element) const {
-        // First check if this element has valid text (fast path)
+        // Legacy static reuse mode: mimic old ReuseWidget::getElementText behavior
+        if (Preference::inst() && Preference::inst()->useStaticReuseAbstraction()) {
+            std::function<std::string(const ElementPtr &)> getElementText =
+                [&getElementText](const ElementPtr &elem) -> std::string {
+                    std::string txt = elem->validText;
+                    if (txt.empty()) {
+                        bool useChildText = true;
+                        for (auto &child : elem->getChildren()) {
+                            if (child->getClickable() || child->getLongClickable()) {
+                                useChildText = false;
+                            }
+                            if (txt.empty()) {
+                                txt = getElementText(child);
+                            }
+                        }
+                        if (useChildText && !txt.empty()) {
+                            return txt;
+                        }
+                    }
+                    return txt;
+                };
+            return getElementText(element);
+        }
+
+        // Dynamic abstraction mode: use iterative DFS over validText (current RichWidget behavior)
         if (!element->validText.empty()) {
             return element->validText;
         }
-        
-        // Use iterative search instead of recursion for better performance
-        // Pre-allocate stack to avoid reallocations (typical UI tree depth < 32)
+
         std::vector<ElementPtr> stack;
         stack.reserve(32);
-        
-        // Add children to stack for processing
+
         const auto &children = element->getChildren();
         stack.insert(stack.end(), children.begin(), children.end());
-        
-        // Process stack until text is found or stack is empty
+
         while (!stack.empty()) {
             ElementPtr current = stack.back();
             stack.pop_back();
-            
-            // Check current element's valid text
+
             if (!current->validText.empty()) {
                 return current->validText;
             }
-            
-            // Add children to stack for further search
+
             const auto &currentChildren = current->getChildren();
             stack.insert(stack.end(), currentChildren.begin(), currentChildren.end());
         }
-        
+
         return "";
     }
 

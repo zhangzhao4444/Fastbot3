@@ -1004,17 +1004,21 @@ namespace fastbotx {
      * Note: Q-values (Q1 and Q2) are not loaded from file, they start from 0.
      */
     void DoubleSarsaAgent::loadReuseModel(const std::string &packageName) {
-        // Build model file path
-        std::string modelFilePath = std::string(ModelStorageConstants::StoragePrefix) + 
-                                    packageName + ModelStorageConstants::ModelFileExtension;
+        // Build model file path (dynamic vs static reuse abstraction share same schema but use different files)
+        const bool useStatic = Preference::inst() && Preference::inst()->useStaticReuseAbstraction();
+        std::string basePath = std::string(ModelStorageConstants::StoragePrefix) + packageName;
+        std::string modelFilePath = useStatic
+                                    ? (basePath + ".static" + ModelStorageConstants::ModelFileExtension)
+                                    : (basePath + ModelStorageConstants::ModelFileExtension);
 
         // Set model save path
         this->_modelSavePath = modelFilePath;
         
         // Set default save path
         if (!this->_modelSavePath.empty()) {
-            this->_defaultModelSavePath = std::string(ModelStorageConstants::StoragePrefix) + 
-                                         packageName + ModelStorageConstants::TempModelFileExtension;
+            this->_defaultModelSavePath = useStatic
+                                          ? (basePath + ".static" + ModelStorageConstants::TempModelFileExtension)
+                                          : (basePath + ModelStorageConstants::TempModelFileExtension);
         }
         
         BLOG("Double SARSA: begin load model: %s", this->_modelSavePath.c_str());

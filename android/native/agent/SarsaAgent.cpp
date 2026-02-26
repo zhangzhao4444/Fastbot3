@@ -1,0 +1,509 @@
+/**
+ * @authors Zhao Zhang
+ */
+
+#ifndef fastbotx_SarsaAgent_CPP_
+#define fastbotx_SarsaAgent_CPP_
+
+#include "SarsaAgent.h"
+#include "Model.h"
+#include "../storage/ReuseModel_generated.h"
+#include "../events/Preference.h"
+#include "../utils.hpp"
+#include <cmath>
+#include <fstream>
+#include <limits>
+#include <thread>
+#include <chrono>
+
+namespace fastbotx {
+
+    std::string SarsaAgent::DefaultModelSavePath = "/sdcard/fastbot.model.fbm";
+
+    SarsaAgent::SarsaAgent(const ModelPtr &model)
+            : AbstractAgent(model),
+              _alpha(kDefaultAlpha),
+              _gamma(kDefaultGamma),
+              _epsilon(kDefaultEpsilon),
+              _modelSavePath(DefaultModelSavePath),
+              _tmpSavePath(DefaultModelSavePath) {
+        this->_algorithmType = AlgorithmType::Sarsa;
+        BLOG("SarsaAgent: initialized with alpha=%.4f, gamma=%.4f, epsilon=%.4f",
+             _alpha, _gamma, _epsilon);
+    }
+
+    SarsaAgent::SarsaAgent()
+            : AbstractAgent(),
+              _alpha(kDefaultAlpha),
+              _gamma(kDefaultGamma),
+              _epsilon(kDefaultEpsilon),
+              _modelSavePath(DefaultModelSavePath),
+              _tmpSavePath(DefaultModelSavePath) {
+        this->_algorithmType = AlgorithmType::Sarsa;
+    }
+
+    SarsaAgent::~SarsaAgent() {
+        BLOG("SarsaAgent: destructor called, saving model");
+        this->saveReuseModel(this->_modelSavePath);
+        {
+            std::lock_guard<std::mutex> lock(this->_reuseModelLock);
+            this->_reuseModel.clear();
+        }
+    }
+
+    double SarsaAgent::getNewReward() {
+        double reward = 0.0;
+        if (nullptr != this->_newState) {
+            auto modelPtr = this->_model.lock();
+            if (!modelPtr) {
+                BLOGE("SarsaAgent: model expired in getNewReward");
+                return reward;
+            }
+            const GraphPtr &graphRef = modelPtr->getGraph();
+            auto visitedActivities = graphRef->getVisitedActivities();
+            long totalVisitCount = graphRef->getTotalDistri();
+
+            double movingAlpha = 0.5;
+            if (totalVisitCount > 20000) movingAlpha -= 0.1;
+            if (totalVisitCount > 50000) movingAlpha -= 0.1;
+            if (totalVisitCount > 100000) movingAlpha -= 0.1;
+            if (totalVisitCount > 250000) movingAlpha -= 0.1;
+            // Keep a minimum learning rate consistent with the legacy default.
+            this->_alpha = std::max(kDefaultAlpha, movingAlpha);
+
+            if (!this->_previousActions.empty()) {
+                auto lastSelectedAct = std::dynamic_pointer_cast<ActivityStateAction>(this->_previousActions.back());
+                if (lastSelectedAct) {
+                    // NOTE: Legacy ReuseAgent contained a logic bug here:
+                    // it effectively never used the return value of getReuseActionValue
+                    // and always degraded to reward += 1.0. We fix this by only
+                    // falling back to 1.0 when reuseValue is numerically close to 0.
+                    double reuseValue = this->getReuseActionValue(lastSelectedAct, visitedActivities);
+                    if (std::abs(reuseValue - 0.0) < 0.0001) {
+                        reuseValue = 1.0;
+                    }
+                    reward += (reuseValue / std::sqrt(lastSelectedAct->getVisitedCount() + 1.0));
+                }
+            }
+
+            reward += (this->getStateActionValue(this->_newState, visitedActivities) /
+                       std::sqrt(this->_newState->getVisitedCount() + 1.0));
+
+            BLOG("SarsaAgent: total visited activities count is %zu", visitedActivities.size());
+        }
+
+        BDLOG("reuse-cov-opti action reward=%f", reward);
+        this->_rewardHistory.emplace_back(reward);
+        if (this->_rewardHistory.size() > static_cast<size_t>(kMaxHistorySteps)) {
+            this->_rewardHistory.erase(this->_rewardHistory.begin());
+        }
+
+        return reward;
+    }
+
+    double SarsaAgent::getReuseActionValue(const ActivityStateActionPtr &action,
+                                           const stringPtrSet &visitedActivities) const {
+        double value = 0.0;
+        int total = 0;
+        int unvisited = 0;
+        auto iter = this->_reuseModel.find(action->hash());
+        if (iter != this->_reuseModel.end()) {
+            for (const auto &entry : iter->second) {
+                total += entry.second;
+                stringPtr activity = entry.first;
+                if (visitedActivities.find(activity) == visitedActivities.end()) {
+                    unvisited += entry.second;
+                }
+            }
+            if (total > 0 && unvisited > 0) {
+                value = 1.0 * unvisited / total;
+            }
+        }
+        return value;
+    }
+
+    double SarsaAgent::getStateActionValue(const StatePtr &state,
+                                           const stringPtrSet &visitedActivities) const {
+        double value = 0.0;
+        for (const auto &action : state->getActions()) {
+            uintptr_t actHash = action->hash();
+            auto it = this->_reuseModel.find(actHash);
+            if (it == this->_reuseModel.end()) {
+                value += 1.0;
+            } else if (action->getVisitedCount() >= 1) {
+                value += 0.5;
+            }
+
+            if (action->getTarget() != nullptr) {
+                auto actPtr = std::dynamic_pointer_cast<ActivityStateAction>(action);
+                if (actPtr) {
+                    value += getReuseActionValue(actPtr, visitedActivities);
+                }
+            }
+        }
+        return value;
+    }
+
+    void SarsaAgent::updateStrategy() {
+        if (nullptr == this->_newAction) {
+            return;
+        }
+
+        if (!this->_previousActions.empty()) {
+            this->getNewReward();
+            this->updateReuseModel();
+
+            double value = this->_newAction->getQValue();
+            const int historySize = static_cast<int>(this->_previousActions.size());
+            const int rewardSize = static_cast<int>(this->_rewardHistory.size());
+            const int limit = std::min(historySize, rewardSize);
+            for (int i = limit - 1; i >= 0; --i) {
+                auto act = std::dynamic_pointer_cast<ActivityStateAction>(this->_previousActions[i]);
+                if (!act) continue;
+                double curV = act->getQValue();
+                double curR = this->_rewardHistory[i];
+                value = curR + _gamma * value;
+                act->setQValue(curV + _alpha * (value - curV));
+            }
+        } else {
+            BDLOG("%s", "SarsaAgent: get action value failed (empty history)");
+        }
+
+        this->_previousActions.emplace_back(this->_newAction);
+        if (this->_previousActions.size() > static_cast<size_t>(kMaxHistorySteps)) {
+            this->_previousActions.erase(this->_previousActions.begin());
+        }
+    }
+
+    void SarsaAgent::updateReuseModel() {
+        if (this->_previousActions.empty()) return;
+        ActionPtr lastAction = this->_previousActions.back();
+        auto modelAction = std::dynamic_pointer_cast<ActivityStateAction>(lastAction);
+        if (!modelAction || !this->_newState) return;
+
+        uint64_t hash = static_cast<uint64_t>(modelAction->hash());
+        stringPtr activity = this->_newState->getActivityString();
+        if (!activity) return;
+
+        std::lock_guard<std::mutex> lock(this->_reuseModelLock);
+        auto iter = this->_reuseModel.find(hash);
+        if (iter == this->_reuseModel.end()) {
+            BDLOG("SarsaAgent: can not find action %s in reuse map", modelAction->getId().c_str());
+            ReuseEntryM entrym;
+            entrym.emplace(activity, 1);
+            this->_reuseModel[hash] = std::move(entrym);
+        } else {
+            ((*iter).second)[activity] += 1;
+        }
+    }
+
+    ActivityStateActionPtr SarsaAgent::selectNewActionEpsilonGreedyRandomly() const {
+        if (this->eGreedy()) {
+            BDLOG("%s", "SarsaAgent: Try to select the max value action");
+            return this->_newState->greedyPickMaxQValue(enableValidValuePriorityFilter);
+        }
+        BDLOG("%s", "SarsaAgent: Try to randomly select a value action.");
+        return this->_newState->randomPickAction(enableValidValuePriorityFilter);
+    }
+
+    bool SarsaAgent::eGreedy() const {
+        // Use thread-local RNG via randomInt; epsilon is small (explore with prob epsilon)
+        double r = static_cast<double>(randomInt(0, 100)) / 100.0L;
+        return !(r < this->_epsilon);
+    }
+
+    ActionPtr SarsaAgent::selectActionNotInModel() const {
+        ActionPtr chosen = nullptr;
+        int totalWeight = 0;
+
+        for (const auto &action : this->_newState->getActions()) {
+            const bool matched = action->isModelAct()
+                                 && (this->_reuseModel.find(action->hash()) == this->_reuseModel.end())
+                                 && action->getVisitedCount() <= 0;
+            if (!matched) continue;
+
+            const int w = action->getPriority();
+            if (w <= 0) continue;
+
+            const int newTotal = totalWeight + w;
+            // Weighted reservoir sampling: choose current action with probability w / newTotal.
+            const int r = randomInt(0, newTotal - 1);
+            if (r < w) {
+                chosen = action;
+            }
+            totalWeight = newTotal;
+        }
+
+        if (totalWeight <= 0) {
+            BDLOGE("%s", "SarsaAgent: total weights is 0");
+            return nullptr;
+        }
+
+        if (!chosen) {
+            BDLOGE("%s", "SarsaAgent: rand a null action");
+        }
+        return chosen;
+    }
+
+    namespace {
+        inline double sampleGumbelNoise() {
+            // Sample a value in (0,1) and transform to standard Gumbel(0,1).
+            // Avoid exact 0/1 to keep log well-defined.
+            const int r = randomInt(1, 10000);
+            const double u = static_cast<double>(r) / 10001.0;
+            return -std::log(-std::log(u));
+        }
+    }
+
+    ActionPtr SarsaAgent::selectActionInModel(const stringPtrSet &visitedActivities) const {
+        float maxValue = -MAXFLOAT;
+        ActionPtr retAct = nullptr;
+        for (const auto &action : this->_newState->targetActions()) {
+            uintptr_t actHash = action->hash();
+            if (this->_reuseModel.find(actHash) != this->_reuseModel.end()) {
+                if (action->getVisitedCount() > 0) {
+                    BDLOG("%s", "SarsaAgent: action has been visited");
+                    continue;
+                }
+                auto actPtr = std::dynamic_pointer_cast<ActivityStateAction>(action);
+                if (!actPtr) continue;
+                float qv = static_cast<float>(this->getReuseActionValue(actPtr, visitedActivities));
+                if (qv > 1e-4f) {
+                    qv = 10.0f * qv;
+                    qv -= static_cast<float>(sampleGumbelNoise());
+                    if (qv > maxValue) {
+                        maxValue = qv;
+                        retAct = action;
+                    }
+                }
+            }
+        }
+        return retAct;
+    }
+
+    ActionPtr SarsaAgent::selectActionByQValue(const stringPtrSet &visitedActivities) const {
+        ActionPtr retAct = nullptr;
+        float maxQ = -MAXFLOAT;
+        for (const auto &action : this->_newState->getActions()) {
+            double qv = 0.0;
+            uintptr_t actHash = action->hash();
+            if (action->getVisitedCount() <= 0) {
+                auto iter = this->_reuseModel.find(actHash);
+                if (iter != this->_reuseModel.end()) {
+                    auto actPtr = std::dynamic_pointer_cast<ActivityStateAction>(action);
+                    if (actPtr) {
+                        qv += this->getReuseActionValue(actPtr, visitedActivities);
+                    }
+                } else {
+                    BDLOG("SarsaAgent: qvalue pick return a action: %s", action->toString().c_str());
+                    return action;
+                }
+            }
+            qv += action->getQValue();
+            qv /= kEntropyAlpha;
+            qv -= sampleGumbelNoise();
+            if (qv > maxQ) {
+                maxQ = static_cast<float>(qv);
+                retAct = action;
+            }
+        }
+        return retAct;
+    }
+
+    void SarsaAgent::adjustActions() {
+        AbstractAgent::adjustActions();
+    }
+
+    ActionPtr SarsaAgent::selectNewAction() {
+        ActionPtr action = nullptr;
+
+        action = this->selectActionNotInModel();
+        if (action) {
+            BLOG("%s", "SarsaAgent: select action not in reuse model");
+            return action;
+        }
+
+        // Reuse-based policies require visited-activity statistics from the graph.
+        stringPtrSet visitedActivities;
+        if (auto modelPtr = this->_model.lock()) {
+            const GraphPtr &graphRef = modelPtr->getGraph();
+            visitedActivities = graphRef->getVisitedActivities();
+        }
+
+        if (!visitedActivities.empty()) {
+            action = this->selectActionInModel(visitedActivities);
+            if (action) {
+                BLOG("%s", "SarsaAgent: select action in reuse model");
+                return action;
+            }
+        }
+
+        action = this->_newState->randomPickUnvisitedAction();
+        if (action) {
+            BLOG("%s", "SarsaAgent: select action in unvisited action");
+            return action;
+        }
+
+        if (!visitedActivities.empty()) {
+            action = this->selectActionByQValue(visitedActivities);
+            if (action) {
+                BLOG("%s", "SarsaAgent: select action by qvalue");
+                return action;
+            }
+        }
+
+        auto actPtr = this->selectNewActionEpsilonGreedyRandomly();
+        if (actPtr) {
+            BLOG("%s", "SarsaAgent: select action by EpsilonGreedyRandom");
+            return actPtr;
+        }
+
+        BLOGE("SarsaAgent: null action happened, handle null action");
+        return handleNullAction();
+    }
+
+    void SarsaAgent::loadReuseModel(const std::string &packageName) {
+        const bool useStatic = Preference::inst() && Preference::inst()->useStaticReuseAbstraction();
+        std::string basePath = std::string(ModelStorageConstants::StoragePrefix) + packageName;
+        std::string modelFilePath = useStatic
+                                    ? (basePath + ".static" + ModelStorageConstants::ModelFileExtension)
+                                    : (basePath + ModelStorageConstants::ModelFileExtension);
+
+        this->_modelSavePath = modelFilePath;
+        if (!this->_modelSavePath.empty()) {
+            this->_tmpSavePath = useStatic
+                                 ? (basePath + ".static" + ModelStorageConstants::TempModelFileExtension)
+                                 : (basePath + ModelStorageConstants::TempModelFileExtension);
+        }
+
+        BLOG("SarsaAgent: begin load model: %s", this->_modelSavePath.c_str());
+
+        std::ifstream modelFile(modelFilePath, std::ios::binary | std::ios::in);
+        if (!modelFile.is_open()) {
+            BLOGE("SarsaAgent: Failed to open model file: %s", modelFilePath.c_str());
+            return;
+        }
+
+        std::filebuf *fileBuffer = modelFile.rdbuf();
+        std::size_t filesize = fileBuffer->pubseekoff(0, modelFile.end, modelFile.in);
+        fileBuffer->pubseekpos(0, modelFile.in);
+
+        if (filesize <= 0) {
+            BLOGE("SarsaAgent: Invalid model file size: %zu", filesize);
+            return;
+        }
+
+        std::unique_ptr<char[]> modelFileData(new char[filesize]);
+        std::streamsize bytesRead = fileBuffer->sgetn(modelFileData.get(), static_cast<int>(filesize));
+        if (bytesRead != static_cast<std::streamsize>(filesize)) {
+            BLOGE("SarsaAgent: Failed to read complete model file: read %lld bytes, expected %zu bytes",
+                  static_cast<long long>(bytesRead), filesize);
+            return;
+        }
+
+        flatbuffers::Verifier verifier(reinterpret_cast<const uint8_t *>(modelFileData.get()), filesize);
+        if (!VerifyReuseModelBuffer(verifier)) {
+            BLOGE("SarsaAgent: Invalid or corrupted model buffer");
+            return;
+        }
+        auto reuseFBModel = GetReuseModel(modelFileData.get());
+        if (!reuseFBModel) {
+            BLOGE("SarsaAgent: GetReuseModel returned null");
+            return;
+        }
+
+        auto modelDataPtr = reuseFBModel->model();
+        if (!modelDataPtr) {
+            BLOG("SarsaAgent: model data is null");
+            return;
+        }
+
+        // Build a fresh model map off-lock, then swap in under mutex.
+        ReuseEntryIntMap newModel;
+        for (flatbuffers::uoffset_t i = 0; i < modelDataPtr->size(); ++i) {
+            auto modelEntry = modelDataPtr->Get(i);
+            uint64_t actionHash = modelEntry->action();
+            auto activityEntries = modelEntry->targets();
+            ReuseEntryM entryMap;
+            for (flatbuffers::uoffset_t j = 0; j < activityEntries->size(); ++j) {
+                auto targetEntry = activityEntries->Get(j);
+                BDLOG("SarsaAgent: load model hash: %" PRIu64 " %s %d",
+                      actionHash,
+                      targetEntry->activity()->str().c_str(),
+                      static_cast<int>(targetEntry->times()));
+                entryMap.emplace(std::make_shared<std::string>(targetEntry->activity()->str()),
+                                 static_cast<int>(targetEntry->times()));
+            }
+            if (!entryMap.empty()) {
+                newModel.emplace(actionHash, std::move(entryMap));
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(this->_reuseModelLock);
+            this->_reuseModel.swap(newModel);
+        }
+
+        BLOG("SarsaAgent: loaded model contains %zu actions", this->_reuseModel.size());
+    }
+
+    void SarsaAgent::saveReuseModel(const std::string &modelFilepath) {
+        flatbuffers::FlatBufferBuilder builder;
+        std::vector<flatbuffers::Offset<fastbotx::ReuseEntry>> entries;
+
+        // Take a snapshot of the reuse model under lock, then serialize off-lock.
+        ReuseEntryIntMap snapshot;
+        {
+            std::lock_guard<std::mutex> lock(this->_reuseModelLock);
+            snapshot = this->_reuseModel;
+        }
+
+        for (const auto &iter : snapshot) {
+            uint64_t actionHash = iter.first;
+            const ReuseEntryM &actMap = iter.second;
+            std::vector<flatbuffers::Offset<fastbotx::ActivityTimes>> targets;
+            targets.reserve(actMap.size());
+            for (const auto &entry : actMap) {
+                auto actTimes = CreateActivityTimes(builder,
+                                                    builder.CreateString(*(entry.first)),
+                                                    entry.second);
+                targets.push_back(actTimes);
+            }
+            auto reuseEntry = CreateReuseEntry(builder,
+                                               actionHash,
+                                               builder.CreateVector(targets.data(), targets.size()));
+            entries.push_back(reuseEntry);
+        }
+
+        auto modelBuf = CreateReuseModel(builder,
+                                         builder.CreateVector(entries.data(), entries.size()));
+        builder.Finish(modelBuf);
+
+        std::string outFilePath = modelFilepath.empty() ? this->_tmpSavePath : modelFilepath;
+        BLOG("SarsaAgent: save model to path: %s (entries=%zu)", outFilePath.c_str(), snapshot.size());
+        std::ofstream out(outFilePath, std::ios::binary);
+        if (!out.is_open()) {
+            BLOGE("SarsaAgent: Failed to open file for writing: %s", outFilePath.c_str());
+            return;
+        }
+        out.write(reinterpret_cast<const char *>(builder.GetBufferPointer()),
+                  static_cast<std::streamsize>(builder.GetSize()));
+        out.close();
+    }
+
+    void SarsaAgent::threadModelStorage(const std::weak_ptr<SarsaAgent> &agent) {
+        int saveIntervalMs = 1000 * 60 * 10; // 10 minutes
+        while (true) {
+            auto locked = agent.lock();
+            if (!locked) {
+                break;
+            }
+            locked->saveReuseModel(locked->_modelSavePath);
+            std::this_thread::sleep_for(std::chrono::milliseconds(saveIntervalMs));
+        }
+    }
+
+} // namespace fastbotx
+
+#endif // fastbotx_SarsaAgent_CPP_
+

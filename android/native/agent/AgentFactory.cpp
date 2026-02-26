@@ -12,6 +12,7 @@
 #include "utils.hpp"
 #include "Model.h"
 #include "DoubleSarsaAgent.h"
+#include "SarsaAgent.h"
 #include "DFSAgent.h"
 #include "BFSAgent.h"
 #include "FrontierAgent.h"
@@ -109,15 +110,18 @@ namespace fastbotx {
             return agent;
         }
 
-        // Default / Reuse / DoubleSarsa: use DoubleSarsaAgent with periodic model saving.
-        DoubleSarsaAgentPtr doubleSarsaAgent = std::make_shared<DoubleSarsaAgent>(model);
+        // For AlgorithmType::Reuse, use legacy-compatible SarsaAgent (single-Q SARSA + reuse model).
+        if (agentT == AlgorithmType::Reuse) {
+            SarsaAgentPtr sarsaAgent = std::make_shared<SarsaAgent>(model);
+            threadDelayExec(3000, false, &SarsaAgent::threadModelStorage,
+                            std::weak_ptr<fastbotx::SarsaAgent>(sarsaAgent));
+            agent = sarsaAgent;
+            BLOG("Created SarsaAgent (legacy single-Q SARSA with reuse model)");
+            return agent;
+        }
 
-        // Start background thread to periodically save model
-        // Parameter explanation:
-        // - 3000: Start after 3 second delay (avoid frequent saves during initialization)
-        // - false: Non-blocking execution
-        // - &DoubleSarsaAgent::threadModelStorage: Thread execution function
-        // - weak_ptr: Use weak_ptr to avoid circular references, thread exits when Agent is destructed
+        // Default / DoubleSarsa: use DoubleSarsaAgent with periodic model saving.
+        DoubleSarsaAgentPtr doubleSarsaAgent = std::make_shared<DoubleSarsaAgent>(model);
         threadDelayExec(3000, false, &DoubleSarsaAgent::threadModelStorage,
                         std::weak_ptr<fastbotx::DoubleSarsaAgent>(doubleSarsaAgent));
 

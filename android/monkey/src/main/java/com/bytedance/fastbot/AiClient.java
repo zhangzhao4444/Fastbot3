@@ -91,6 +91,7 @@ public class AiClient {
      */
     public enum AlgorithmType {
         Random(0),
+        Sarsa(1),
         Dfs(2),
         Bfs(4),
         DoubleSarsa(8),

@@ -113,6 +113,12 @@ namespace fastbotx {
 
         bool skipAllActionsFromModel() const { return this->_skipAllActionsFromModel; }
 
+        /**
+         * @brief Whether to use legacy static reuse state abstraction instead of dynamic abstraction.
+         * Controlled via max.config key: max.stateAbstractionMode=static_reuse|dynamic.
+         */
+        bool useStaticReuseAbstraction() const;
+
         bool isForceUseTextModel() const { return this->_forceUseTextModel; }
 
         int getForceMaxBlockStateTimes() const { return this->_forceMaxBlockStateTimes; }
@@ -210,6 +216,7 @@ namespace fastbotx {
         std::set<std::string> _validTexts;
         bool _pruningValidTexts;
         bool _skipAllActionsFromModel;
+        bool _useStaticReuseAbstraction{};
         bool _forceUseTextModel{};
         int _forceMaxBlockStateTimes{};
         RectPtr _rootScreenSize;

@@ -295,6 +295,7 @@ namespace fastbotx {
      */
     enum AlgorithmType {
         Random = 0,
+        Reuse = 1,
         DFS = 2,
         BFS = 4,
         DoubleSarsa = 8,

@@ -9,6 +9,7 @@
 #include "Element.h"
 #include "DeviceOperateWrapper.h"
 #include "DoubleSarsaAgent.h"
+#include "SarsaAgent.h"
 #include "utils.hpp"
 #include "../llm/LlmJavaHttp.h"
 #include "../thirdpart/json/json.hpp"
@@ -230,14 +231,20 @@ void JNICALL Java_com_bytedance_fastbot_AiClient_initAgentNative(JNIEnv *env, jo
     _fastbot_model->setPackageName(std::string(packageNameCString));
 
     BLOG("init agent with type %d, %s,  %d", agentType, packageNameCString, deviceType);
-    // Reuse model is only supported by DoubleSarsaAgent for now.
-    // Other agents (BFS/DFS/Frontier/ICM/GoExplore/...) should not attempt to load reuse model.
+    // Reuse model is supported by DoubleSarsaAgent and SarsaAgent.
     if (algorithmType == fastbotx::AlgorithmType::DoubleSarsa) {
         auto doubleSarsaAgentPtr = std::dynamic_pointer_cast<fastbotx::DoubleSarsaAgent>(agentPointer);
         if (doubleSarsaAgentPtr) {
             doubleSarsaAgentPtr->loadReuseModel(std::string(packageNameCString));
         } else {
             BLOGE("Double SARSA: Failed to cast agent to DoubleSarsaAgent");
+        }
+    } else if (algorithmType == fastbotx::AlgorithmType::Sarsa) {
+        auto sarsaAgentPtr = std::dynamic_pointer_cast<fastbotx::SarsaAgent>(agentPointer);
+        if (sarsaAgentPtr) {
+            sarsaAgentPtr->loadReuseModel(std::string(packageNameCString));
+        } else {
+            BLOGE("SarsaAgent: Failed to cast agent to SarsaAgent");
         }
     }
     if (env)

@@ -19,12 +19,16 @@ We gratefully acknowledge Prof. Ting Su, the SSE Lab at East China Normal Univer
 
 ### Reuse model (FBM)
 
-* **Path**: On device, the reuse model file is stored at `/sdcard/fastbot3_{packagename}.fbm` (e.g. `/sdcard/fastbot3_com.example.app.fbm`).
-* **Loading**: If this file exists when Fastbot starts, it is loaded by default for the given package.
-* **Saving**: During execution, the model is written back periodically (e.g. every 10 minutes). You can delete or copy the file as needed.
+* **Path (dynamic abstraction)**: On device, the default reuse model file is stored at `/sdcard/fastbot_{packagename}.fbm` (e.g. `/sdcard/fastbot_com.example.app.fbm`).
+* **Path (static reuse abstraction)**: When `max.stateAbstractionMode=static_reuse` (in `/sdcard/max.config`), a separate static reuse model file is used: `/sdcard/fastbot_{packagename}.static.fbm`. This allows you to switch between dynamic and legacy static state abstraction without polluting each other's FBM.
+* **Loading**: If the corresponding file exists when Fastbot starts, it is loaded by default for the given package (dynamic vs static chosen by `max.stateAbstractionMode`).
+* **Saving**: During execution, the selected model file is written back periodically (e.g. every 10 minutes). You can delete or copy the file as needed.
 * **Security**: The loader verifies the buffer before deserializing; invalid or corrupted files are rejected.
 
 ### Changelog
+
+**update 2026.3**
+* **Static reuse state abstraction**: Added a runtime switch in `max.config` (`max.stateAbstractionMode=dynamic|static_reuse`) to control how UI states are abstracted for RL/reuse. The default `dynamic` mode keeps the existing per-activity widget-key refinement/coarsening (mask over `Clazz|ResourceID|OperateMask|ScrollType|Text|ContentDesc|Index`). The optional `static_reuse` mode disables runtime refinement/coarsening and uses a **legacy-compatible hash**: each widget is a `RichWidget` whose hash is built from `(class + resource-id + supported actions + valid text/children text, with clickable-children masking)`, and each state hash is `hash(activityName) XOR combineHash(RichWidgets, withOrder)`. This matches the older `ReuseAgent` abstraction and uses a separate FBM file `/sdcard/fastbot_{pkg}.static.fbm` so that dynamic and static reuse models do not interfere with each other.
 
 **update 2026.2**
 * **LLM agent (LLMTaskAgent)**: Optional LLM-based custom events via `/sdcard/max.llm.tasks`: when the current screen matches a checkpoint (Activity + XPath), action selection can be handed to an LLM (e.g. for login or guided tasks). Supports optional Planner/Executor layering, first-step screenshot retry, session-scoped todo/scratchpad, and safe_mode/forbidden_texts. Configure LLM in `max.config` (e.g. `max.llm.enabled`, `max.llm.apiUrl`, `max.llm.model`). See [Configuration → LLM custom events](#llm-custom-events-maxllmtasks) and [LLM_TASK_AGENT_LLM_TECHNICAL_ANALYSIS.md](./native/agent/LLM_TASK_AGENT_LLM_TECHNICAL_ANALYSIS.md). For a survey of recent LLM/VLM-based traversal testing SOTA and technical proposals, see [LLM_VLM_TRAVERSAL_TESTING_SOTA_AND_PROPOSAL.md](./native/agent/LLM_VLM_TRAVERSAL_TESTING_SOTA_AND_PROPOSAL.md).
@@ -184,7 +188,7 @@ adb -s <device_serial> shell CLASSPATH=/sdcard/monkeyq.jar:/sdcard/framework.jar
 |-----------|-------------|
 | `-s <device_serial>` | Device ID (required if multiple devices are connected; check with `adb devices`) |
 | `-p <package_name>` | App package under test (e.g. from `adb shell pm list packages`) |
-| `--agent <type>` | Strategy: **`reuseq`** or **`double-sarsa`** — Double SARSA (default, recommended); **`bfs`** — BFS breadth-first exploration; **`dfs`** — DFS depth-first exploration; **`frontier`** — Frontier-based exploration (infoGain × distance, MA-SLAM style) |
+| `--agent <type>` | Strategy: **`sarsa`** — legacy SarsaAgent (single-Q SARSA + reuse model); **`reuseq`** or **`double-sarsa`** — Double SARSA (default, recommended); **`bfs`** — BFS breadth-first exploration; **`dfs`** — DFS depth-first exploration; **`frontier`** — Frontier-based exploration (infoGain × distance, MA-SLAM style) |
 | `--running-minutes <duration>` | Total test duration in minutes |
 | `--throttle <delay_ms>` | Delay between actions in milliseconds |
 
@@ -243,6 +247,17 @@ max.llm.apiKey=${MAX_LLM_API_KEY}
 max.llm.model=gpt-4o-mini
 max.llm.maxTokens=512
 max.llm.timeoutMs=20000
+```
+
+**State abstraction & reuse mode keys in max.config (example)**
+
+```properties
+# Dynamic state abstraction (default): mask refined/coarsened at runtime, reuse model at /sdcard/fastbot_{pkg}.fbm
+max.stateAbstractionMode=dynamic
+
+# Legacy static reuse abstraction (optional): fully-aligned with old ReuseAgent state hashing,
+# reuse model stored in /sdcard/fastbot_{pkg}.static.fbm
+# max.stateAbstractionMode=static_reuse
 ```
 
 **Setting environment variables on the device**

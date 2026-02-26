@@ -345,7 +345,8 @@ namespace fastbotx {
      */
     Preference::Preference()
             : _randomInputText(false), _doInputFuzzing(true), _pruningValidTexts(false),
-              _skipAllActionsFromModel(false), _rootScreenSize(nullptr) {
+              _skipAllActionsFromModel(false), _useStaticReuseAbstraction(false),
+              _rootScreenSize(nullptr) {
         loadConfigs();
     }
 
@@ -1181,6 +1182,7 @@ namespace fastbotx {
 #define MaxRandomPickSTR        "max.randomPickFromStringList"
 #define InputFuzzSTR            "max.doinputtextFuzzing"
 #define ListenMode              "max.listenMode"
+#define StateAbstractionModeSTR "max.stateAbstractionMode"
 #define LlmEnabledSTR           "max.llm.enabled"
 #define LlmApiUrlSTR            "max.llm.apiUrl"
 #define LlmApiKeySTR            "max.llm.apiKey"
@@ -1279,6 +1281,9 @@ namespace fastbotx {
             } else if (key == ListenMode) {
                 BDLOG("set %s", ListenMode);
                 this->setListenMode(value == "true");
+            } else if (key == StateAbstractionModeSTR) {
+                // static_reuse = legacy reuse state abstraction; anything else treated as dynamic
+                this->_useStaticReuseAbstraction = (value == "static_reuse");
             } else if (key == LlmEnabledSTR) {
                 this->_llmRuntimeConfig.enabled = (value == "true");
             } else if (key == LlmApiUrlSTR) {
@@ -1959,6 +1964,10 @@ namespace fastbotx {
         std::string taskKey = cfg->activity + "|" + cfg->checkpointXpathString;
         _llmTaskRunCount[taskKey]++;
         BLOG("LLM task session started: activity=%s checkpoint_xpath=%s (run %d, max_times %d)", cfg->activity.c_str(), cfg->checkpointXpathString.c_str(), _llmTaskRunCount[taskKey], cfg->maxTimes);
+    }
+
+    bool Preference::useStaticReuseAbstraction() const {
+        return _useStaticReuseAbstraction;
     }
 
 } // namespace fastbotx
