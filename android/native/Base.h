@@ -295,14 +295,14 @@ namespace fastbotx {
      */
     enum AlgorithmType {
         Random = 0,
-        Reuse = 1,
+        Sarsa = 1,
         DFS = 2,
         BFS = 4,
         DoubleSarsa = 8,
         Frontier = 16,
         ICM = 32,
         GoExplore = 64,
-        LLMExplorer = 128
+        LLMExplorer = 128,
     };
 
 

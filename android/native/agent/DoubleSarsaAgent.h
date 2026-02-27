@@ -11,7 +11,7 @@
 #include "State.h"
 #include "Action.h"
 #include <vector>
-#include <map>
+#include <unordered_map>
 #include <random>
 
 namespace fastbotx {
@@ -74,9 +74,9 @@ namespace fastbotx {
 
     // ========== Reuse Model Data Structure Type Definitions ==========
     /// Reuse entry mapping: Activity name -> visit count
-    typedef std::map<stringPtr, int> ReuseEntryM;
+    typedef std::unordered_map<stringPtr, int> ReuseEntryM;
     /// Reuse model mapping: action hash -> (Activity name -> visit count)
-    typedef std::map<uint64_t, ReuseEntryM> ReuseEntryIntMap;
+    typedef std::unordered_map<uint64_t, ReuseEntryM> ReuseEntryIntMap;
     /// Q-value mapping: action hash -> Q-value (for Q1)
     typedef std::map<uint64_t, double> ReuseEntryQValueMap;
     /// Q-value mapping: action hash -> Q-value (for Q2)

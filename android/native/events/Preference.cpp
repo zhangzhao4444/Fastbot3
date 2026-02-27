@@ -1284,6 +1284,11 @@ namespace fastbotx {
             } else if (key == StateAbstractionModeSTR) {
                 // static_reuse = legacy reuse state abstraction; anything else treated as dynamic
                 this->_useStaticReuseAbstraction = (value == "static_reuse");
+                if (this->_useStaticReuseAbstraction) {
+                    BLOG("state abstraction mode: static_reuse (legacy static reuse state abstraction enabled)");
+                } else {
+                    BLOG("state abstraction mode: dynamic (runtime refinement/coarsening enabled)");
+                }
             } else if (key == LlmEnabledSTR) {
                 this->_llmRuntimeConfig.enabled = (value == "true");
             } else if (key == LlmApiUrlSTR) {

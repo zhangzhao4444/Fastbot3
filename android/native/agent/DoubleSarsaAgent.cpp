@@ -11,6 +11,7 @@
 #include "Model.h"
 #include <cmath>
 #include "ActivityNameAction.h"
+#include "ModelStorageConstants.h"
 #include "../storage/ReuseModel_generated.h"
 #include <iostream>
 #include <fstream>
@@ -23,18 +24,6 @@
 #include <chrono>
 #include <cstdio>
 #include <cinttypes>
-
-namespace ModelStorageConstants {
-#ifdef __ANDROID__
-    constexpr const char* StoragePrefix = "/sdcard/fastbot_";
-#else
-    constexpr const char* StoragePrefix = "";
-#endif
-    constexpr const char* ModelFileExtension = ".fbm";
-    constexpr const char* TempModelFileExtension = ".tmp.fbm";
-    /// Max length for activity name when serializing (security: prevent unbounded string)
-    constexpr size_t MaxActivityNameLength = 4096;
-}  // namespace ModelStorageConstants
 
 namespace fastbotx {
 

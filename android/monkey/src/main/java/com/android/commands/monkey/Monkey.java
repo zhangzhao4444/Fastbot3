@@ -818,6 +818,9 @@ public class Monkey {
                 if ("dfs".equalsIgnoreCase(mAgentType)) {
                     algo = AiClient.AlgorithmType.Dfs;
                     Logger.println("// init with DFS agent (AlgorithmType.Dfs)");
+                } else if ("sarsa".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.Sarsa;
+                    Logger.println("// init with SarsaAgent (AlgorithmType.Sarsa, single-Q SARSA + reuse model)");
                 } else if ("double-sarsa".equalsIgnoreCase(mAgentType) || "reuseq".equalsIgnoreCase(mAgentType)) {
                     algo = AiClient.AlgorithmType.DoubleSarsa;
                     Logger.println("// init with DoubleSarsaAgent (AlgorithmType.DoubleSarsa)");

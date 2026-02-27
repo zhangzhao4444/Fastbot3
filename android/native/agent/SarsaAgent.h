@@ -15,6 +15,7 @@
 
 namespace fastbotx {
 
+    // Keep reuse-model container types consistent across agents, using unordered_map for better average performance.
     using ReuseEntryM = std::unordered_map<stringPtr, int>;
     using ReuseEntryIntMap = std::unordered_map<uint64_t, ReuseEntryM>;
 

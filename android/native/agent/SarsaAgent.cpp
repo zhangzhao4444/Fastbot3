@@ -7,6 +7,7 @@
 
 #include "SarsaAgent.h"
 #include "Model.h"
+#include "ModelStorageConstants.h"
 #include "../storage/ReuseModel_generated.h"
 #include "../events/Preference.h"
 #include "../utils.hpp"
@@ -15,6 +16,7 @@
 #include <limits>
 #include <thread>
 #include <chrono>
+#include <cinttypes>
 
 namespace fastbotx {
 
@@ -90,6 +92,8 @@ namespace fastbotx {
                        std::sqrt(this->_newState->getVisitedCount() + 1.0));
 
             BLOG("SarsaAgent: total visited activities count is %zu", visitedActivities.size());
+            BDLOG("SarsaAgent: getNewReward alpha=%.4f gamma=%.4f totalVisit=%ld reward=%.4f",
+                  this->_alpha, this->_gamma, totalVisitCount, reward);
         }
 
         BDLOG("reuse-cov-opti action reward=%f", reward);
@@ -157,6 +161,8 @@ namespace fastbotx {
             const int historySize = static_cast<int>(this->_previousActions.size());
             const int rewardSize = static_cast<int>(this->_rewardHistory.size());
             const int limit = std::min(historySize, rewardSize);
+            BLOG("SarsaAgent: updateStrategy(history=%d,reward=%d,limit=%d,alpha=%.4f,gamma=%.4f)",
+                 historySize, rewardSize, limit, this->_alpha, this->_gamma);
             for (int i = limit - 1; i >= 0; --i) {
                 auto act = std::dynamic_pointer_cast<ActivityStateAction>(this->_previousActions[i]);
                 if (!act) continue;
@@ -164,6 +170,8 @@ namespace fastbotx {
                 double curR = this->_rewardHistory[i];
                 value = curR + _gamma * value;
                 act->setQValue(curV + _alpha * (value - curV));
+                BDLOG("SarsaAgent: Q-update i=%d curR=%.4f backup=%.4f oldQ=%.4f newQ=%.4f",
+                      i, curR, value, curV, act->getQValue());
             }
         } else {
             BDLOG("%s", "SarsaAgent: get action value failed (empty history)");
@@ -235,12 +243,14 @@ namespace fastbotx {
         }
 
         if (totalWeight <= 0) {
-            BDLOGE("%s", "SarsaAgent: total weights is 0");
+            // No eligible new-in-model actions with positive priority; this is a normal
+            // situation and we will fall back to other selection strategies.
+            BDLOG("%s", "SarsaAgent: total weights is 0 (fall back to next strategy)");
             return nullptr;
         }
 
         if (!chosen) {
-            BDLOGE("%s", "SarsaAgent: rand a null action");
+            BDLOG("%s", "SarsaAgent: rand a null action (fall back to next strategy)");
         }
         return chosen;
     }
