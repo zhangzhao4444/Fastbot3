@@ -1179,16 +1179,16 @@ namespace fastbotx {
 #endif
     }
 
-#define MaxRandomPickSTR        "max.randomPickFromStringList"
-#define InputFuzzSTR            "max.doinputtextFuzzing"
-#define ListenMode              "max.listenMode"
-#define StateAbstractionModeSTR "max.stateAbstractionMode"
-#define LlmEnabledSTR           "max.llm.enabled"
-#define LlmApiUrlSTR            "max.llm.apiUrl"
-#define LlmApiKeySTR            "max.llm.apiKey"
-#define LlmModelSTR             "max.llm.model"
-#define LlmMaxTokensSTR         "max.llm.maxTokens"
-#define LlmTimeoutMsSTR         "max.llm.timeoutMs"
+#define MaxRandomPickSTR          "max.randomPickFromStringList"
+#define InputFuzzSTR              "max.doinputtextFuzzing"
+#define ListenMode                "max.listenMode"
+#define StaticStateAbstractionSTR "max.staticStateAbstraction"
+#define LlmEnabledSTR             "max.llm.enabled"
+#define LlmApiUrlSTR              "max.llm.apiUrl"
+#define LlmApiKeySTR              "max.llm.apiKey"
+#define LlmModelSTR               "max.llm.model"
+#define LlmMaxTokensSTR           "max.llm.maxTokens"
+#define LlmTimeoutMsSTR           "max.llm.timeoutMs"
 
     /**
      * @brief Load base configuration file
@@ -1281,13 +1281,14 @@ namespace fastbotx {
             } else if (key == ListenMode) {
                 BDLOG("set %s", ListenMode);
                 this->setListenMode(value == "true");
-            } else if (key == StateAbstractionModeSTR) {
-                // static_reuse = legacy reuse state abstraction; anything else treated as dynamic
-                this->_useStaticReuseAbstraction = (value == "static_reuse");
+            } else if (key == StaticStateAbstractionSTR) {
+                // max.staticStateAbstraction=true  -> legacy static reuse abstraction
+                // max.staticStateAbstraction=false -> dynamic abstraction
+                this->_useStaticReuseAbstraction = (value == "true");
                 if (this->_useStaticReuseAbstraction) {
-                    BLOG("state abstraction mode: static_reuse (legacy static reuse state abstraction enabled)");
+                    BLOG("state abstraction: static (legacy static reuse state abstraction enabled)");
                 } else {
-                    BLOG("state abstraction mode: dynamic (runtime refinement/coarsening enabled)");
+                    BLOG("state abstraction: dynamic (runtime refinement/coarsening enabled)");
                 }
             } else if (key == LlmEnabledSTR) {
                 this->_llmRuntimeConfig.enabled = (value == "true");

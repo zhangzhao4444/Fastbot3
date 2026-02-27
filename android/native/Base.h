@@ -295,6 +295,8 @@ namespace fastbotx {
      */
     enum AlgorithmType {
         Random = 0,
+        // Legacy single-Q SARSA + reuse model. Value must stay in sync with
+        // Java AiClient.AlgorithmType.Sarsa (1).
         Sarsa = 1,
         DFS = 2,
         BFS = 4,
@@ -302,7 +304,7 @@ namespace fastbotx {
         Frontier = 16,
         ICM = 32,
         GoExplore = 64,
-        LLMExplorer = 128,
+        LLMExplorer = 128
     };
 
 

@@ -115,7 +115,7 @@ namespace fastbotx {
 
         /**
          * @brief Whether to use legacy static reuse state abstraction instead of dynamic abstraction.
-         * Controlled via max.config key: max.stateAbstractionMode=static_reuse|dynamic.
+         * Controlled via max.config key: max.staticStateAbstraction=true|false.
          */
         bool useStaticReuseAbstraction() const;
 

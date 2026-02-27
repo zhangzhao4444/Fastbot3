@@ -20,21 +20,19 @@ We gratefully acknowledge Prof. Ting Su, the SSE Lab at East China Normal Univer
 ### Reuse model (FBM)
 
 * **Path (dynamic abstraction)**: On device, the default reuse model file is stored at `/sdcard/fastbot_{packagename}.fbm` (e.g. `/sdcard/fastbot_com.example.app.fbm`).
-* **Path (static reuse abstraction)**: When `max.stateAbstractionMode=static_reuse` (in `/sdcard/max.config`), a separate static reuse model file is used: `/sdcard/fastbot_{packagename}.static.fbm`. This allows you to switch between dynamic and legacy static state abstraction without polluting each other's FBM.
-* **Loading**: If the corresponding file exists when Fastbot starts, it is loaded by default for the given package (dynamic vs static chosen by `max.stateAbstractionMode`).
+* **Path (static reuse abstraction)**: When `max.staticStateAbstraction=true` (in `/sdcard/max.config`), a separate static reuse model file is used: `/sdcard/fastbot_{packagename}.static.fbm`. This allows you to switch between dynamic and legacy static state abstraction without polluting each other's FBM.
+* **Loading**: If the corresponding file exists when Fastbot starts, it is loaded by default for the given package (dynamic vs static chosen by `max.staticStateAbstraction`).
 * **Saving**: During execution, the selected model file is written back periodically (e.g. every 10 minutes). You can delete or copy the file as needed.
 * **Security**: The loader verifies the buffer before deserializing; invalid or corrupted files are rejected.
 
 ### Changelog
 
 **update 2026.3**
-* **Static reuse state abstraction**: Added a runtime switch in `max.config` (`max.stateAbstractionMode=dynamic|static_reuse`) to control how UI states are abstracted for RL/reuse. The default `dynamic` mode keeps the existing per-activity widget-key refinement/coarsening (mask over `Clazz|ResourceID|OperateMask|ScrollType|Text|ContentDesc|Index`). The optional `static_reuse` mode disables runtime refinement/coarsening and uses a **legacy-compatible hash**: each widget is a `RichWidget` whose hash is built from `(class + resource-id + supported actions + valid text/children text, with clickable-children masking)`, and each state hash is `hash(activityName) XOR combineHash(RichWidgets, withOrder)`. This matches the older `ReuseAgent` abstraction and uses a separate FBM file `/sdcard/fastbot_{pkg}.static.fbm` so that dynamic and static reuse models do not interfere with each other.
+* **Static reuse state abstraction**: Added a runtime switch in `max.config` (`max.staticStateAbstraction=true|false`) to control how UI states are abstracted for RL/reuse. The default `false` mode keeps the existing per-activity widget-key refinement/coarsening (mask over `Clazz|ResourceID|OperateMask|ScrollType|Text|ContentDesc|Index`). When set to `true`, runtime refinement/coarsening is disabled and a **legacy-compatible hash** is used: each widget is a `RichWidget` whose hash is built from `(class + resource-id + supported actions + valid text/children text, with clickable-children masking)`, and each state hash is `hash(activityName) XOR combineHash(RichWidgets, withOrder)`. This matches the older `ReuseAgent` abstraction and uses a separate FBM file `/sdcard/fastbot_{pkg}.static.fbm` so that dynamic and static reuse models do not interfere with each other.
 
 **update 2026.2**
 * **LLM agent (LLMTaskAgent)**: Optional LLM-based custom events via `/sdcard/max.llm.tasks`: when the current screen matches a checkpoint (Activity + XPath), action selection can be handed to an LLM (e.g. for login or guided tasks). Supports optional Planner/Executor layering, first-step screenshot retry, session-scoped todo/scratchpad, and safe_mode/forbidden_texts. Configure LLM in `max.config` (e.g. `max.llm.enabled`, `max.llm.apiUrl`, `max.llm.model`). See [Configuration → LLM custom events](#llm-custom-events-maxllmtasks) and [LLM_TASK_AGENT_LLM_TECHNICAL_ANALYSIS.md](./native/agent/LLM_TASK_AGENT_LLM_TECHNICAL_ANALYSIS.md). For a survey of recent LLM/VLM-based traversal testing SOTA and technical proposals, see [LLM_VLM_TRAVERSAL_TESTING_SOTA_AND_PROPOSAL.md](./native/agent/LLM_VLM_TRAVERSAL_TESTING_SOTA_AND_PROPOSAL.md).
-* **Frontier agent (FrontierAgent)**: Frontier-based exploration selectable via `--agent frontier`; MA-SLAM-style global planner (infoGain × distance, FH-DRL scoring) with local execution (direct or BFS path to target). No Q-values or reuse model. Implementation: [FrontierAgent.cpp](./native/agent/FrontierAgent.cpp). See [FRONTIER_AGENT_ALGORITHM_EXPLANATION.md](./native/agent/FRONTIER_AGENT_ALGORITHM_EXPLANATION.md).
 * **ICM agent (ICMAgent)**: Curiosity-driven exploration selectable via `--agent icm`; NGU-style novelty scoring (episode × global × stateFactor × successorFactor, cap L=5) with ε-greedy action selection. No Q-values or reuse model; optional cluster novelty (16-dim handcrafted or DNN 16→16→8 embedding + online K=32 clustering). Implementation: [ICMAgent.cpp](./native/agent/ICMAgent.cpp). See [ICM_ALGORITHM_EXPLANATION.md](./native/agent/ICM_ALGORITHM_EXPLANATION.md).
-* **LLM-Explorer agent (LLMExplorerAgent)**: AIG-based exploration via `--agent llmexplorer` or `--agent llm_explorer`; abstract states (activity + widget structure hash), exploration flags (unexplored/explored/ineffective), app-wide selection (current-screen unexplored first, else random over all unexplored), and fault-tolerant navigation. **LLM**: (1) **Content-aware input** — for editable widgets, `getInputTextForAction()` uses the same LLM client (`max.llm.*` in `max.config`) to suggest input text. (2) **Knowledge organization** — on first visit to an abstract state, LLM groups UI elements (JSON `groups`/`functions`); exploring one action in a group marks the whole group. Implementation: [LLMExplorerAgent.cpp](./native/agent/LLMExplorerAgent.cpp), [LLMExplorerAgent.h](./native/agent/LLMExplorerAgent.h). See [LLMExplorerAgent_ALGORITHM_EXPLANATION.md](./native/agent/LLMExplorerAgent_ALGORITHM_EXPLANATION.md).
 
 
 **update 2026.1**
@@ -250,11 +248,11 @@ max.llm.timeoutMs=20000
 
 ```properties
 # Dynamic state abstraction (default): mask refined/coarsened at runtime, reuse model at /sdcard/fastbot_{pkg}.fbm
-max.stateAbstractionMode=dynamic
+max.staticStateAbstraction=false
 
 # Legacy static reuse abstraction (optional): fully-aligned with old ReuseAgent state hashing,
 # reuse model stored in /sdcard/fastbot_{pkg}.static.fbm
-# max.stateAbstractionMode=static_reuse
+max.staticStateAbstraction=true
 ```
 
 **Setting environment variables on the device**

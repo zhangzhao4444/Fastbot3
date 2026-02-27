@@ -110,8 +110,8 @@ namespace fastbotx {
             return agent;
         }
 
-        // For AlgorithmType::Reuse, use legacy-compatible SarsaAgent (single-Q SARSA + reuse model).
-        if (agentT == AlgorithmType::Reuse) {
+        // For AlgorithmType::Sarsa, use legacy-compatible SarsaAgent (single-Q SARSA + reuse model).
+        if (agentT == AlgorithmType::Sarsa) {
             SarsaAgentPtr sarsaAgent = std::make_shared<SarsaAgent>(model);
             threadDelayExec(3000, false, &SarsaAgent::threadModelStorage,
                             std::weak_ptr<fastbotx::SarsaAgent>(sarsaAgent));
