@@ -1,5 +1,8 @@
+/*
+ * This code is licensed under the Fastbot license. You may obtain a copy of this license in the LICENSE.txt file in the root directory of this source tree.
+ */
 /**
- * @authors Zhao Zhang
+ * @authors Jianqiang Guo, Yuhui Su, Zhao Zhang
  */
 
 #ifndef fastbotx_SarsaAgent_CPP_
@@ -8,6 +11,7 @@
 #include "SarsaAgent.h"
 #include "Model.h"
 #include "ModelStorageConstants.h"
+#include "ContentAwareInputProvider.h"
 #include "../storage/ReuseModel_generated.h"
 #include "../events/Preference.h"
 #include "../utils.hpp"
@@ -28,7 +32,8 @@ namespace fastbotx {
               _gamma(kDefaultGamma),
               _epsilon(kDefaultEpsilon),
               _modelSavePath(DefaultModelSavePath),
-              _tmpSavePath(DefaultModelSavePath) {
+              _tmpSavePath(DefaultModelSavePath),
+              _contentAwareInputProvider(std::make_shared<LlmContentAwareInputProvider>()) {
         this->_algorithmType = AlgorithmType::Sarsa;
         BLOG("SarsaAgent: initialized with alpha=%.4f, gamma=%.4f, epsilon=%.4f",
              _alpha, _gamma, _epsilon);
@@ -40,7 +45,8 @@ namespace fastbotx {
               _gamma(kDefaultGamma),
               _epsilon(kDefaultEpsilon),
               _modelSavePath(DefaultModelSavePath),
-              _tmpSavePath(DefaultModelSavePath) {
+              _tmpSavePath(DefaultModelSavePath),
+              _contentAwareInputProvider(std::make_shared<LlmContentAwareInputProvider>()) {
         this->_algorithmType = AlgorithmType::Sarsa;
     }
 
@@ -51,6 +57,36 @@ namespace fastbotx {
             std::lock_guard<std::mutex> lock(this->_reuseModelLock);
             this->_reuseModel.clear();
         }
+    }
+
+    void SarsaAgent::setContentAwareInputProvider(const std::shared_ptr<IContentAwareInputProvider> &provider) {
+        _contentAwareInputProvider = provider;
+    }
+
+    void SarsaAgent::moveForward(StatePtr nextState) {
+        AbstractAgent::moveForward(nextState);
+        _stepCount++;
+    }
+
+    std::string SarsaAgent::getInputTextForAction(const StatePtr &state, const ActionPtr &action) const {
+        if (!Preference::inst() || !Preference::inst()->isLlmContextAwareInputEnabled()) return "";
+        if (!_contentAwareInputProvider) return "";
+
+        // Throttle: at most one LLM content_aware_input call every kMinStepsBetweenContentAwareInputCalls steps.
+        if (_lastContentAwareInputStep != 0 &&
+            _stepCount - _lastContentAwareInputStep < kMinStepsBetweenContentAwareInputCalls) {
+            return "";
+        }
+        // Optional probability: when allowed by step throttle, only call with kContentAwareInputCallProbability to reduce load.
+        if (kContentAwareInputCallProbability < 1.0 &&
+            static_cast<double>(randomInt(0, 100)) / 100.0 >= kContentAwareInputCallProbability) {
+            return "";
+        }
+
+        ModelPtr model = _model.lock();
+        std::string result = _contentAwareInputProvider->getInputTextForAction(state, action, model);
+        _lastContentAwareInputStep = _stepCount;
+        return result;
     }
 
     double SarsaAgent::getNewReward() {

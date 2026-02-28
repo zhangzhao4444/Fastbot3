@@ -1,9 +1,7 @@
-/*
- * This code is licensed under the Fastbot license. You may obtain a copy of this license in the LICENSE.txt file in the root directory of this source tree.
- */
 /**
  * @authors Zhao Zhang
  */
+ 
 #ifndef fastbotx_DoubleSarsaAgent_CPP_
 #define fastbotx_DoubleSarsaAgent_CPP_
 

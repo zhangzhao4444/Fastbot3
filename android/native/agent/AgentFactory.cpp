@@ -19,7 +19,7 @@
 #include "GOExploreAgent.h"
 #include "ICMAgent.h"
 #include "LLMExplorerAgent.h"
-#include "StateEncoder.h"
+#include "../desc/StateEncoder.h"
 #include "json.hpp"
 #include "Preference.h"
 

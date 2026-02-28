@@ -1,5 +1,8 @@
+/*
+ * This code is licensed under the Fastbot license. You may obtain a copy of this license in the LICENSE.txt file in the root directory of this source tree.
+ */
 /**
- * @authors Zhao Zhang
+ * @authors Jianqiang Guo, Yuhui Su, Zhao Zhang
  */
 
 #ifndef SarsaAgent_H_
@@ -9,6 +12,7 @@
 #include "Base.h"
 #include "Action.h"
 #include "State.h"
+#include "ContentAwareInputProvider.h"
 #include <unordered_map>
 #include <vector>
 #include <mutex>
@@ -36,6 +40,11 @@ namespace fastbotx {
         // Entropy temperature used in Q-value based action selection.
         static constexpr double kEntropyAlpha = 0.1;
 
+        /// Min steps between content-aware input LLM calls (reduces latency; provider cache still helps).
+        static constexpr size_t kMinStepsBetweenContentAwareInputCalls = 5;
+        /// When allowed by step throttle, only call LLM with this probability (0.0–1.0) to further reduce load.
+        static constexpr double kContentAwareInputCallProbability = 0.3;
+
         explicit SarsaAgent(const ModelPtr &model);
 
         ~SarsaAgent() override;
@@ -48,6 +57,14 @@ namespace fastbotx {
 
         /// Background thread: periodically save reuse model.
         static void threadModelStorage(const std::weak_ptr<SarsaAgent> &agent);
+
+        virtual void moveForward(StatePtr nextState) override;
+
+        /// Optional: content-aware input (same as LLMExplorerAgent). When max.llm.contextAwareInput=true, editable widgets get LLM-suggested text.
+        std::string getInputTextForAction(const StatePtr &state, const ActionPtr &action) const override;
+
+        /// Set custom content-aware input provider (default: LlmContentAwareInputProvider).
+        void setContentAwareInputProvider(const std::shared_ptr<IContentAwareInputProvider> &provider);
 
     protected:
         SarsaAgent();
@@ -94,6 +111,14 @@ namespace fastbotx {
         std::string _tmpSavePath;
         static std::string DefaultModelSavePath;
         mutable std::mutex _reuseModelLock;
+
+        /// Pluggable content-aware input (same as LLMExplorerAgent); only used when max.llm.contextAwareInput=true.
+        std::shared_ptr<IContentAwareInputProvider> _contentAwareInputProvider;
+
+        /// Step count (incremented in moveForward); used to throttle content-aware input LLM calls.
+        size_t _stepCount = 0;
+        /// Last step at which we called content-aware input provider (0 = never); throttle: at most once every kMinStepsBetweenContentAwareInputCalls.
+        mutable size_t _lastContentAwareInputStep = 0;
     };
 
     typedef std::shared_ptr<SarsaAgent> SarsaAgentPtr;

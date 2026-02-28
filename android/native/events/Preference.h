@@ -129,6 +129,18 @@ namespace fastbotx {
         const LlmRuntimeConfig &getLlmRuntimeConfig() const { return this->_llmRuntimeConfig; }
 
         /**
+         * Whether to call LLM knowledge_org for same-function grouping (LLMExplorerAgent).
+         * Controlled via max.config: max.llm.knowledge=true|false. Only when true is the LLM called.
+         */
+        bool isLlmKnowledgeEnabled() const { return this->_llmKnowledge; }
+
+        /**
+         * Whether to call LLM content_aware_input for editable widgets (LLMExplorerAgent).
+         * Controlled via max.config: max.llm.contextAwareInput=true|false. Only when true is the LLM called.
+         */
+        bool isLlmContextAwareInputEnabled() const { return this->_llmContextAwareInput; }
+
+        /**
          * Load LLM task configurations from external file.
          * This is typically called from loadConfigs().
          */
@@ -230,6 +242,11 @@ namespace fastbotx {
 
         /// Runtime LLM HTTP configuration loaded from base config.
         LlmRuntimeConfig _llmRuntimeConfig;
+
+        /// max.llm.knowledge: when true, LLMExplorerAgent calls knowledge_org for same-function grouping.
+        bool _llmKnowledge{false};
+        /// max.llm.contextAwareInput: when true, LLMExplorerAgent calls content_aware_input for editable widgets.
+        bool _llmContextAwareInput{false};
 
         /// max.xpath.actions: cases and current execution state.
         std::vector<XpathCase> _xpathActionCases;

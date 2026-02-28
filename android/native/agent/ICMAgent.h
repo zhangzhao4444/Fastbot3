@@ -1,5 +1,5 @@
-/*
- * This code is licensed under the Fastbot license. You may obtain a copy of this license in the LICENSE.txt file in the root directory of this source tree.
+/**
+ * @authors Zhao Zhang
  */
 /**
  * Curiosity-driven exploration agent (WebRLED-aligned).
@@ -15,7 +15,7 @@
 #define FASTBOTX_ICM_AGENT_H
 
 #include "AbstractAgent.h"
-#include "StateEncoder.h"
+#include "../desc/StateEncoder.h"
 
 #include <vector>
 #include <random>

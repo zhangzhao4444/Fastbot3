@@ -1,21 +1,24 @@
-/*
- * This code is licensed under the Fastbot license. You may obtain a copy of this license in the LICENSE.txt file in the root directory of this source tree.
- */
 /**
  * LLMExplorerAgent: knowledge-guided exploration with AIG.
  * Abstract states (rule-based), abstract actions with flags, app-wide selection, navigation.
+ */
+ /**
+ * @authors Zhao Zhang
  */
 
 #ifndef FASTBOTX_LLM_EXPLORER_AGENT_CPP_
 #define FASTBOTX_LLM_EXPLORER_AGENT_CPP_
 
 #include "LLMExplorerAgent.h"
+#include "KnowledgeOrganizer.h"
+#include "ContentAwareInputProvider.h"
 
 #include "../utils.hpp"
 #include "../desc/State.h"
 #include "../desc/Action.h"
 #include "../desc/Widget.h"
 #include "../model/Model.h"
+#include "../events/Preference.h"
 #include "LLMTaskAgent.h"
 
 #include <algorithm>
@@ -28,9 +31,19 @@
 namespace fastbotx {
 
     LLMExplorerAgent::LLMExplorerAgent(const ModelPtr &model)
-            : AbstractAgent(model) {
+            : AbstractAgent(model),
+              _knowledgeOrganizer(std::make_shared<LlmKnowledgeOrganizer>()),
+              _contentAwareInputProvider(std::make_shared<LlmContentAwareInputProvider>()) {
         this->_algorithmType = AlgorithmType::LLMExplorer;
         BLOG("LLMExplorerAgent: initialized (AIG, app-wide exploration)");
+    }
+
+    void LLMExplorerAgent::setKnowledgeOrganizer(const std::shared_ptr<IKnowledgeOrganizer> &organizer) {
+        _knowledgeOrganizer = organizer;
+    }
+
+    void LLMExplorerAgent::setContentAwareInputProvider(const std::shared_ptr<IContentAwareInputProvider> &provider) {
+        _contentAwareInputProvider = provider;
     }
 
     void LLMExplorerAgent::updateStrategy() {
@@ -49,8 +62,9 @@ namespace fastbotx {
         _llmGroupingDoneForState.clear();
         _unexploredAbsIdActionPairs.clear();
         _navFailedActionKeys.clear();
-        _contentAwareInputCache.clear();
-        _contentAwareInputCacheOrder.clear();
+        if (_contentAwareInputProvider) {
+            _contentAwareInputProvider->onStateAbstractionChanged();
+        }
         _navActionHashes.clear();
         _navTargetAbsId = 0;
         _navTargetActionHash = 0;
@@ -124,8 +138,6 @@ namespace fastbotx {
 
     bool LLMExplorerAgent::tryLlmKnowledgeOrganization(uintptr_t absStateId, const StatePtr &state) {
         if (!state || absStateId == 0) return false;
-        ModelPtr model = _model.lock();
-        std::shared_ptr<LlmClient> client = model ? model->getLlmClient() : nullptr;
 
         std::vector<ActivityStateActionPtr> validActions;
         for (const auto &a : state->getActions()) {
@@ -133,146 +145,65 @@ namespace fastbotx {
         }
         if (validActions.empty()) {
             _llmGroupingDoneForState.insert(absStateId);
-            BDLOG("LLMExplorerAgent: knowledge_org skip absStateId=%llu (no valid actions)", (unsigned long long) absStateId);
+            BDLOG("LLMExplorerAgent: knowledge_org skip absStateId=%llu (no valid actions)",
+                  (unsigned long long) absStateId);
             return true;
         }
 
-        if (!client || validActions.size() < 2) {
-            for (const auto &a : validActions) {
+        auto fallbackOneToOne = [this, absStateId](const std::vector<ActivityStateActionPtr> &actions) {
+            for (const auto &a : actions) {
                 uintptr_t actHash = a->hash();
                 _actionToGroup[kActionFlagKey(absStateId, actHash)] = actHash;
                 _groupToActionHashes[kGroupKey(absStateId, actHash)].insert(actHash);
             }
-            _llmGroupingDoneForState.insert(absStateId);
-            BDLOG("LLMExplorerAgent: knowledge_org skip absStateId=%llu (no client or elements<2), fallback 1:1", (unsigned long long) absStateId);
-            return true;
-        }
-
-        using nlohmann::json;
-        json payload;
-        payload["max_index"] = static_cast<int>(validActions.size() - 1);
-        json elements = json::array();
-        for (const auto &a : validActions) {
-            WidgetPtr w = a->getTarget();
-            json el;
-            el["class"] = w ? w->getClassname() : "";
-            el["resource_id"] = w ? w->getResourceID() : "";
-            el["text"] = w ? w->getText() : "";
-            el["content_desc"] = w ? w->getContentDesc() : "";
-            elements.push_back(el);
-        }
-        payload["elements"] = std::move(elements);
-        std::string payloadStr = payload.dump();
-
-        BDLOG("LLMExplorerAgent: knowledge_org request absStateId=%llu elements=%zu", (unsigned long long)absStateId, validActions.size());
-        std::string response;
-        if (!client->predictWithPayload("knowledge_org", payloadStr, {}, response)) {
-            BDLOGE("LLMExplorerAgent: knowledge_org predict failed (check Java LLM HTTP logs)");
-            for (const auto &a : validActions) {
-                uintptr_t actHash = a->hash();
-                _actionToGroup[kActionFlagKey(absStateId, actHash)] = actHash;
-                _groupToActionHashes[kGroupKey(absStateId, actHash)].insert(actHash);
-            }
-            _llmGroupingDoneForState.insert(absStateId);
-            return true;
-        }
-
-        // Extract JSON from response: after "JSON:" (CoT format) or use full response
-        std::string toParse = response;
-        const std::string jsonMarker("JSON:");
-        size_t pos = response.find(jsonMarker);
-        if (pos != std::string::npos) {
-            toParse = response.substr(pos + jsonMarker.size());
-            size_t start = toParse.find_first_not_of(" \t\n\r");
-            if (start != std::string::npos) toParse = toParse.substr(start);
-        } else {
-            size_t brace = response.find("{\"groups\"");
-            if (brace != std::string::npos) toParse = response.substr(brace);
-        }
-
-        auto applyParsedKnowledgeOrg = [this, absStateId, &validActions](const nlohmann::json &j) -> uintptr_t {
-            if (!j.contains("groups") || !j["groups"].is_array()) return 0;
-            uintptr_t groupId = 0;
-            bool hadSmallGroups = false;
-            for (const auto &group : j["groups"]) {
-                if (!group.is_array()) continue;
-                std::unordered_set<uintptr_t> hashes;
-                for (const auto &idx : group) {
-                    int i = idx.is_number_integer() ? static_cast<int>(idx.get<int>()) : -1;
-                    if (i < 0 || i >= static_cast<int>(validActions.size())) continue;
-                    uintptr_t actHash = validActions[static_cast<size_t>(i)]->hash();
-                    hashes.insert(actHash);
-                }
-                if (hashes.empty()) continue;
-                // Align with official: MIN_SIZE_SAME_FUNCTION_ELEMENT_GROUP=5 — only merge groups of size >= 5.
-                if (hashes.size() >= kMinSameFunctionGroupSize) {
-                    for (uintptr_t actHash : hashes) {
-                        _actionToGroup[kActionFlagKey(absStateId, actHash)] = groupId;
-                    }
-                    _groupToActionHashes[kGroupKey(absStateId, groupId)].insert(hashes.begin(), hashes.end());
-                    groupId++;
-                } else {
-                    hadSmallGroups = true;
-                    for (uintptr_t actHash : hashes) {
-                        _actionToGroup[kActionFlagKey(absStateId, actHash)] = actHash;
-                        _groupToActionHashes[kGroupKey(absStateId, actHash)].insert(actHash);
-                    }
-                }
-            }
-            if (groupId > 0) {
-                if (j.contains("functions") && j["functions"].is_array()) {
-                    const auto &funcArr = j["functions"];
-                    for (size_t g = 0; g < funcArr.size() && g < groupId; ++g) {
-                        if (funcArr[g].is_string()) {
-                            std::string f = funcArr[g].get<std::string>();
-                            if (!f.empty()) _groupFunction[kGroupKey(absStateId, static_cast<uintptr_t>(g))] = f;
-                        }
-                    }
-                }
-                return groupId;
-            }
-            return hadSmallGroups ? 1 : 0;
         };
 
-        try {
-            using nlohmann::json;
-            json j = json::parse(toParse);
-            uintptr_t groupId = applyParsedKnowledgeOrg(j);
-            if (groupId != 0) {
-                BDLOG("LLMExplorerAgent: knowledge_org done absStateId=%llu groups=%llu",
-                      (unsigned long long) absStateId, (unsigned long long) groupId);
-                _llmGroupingDoneForState.insert(absStateId);
-                return true;
-            }
-            throw std::runtime_error("no valid groups");
-        } catch (...) {
-            // Repair: LLM sometimes omits closing ']' for "functions" array (e.g. ends with "}" instead of "]}").
-            std::string repaired;
-            if (toParse.find("\"functions\"") != std::string::npos && toParse.size() >= 2) {
-                size_t lastBrace = toParse.rfind('}');
-                if (lastBrace != std::string::npos && lastBrace > 0 && toParse[lastBrace - 1] == '"') {
-                    repaired = toParse.substr(0, lastBrace) + "]" + toParse.substr(lastBrace);
-                }
-            }
-            if (!repaired.empty()) {
-                try {
-                    nlohmann::json j = nlohmann::json::parse(repaired);
-                    uintptr_t groupId = applyParsedKnowledgeOrg(j);
-                    if (groupId != 0) {
-                        BDLOG("LLMExplorerAgent: knowledge_org done (repaired) absStateId=%llu groups=%llu",
-                              (unsigned long long) absStateId, (unsigned long long) groupId);
-                        _llmGroupingDoneForState.insert(absStateId);
-                        return true;
-                    }
-                } catch (...) {}
-            }
-            for (const auto &a : validActions) {
-                uintptr_t actHash = a->hash();
-                _actionToGroup[kActionFlagKey(absStateId, actHash)] = actHash;
-                _groupToActionHashes[kGroupKey(absStateId, actHash)].insert(actHash);
-            }
-            BDLOG("LLMExplorerAgent: knowledge_org parse failed absStateId=%llu, fallback 1:1", (unsigned long long) absStateId);
+        if (!_knowledgeOrganizer) {
+            fallbackOneToOne(validActions);
+            _llmGroupingDoneForState.insert(absStateId);
+            BDLOG("LLMExplorerAgent: knowledge_org skip absStateId=%llu (no organizer), fallback 1:1",
+                  (unsigned long long) absStateId);
+            return true;
         }
+
+        if (!Preference::inst() || !Preference::inst()->isLlmKnowledgeEnabled()) {
+            fallbackOneToOne(validActions);
+            _llmGroupingDoneForState.insert(absStateId);
+            BDLOG("LLMExplorerAgent: knowledge_org skip absStateId=%llu (max.llm.knowledge=false), fallback 1:1",
+                  (unsigned long long) absStateId);
+            return true;
+        }
+
+        ModelPtr model = _model.lock();
+        IKnowledgeOrganizer::Result res =
+                _knowledgeOrganizer->organize(absStateId, validActions, model, kMinSameFunctionGroupSize);
+
+        if (!res.success || res.groupIds.size() != validActions.size()) {
+            fallbackOneToOne(validActions);
+            _llmGroupingDoneForState.insert(absStateId);
+            BDLOG("LLMExplorerAgent: knowledge_org organizer failed absStateId=%llu, fallback 1:1",
+                  (unsigned long long) absStateId);
+            return true;
+        }
+
+        std::unordered_set<uintptr_t> uniqueGroupIds;
+        for (size_t i = 0; i < validActions.size(); ++i) {
+            uintptr_t actHash = validActions[i]->hash();
+            uintptr_t gid = res.groupIds[i];
+            if (gid == 0) gid = actHash;
+            _actionToGroup[kActionFlagKey(absStateId, actHash)] = gid;
+            _groupToActionHashes[kGroupKey(absStateId, gid)].insert(actHash);
+            uniqueGroupIds.insert(gid);
+        }
+        for (const auto &p : res.groupFunctions) {
+            if (!p.second.empty()) {
+                _groupFunction[kGroupKey(absStateId, p.first)] = p.second;
+            }
+        }
+
+        BDLOG("LLMExplorerAgent: knowledge_org done absStateId=%llu groups=%zu",
+              (unsigned long long) absStateId,
+              static_cast<unsigned long long>(uniqueGroupIds.size()));
         _llmGroupingDoneForState.insert(absStateId);
         return true;
     }
@@ -668,82 +599,10 @@ namespace fastbotx {
     }
 
     std::string LLMExplorerAgent::getInputTextForAction(const StatePtr &state, const ActionPtr &action) const {
-        if (!state || !action) {
-            BDLOG("LLMExplorerAgent: content_aware_input skip (no state or action)");
-            return "";
-        }
-        auto stateAction = std::dynamic_pointer_cast<ActivityStateAction>(action);
-        if (!stateAction || !stateAction->requireTarget()) {
-            BDLOG("LLMExplorerAgent: content_aware_input skip (not ActivityStateAction or requireTarget()=false)");
-            return "";
-        }
-        WidgetPtr target = stateAction->getTarget();
-        if (!target || !target->isEditable()) {
-            BDLOG("LLMExplorerAgent: content_aware_input skip (no target or !isEditable())");
-            return "";
-        }
-
-        std::string activityStr = (state->getActivityString() && state->getActivityString().get())
-                                  ? *state->getActivityString() : "";
-        std::string resourceId = target->getResourceID();
-        std::string text = target->getText();
-        std::string contentDesc = target->getContentDesc();
-        std::string cacheKey = activityStr + "\t" + resourceId + "\t" + text + "\t" + contentDesc;
-
-        BDLOG("LLMExplorerAgent: content_aware_input eligible activity=%s resource_id=%s",
-              activityStr.c_str(), resourceId.c_str());
-
-        {
-            auto it = _contentAwareInputCache.find(cacheKey);
-            if (it != _contentAwareInputCache.end()) {
-                BDLOG("LLMExplorerAgent: content_aware_input cache hit resource_id=%s", resourceId.c_str());
-                return it->second;
-            }
-        }
-
+        if (!Preference::inst() || !Preference::inst()->isLlmContextAwareInputEnabled()) return "";
+        if (!_contentAwareInputProvider) return "";
         ModelPtr model = _model.lock();
-        if (!model) return "";
-        std::shared_ptr<LlmClient> client = model->getLlmClient();
-        if (!client) return "";
-
-        std::string packageName = model->getPackageName();
-        nlohmann::json payload;
-        payload["package"] = packageName;
-        payload["activity"] = activityStr;
-        payload["class"] = target->getClassname();
-        payload["resource_id"] = resourceId;
-        payload["text"] = text;
-        payload["content_desc"] = contentDesc;
-        std::string payloadStr = payload.dump();
-
-        BDLOG("LLMExplorerAgent: content_aware_input cache miss, request LLM resource_id=%s", resourceId.c_str());
-        std::string response;
-        if (!client->predictWithPayload("content_aware_input", payloadStr, {}, response)) {
-            BDLOGE("LLMExplorerAgent: content_aware_input predict failed (check Java LLM HTTP logs)");
-            return "";
-        }
-
-        // Trim whitespace and surrounding quotes; limit length (paper: human-like short input)
-        size_t start = 0;
-        while (start < response.size() && (std::isspace(static_cast<unsigned char>(response[start])) || response[start] == '"' || response[start] == '\'')) start++;
-        size_t end = response.size();
-        while (end > start && (std::isspace(static_cast<unsigned char>(response[end - 1])) || response[end - 1] == '"' || response[end - 1] == '\'')) end--;
-        if (start >= end) return "";
-        response = response.substr(start, end - start);
-        const size_t kMaxInputLen = 200;
-        if (response.size() > kMaxInputLen) response.resize(kMaxInputLen);
-
-        while (_contentAwareInputCacheOrder.size() >= kMaxContentAwareInputCacheSize) {
-            std::string oldKey = std::move(_contentAwareInputCacheOrder.front());
-            _contentAwareInputCacheOrder.pop_front();
-            _contentAwareInputCache.erase(oldKey);
-        }
-        _contentAwareInputCache[cacheKey] = response;
-        _contentAwareInputCacheOrder.push_back(cacheKey);
-
-        std::string logPreview = response.size() > 40 ? response.substr(0, 37) + "..." : response;
-        BDLOG("LLMExplorerAgent: content_aware_input ok suggested=%s", logPreview.c_str());
-        return response;
+        return _contentAwareInputProvider->getInputTextForAction(state, action, model);
     }
 
 }  // namespace fastbotx

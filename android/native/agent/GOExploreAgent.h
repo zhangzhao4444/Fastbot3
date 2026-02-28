@@ -1,5 +1,5 @@
-/*
- * This code is licensed under the Fastbot license. You may obtain a copy of this license in the LICENSE.txt file in the root directory of this source tree.
+/**
+ * @authors Zhao Zhang
  */
 /**
  * Standalone Go-Explore style agent: archive of cells, return to cell (via BFS path), then explore from cell.

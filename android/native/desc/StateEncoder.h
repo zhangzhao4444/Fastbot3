@@ -1,15 +1,16 @@
-/*
- * This code is licensed under the Fastbot license. You may obtain a copy of this license in the LICENSE.txt file in the root directory of this source tree.
- */
 /**
  * State encoder interface for pluggable embedding (e.g. DNN) in ICMAgent cluster novelty.
  * Implement this interface and set via ICMAgent::setStateEncoder() to replace hand-crafted embedding.
  */
+/**
+ * @authors Zhao Zhang
+ */
+
 #ifndef FASTBOTX_STATE_ENCODER_H
 #define FASTBOTX_STATE_ENCODER_H
 
-#include "../desc/State.h"
-#include "../desc/Action.h"
+#include "State.h"
+#include "Action.h"
 #include "../Base.h"
 #include "FeatureSelector.h"
 #include <vector>

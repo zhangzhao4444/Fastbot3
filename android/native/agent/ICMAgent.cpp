@@ -1,5 +1,5 @@
-/*
- * This code is licensed under the Fastbot license. You may obtain a copy of this license in the LICENSE.txt file in the root directory of this source tree.
+/**
+ * @authors Zhao Zhang
  */
 /**
  * ICMAgent: curiosity-driven exploration (WebRLED-aligned dual novelty + ε-greedy).

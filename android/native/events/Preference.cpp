@@ -1184,6 +1184,8 @@ namespace fastbotx {
 #define ListenMode                "max.listenMode"
 #define StaticStateAbstractionSTR "max.staticStateAbstraction"
 #define LlmEnabledSTR             "max.llm.enabled"
+#define LlmKnowledgeSTR           "max.llm.knowledge"
+#define LlmContextAwareInputSTR   "max.llm.contextAwareInput"
 #define LlmApiUrlSTR              "max.llm.apiUrl"
 #define LlmApiKeySTR              "max.llm.apiKey"
 #define LlmModelSTR               "max.llm.model"
@@ -1292,6 +1294,12 @@ namespace fastbotx {
                 }
             } else if (key == LlmEnabledSTR) {
                 this->_llmRuntimeConfig.enabled = (value == "true");
+            } else if (key == LlmKnowledgeSTR) {
+                this->_llmKnowledge = (value == "true");
+                if (this->_llmKnowledge) BDLOG("set %s (LLM knowledge_org enabled)", LlmKnowledgeSTR);
+            } else if (key == LlmContextAwareInputSTR) {
+                this->_llmContextAwareInput = (value == "true");
+                if (this->_llmContextAwareInput) BDLOG("set %s (LLM content_aware_input enabled)", LlmContextAwareInputSTR);
             } else if (key == LlmApiUrlSTR) {
                 if (value.size() >= 4 && value[0] == '$' && value[1] == '{' && value.back() == '}') {
                     std::string varName = value.substr(2, value.size() - 3);

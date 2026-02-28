@@ -1,17 +1,19 @@
-/*
- * This code is licensed under the Fastbot license. You may obtain a copy of this license in the LICENSE.txt file in the root directory of this source tree.
- */
 /**
  * LLMExplorerAgent: knowledge-guided exploration with Abstract Interaction Graph (AIG).
  * Uses abstract states (rule-based from widget structure) and abstract actions with
  * exploration flags; app-wide action selection and fault-tolerant navigation.
  * See LLM_VLM_TRAVERSAL_TESTING_SOTA_AND_PROPOSAL.md §2.1 and §6.8.
  */
+ /**
+ * @authors Zhao Zhang
+ */
+
 #ifndef FASTBOTX_LLM_EXPLORER_AGENT_H
 #define FASTBOTX_LLM_EXPLORER_AGENT_H
 
 #include "AbstractAgent.h"
 
+#include <memory>
 #include <vector>
 #include <random>
 #include <unordered_map>
@@ -20,9 +22,11 @@
 #include <utility>
 #include <cstddef>
 #include <string>
-#include <list>
 
 namespace fastbotx {
+
+    class IKnowledgeOrganizer;
+    class IContentAwareInputProvider;
 
     /// Exploration flag for an abstract action (per LLM-Explorer paper).
     enum class LLMExplorerActionFlag : int {
@@ -36,6 +40,12 @@ namespace fastbotx {
         explicit LLMExplorerAgent(const ModelPtr &model);
 
         ~LLMExplorerAgent() override = default;
+
+        /// Set custom knowledge organizer implementation (default: LlmKnowledgeOrganizer).
+        void setKnowledgeOrganizer(const std::shared_ptr<IKnowledgeOrganizer> &organizer);
+
+        /// Set custom content-aware input provider (default: LlmContentAwareInputProvider).
+        void setContentAwareInputProvider(const std::shared_ptr<IContentAwareInputProvider> &provider);
 
     protected:
         void updateStrategy() override;
@@ -127,10 +137,9 @@ namespace fastbotx {
         /// Nav-failed: kActionFlagKey(absId, actHash) to skip in app-wide selection (align with official repo nav_failed_actions).
         std::unordered_set<uintptr_t> _navFailedActionKeys;
 
-        /// Content-aware input cache: key = activity + "\t" + resource_id + "\t" + text + "\t" + content_desc; value = LLM-suggested text. FIFO eviction when size exceeds limit.
-        mutable std::unordered_map<std::string, std::string> _contentAwareInputCache;
-        mutable std::list<std::string> _contentAwareInputCacheOrder;
-        static constexpr size_t kMaxContentAwareInputCacheSize = 64;
+        /// Pluggable implementations (default-constructed in ctor).
+        std::shared_ptr<IKnowledgeOrganizer> _knowledgeOrganizer;
+        std::shared_ptr<IContentAwareInputProvider> _contentAwareInputProvider;
 
         /// Navigation stack: action hashes to execute in order to reach target
         std::deque<uintptr_t> _navActionHashes;
