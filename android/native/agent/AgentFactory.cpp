@@ -17,8 +17,7 @@
 #include "BFSAgent.h"
 #include "FrontierAgent.h"
 #include "GOExploreAgent.h"
-#include "ICMAgent.h"
-#include "LLMExplorerAgent.h"
+#include "CuriosityAgent.h"
 #include "../desc/StateEncoder.h"
 #include "json.hpp"
 #include "Preference.h"
@@ -76,20 +75,20 @@ namespace fastbotx {
             return agent;
         }
 
-        // For AlgorithmType::ICM, use curiosity-driven agent (WebRLED-style dual novelty).
-        if (agentT == AlgorithmType::ICM) {
-            ICMAgentPtr icmAgent = std::make_shared<ICMAgent>(model);
-#if !defined(FASTBOTX_ICM_DISABLE_DNN_ENCODER)
+        // For AlgorithmType::Curiosity, use curiosity-driven agent (WebRLED-style dual novelty).
+        if (agentT == AlgorithmType::Curiosity) {
+            CuriosityAgentPtr curiosityAgent = std::make_shared<CuriosityAgent>(model);
+#if !defined(FASTBOTX_CURIOSITY_DISABLE_DNN_ENCODER)
             // Default: use DnnStateEncoder (16->16->8); setStateEncoder sets _clusterDim from encoder->getOutputDim().
-            // To compare with handcrafted-only clustering, build with FASTBOTX_ICM_DISABLE_DNN_ENCODER defined
-            // so that ICMAgent uses 16-dim HandcraftedStateEncoder directly for clustering.
-            icmAgent->setStateEncoder(std::make_shared<DnnStateEncoder>());
-            agent = icmAgent;
-            BLOG("Created ICMAgent (curiosity-driven, WebRLED-style, DNN encoder)");
+            // To compare with handcrafted-only clustering, build with FASTBOTX_CURIOSITY_DISABLE_DNN_ENCODER defined
+            // so that CuriosityAgent uses 16-dim HandcraftedStateEncoder directly for clustering.
+            curiosityAgent->setStateEncoder(std::make_shared<DnnStateEncoder>());
+            agent = curiosityAgent;
+            BLOG("Created CuriosityAgent (curiosity-driven, WebRLED-style, DNN encoder)");
 #else
             // Handcrafted-only clustering: 16-dim HandcraftedStateEncoder, no DNN encoder.
-            agent = icmAgent;
-            BLOG("Created ICMAgent (curiosity-driven, WebRLED-style, handcrafted embedding)");
+            agent = curiosityAgent;
+            BLOG("Created CuriosityAgent (curiosity-driven, WebRLED-style, handcrafted embedding)");
 #endif
             return agent;
         }
@@ -102,13 +101,7 @@ namespace fastbotx {
             return agent;
         }
 
-        // For AlgorithmType::LLMExplorer, use AIG-based knowledge-guided exploration (no per-step LLM).
-        if (agentT == AlgorithmType::LLMExplorer) {
-            LLMExplorerAgentPtr llmExplorerAgent = std::make_shared<LLMExplorerAgent>(model);
-            agent = llmExplorerAgent;
-            BLOG("Created LLMExplorerAgent (AIG, app-wide exploration)");
-            return agent;
-        }
+        // LLMExplorer removed (effect not ideal); AlgorithmType::LLMExplorer falls through to DoubleSarsa.
 
         // For AlgorithmType::Sarsa, use legacy-compatible SarsaAgent (single-Q SARSA + reuse model).
         if (agentT == AlgorithmType::Sarsa) {

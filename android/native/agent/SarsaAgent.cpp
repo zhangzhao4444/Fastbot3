@@ -12,6 +12,7 @@
 #include "Model.h"
 #include "ModelStorageConstants.h"
 #include "ContentAwareInputProvider.h"
+#include "WidgetPriorityProvider.h"
 #include "../storage/ReuseModel_generated.h"
 #include "../events/Preference.h"
 #include "../utils.hpp"
@@ -33,7 +34,8 @@ namespace fastbotx {
               _epsilon(kDefaultEpsilon),
               _modelSavePath(DefaultModelSavePath),
               _tmpSavePath(DefaultModelSavePath),
-              _contentAwareInputProvider(std::make_shared<LlmContentAwareInputProvider>()) {
+              _contentAwareInputProvider(std::make_shared<LlmContentAwareInputProvider>()),
+              _widgetPriorityProvider(std::make_shared<LlmWidgetPriorityProvider>()) {
         this->_algorithmType = AlgorithmType::Sarsa;
         BLOG("SarsaAgent: initialized with alpha=%.4f, gamma=%.4f, epsilon=%.4f",
              _alpha, _gamma, _epsilon);
@@ -46,7 +48,8 @@ namespace fastbotx {
               _epsilon(kDefaultEpsilon),
               _modelSavePath(DefaultModelSavePath),
               _tmpSavePath(DefaultModelSavePath),
-              _contentAwareInputProvider(std::make_shared<LlmContentAwareInputProvider>()) {
+              _contentAwareInputProvider(std::make_shared<LlmContentAwareInputProvider>()),
+              _widgetPriorityProvider(std::make_shared<LlmWidgetPriorityProvider>()) {
         this->_algorithmType = AlgorithmType::Sarsa;
     }
 
@@ -63,13 +66,18 @@ namespace fastbotx {
         _contentAwareInputProvider = provider;
     }
 
+    void SarsaAgent::setWidgetPriorityProvider(const std::shared_ptr<IWidgetPriorityProvider> &provider) {
+        _widgetPriorityProvider = provider;
+    }
+
     void SarsaAgent::moveForward(StatePtr nextState) {
         AbstractAgent::moveForward(nextState);
         _stepCount++;
     }
 
     std::string SarsaAgent::getInputTextForAction(const StatePtr &state, const ActionPtr &action) const {
-        if (!Preference::inst() || !Preference::inst()->isLlmContextAwareInputEnabled()) return "";
+        if (!Preference::inst() || !Preference::inst()->getLlmRuntimeConfig().enabled
+            || !Preference::inst()->isLlmContextAwareInputEnabled()) return "";
         if (!_contentAwareInputProvider) return "";
 
         // Throttle: at most one LLM content_aware_input call every kMinStepsBetweenContentAwareInputCalls steps.
@@ -258,7 +266,8 @@ namespace fastbotx {
 
     ActionPtr SarsaAgent::selectActionNotInModel() const {
         ActionPtr chosen = nullptr;
-        int totalWeight = 0;
+        double totalWeight = 0.0;
+        uintptr_t stateHash = this->_newState ? this->_newState->hash() : 0;
 
         for (const auto &action : this->_newState->getActions()) {
             const bool matched = action->isModelAct()
@@ -266,29 +275,23 @@ namespace fastbotx {
                                  && action->getVisitedCount() <= 0;
             if (!matched) continue;
 
-            const int w = action->getPriority();
-            if (w <= 0) continue;
+            const int p = action->getPriority();
+            if (p <= 0) continue;
 
-            const int newTotal = totalWeight + w;
-            // Weighted reservoir sampling: choose current action with probability w / newTotal.
-            const int r = randomInt(0, newTotal - 1);
-            if (r < w) {
-                chosen = action;
+            double w = static_cast<double>(p);
+            if (Preference::inst() && Preference::inst()->getLlmRuntimeConfig().enabled
+                && Preference::inst()->isLlmKnowledgeEnabled()) {
+                w *= this->getWidgetPriority(stateHash, action->hash());
             }
+            const double newTotal = totalWeight + w;
+            const double r = static_cast<double>(randomInt(0, 10000)) / 10000.0 * newTotal;
+            if (r < w) chosen = action;
             totalWeight = newTotal;
         }
+        if (totalWeight > 0.0 && chosen) return chosen;
 
-        if (totalWeight <= 0) {
-            // No eligible new-in-model actions with positive priority; this is a normal
-            // situation and we will fall back to other selection strategies.
-            BDLOG("%s", "SarsaAgent: total weights is 0 (fall back to next strategy)");
-            return nullptr;
-        }
-
-        if (!chosen) {
-            BDLOG("%s", "SarsaAgent: rand a null action (fall back to next strategy)");
-        }
-        return chosen;
+        BDLOG("%s", "SarsaAgent: no unvisited not-in-model (fall back to next strategy)");
+        return nullptr;
     }
 
     namespace {
@@ -360,8 +363,94 @@ namespace fastbotx {
         AbstractAgent::adjustActions();
     }
 
+    void SarsaAgent::ensureWidgetPrioritiesForState(const StatePtr &state) {
+        if (!state || !_widgetPriorityProvider) {
+            if (state && !_widgetPriorityProvider) BDLOG("SarsaAgent: widget_priority skip (no provider)");
+            return;
+        }
+        if (!Preference::inst()) {
+            BDLOG("SarsaAgent: widget_priority skip (no Preference)");
+            return;
+        }
+        if (!Preference::inst()->getLlmRuntimeConfig().enabled) {
+            BDLOG("SarsaAgent: widget_priority skip (max.llm.enabled=false)");
+            return;
+        }
+        if (!Preference::inst()->isLlmKnowledgeEnabled()) {
+            BDLOG("SarsaAgent: widget_priority skip (max.llm.widgetpriority/knowledge=false)");
+            return;
+        }
+
+        uintptr_t stateHash = state->hash();
+        if (_stateWidgetPrioritiesRequested.find(stateHash) != _stateWidgetPrioritiesRequested.end()) {
+            return;
+        }
+
+        std::vector<ActivityStateActionPtr> validActions;
+        for (const auto &a : state->getActions()) {
+            if (a && a->isValid()) validActions.push_back(a);
+        }
+        if (validActions.size() < 2) {
+            _stateWidgetPrioritiesRequested.insert(stateHash);
+            BDLOG("SarsaAgent: widget_priority skip stateHash=0x%llx (validActions=%zu < 2)",
+                  (unsigned long long) stateHash, validActions.size());
+            return;
+        }
+
+        ModelPtr model = _model.lock();
+        if (!model) {
+            BDLOG("SarsaAgent: widget_priority skip stateHash=0x%llx (model expired)", (unsigned long long) stateHash);
+            _stateWidgetPrioritiesRequested.insert(stateHash);
+            return;
+        }
+        BDLOG("SarsaAgent: widget_priority request stateHash=0x%llx n=%zu",
+              (unsigned long long) stateHash, validActions.size());
+        IWidgetPriorityProvider::Result res = _widgetPriorityProvider->organize(0, validActions, model);
+
+        if (res.success && res.widgetPriorities.size() == validActions.size()) {
+            for (size_t i = 0; i < validActions.size(); ++i) {
+                uintptr_t actHash = validActions[i]->hash();
+                double p = res.widgetPriorities[i];
+                if (p < 0.0) p = 0.0;
+                _actionPriority[kActionPriorityKey(stateHash, actHash)] = p;
+            }
+            BDLOG("SarsaAgent: widget_priority stateHash=0x%llx n=%zu",
+                  (unsigned long long) stateHash, validActions.size());
+            for (size_t i = 0; i < validActions.size(); ++i) {
+                const auto &a = validActions[i];
+                WidgetPtr w = a ? a->getTarget() : nullptr;
+                const char *resId = w ? w->getResourceID().c_str() : "";
+                const char *clazz = w ? w->getClassname().c_str() : "";
+                std::string text = w ? w->getText() : "";
+                if (text.size() > 40) text = text.substr(0, 37) + "...";
+                for (char &c : text) if (c == '\n' || c == '\r') c = ' ';
+                double p = res.widgetPriorities[i];
+                if (p < 0.0) p = 0.0;
+                BDLOG("SarsaAgent: widget_priority [%zu] hash=0x%llx resource_id=%s class=%s text=%s priority=%.3f",
+                      i, (unsigned long long) a->hash(), resId[0] ? resId : "(none)", clazz[0] ? clazz : "(none)",
+                      text.c_str(), p);
+            }
+            _stateWidgetPrioritiesRequested.insert(stateHash);
+        } else {
+            BDLOG("SarsaAgent: widget_priority stateHash=0x%llx organize failed or empty (success=%d priorities=%zu), will retry next time",
+                  (unsigned long long) stateHash, res.success ? 1 : 0, res.widgetPriorities.size());
+            // Do not insert into _stateWidgetPrioritiesRequested so we retry on next visit (e.g. after client becomes available)
+        }
+    }
+
+    double SarsaAgent::getWidgetPriority(uintptr_t stateHash, uintptr_t actionHash) const {
+        uintptr_t key = kActionPriorityKey(stateHash, actionHash);
+        auto it = _actionPriority.find(key);
+        if (it != _actionPriority.end() && it->second > 0.0) return it->second;
+        return 1.0;
+    }
+
     ActionPtr SarsaAgent::selectNewAction() {
         ActionPtr action = nullptr;
+
+        if (this->_newState) {
+            ensureWidgetPrioritiesForState(this->_newState);
+        }
 
         action = this->selectActionNotInModel();
         if (action) {

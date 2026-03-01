@@ -776,15 +776,12 @@ public class Monkey {
                 } else if ("frontier".equalsIgnoreCase(mAgentType)) {
                     algo = AiClient.AlgorithmType.Frontier;
                     Logger.println("// init with Frontier agent (AlgorithmType.Frontier)");
-                } else if ("icm".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.ICM;
-                    Logger.println("// init with ICM agent (AlgorithmType.ICM, curiosity-driven)");
+                } else if ("icm".equalsIgnoreCase(mAgentType) || "curiosity".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.Curiosity;
+                    Logger.println("// init with CuriosityAgent (curiosity-driven, --agent icm or curiosity)");
                 } else if ("goexplore".equalsIgnoreCase(mAgentType)) {
                     algo = AiClient.AlgorithmType.GoExplore;
                     Logger.println("// init with GOExplore agent (AlgorithmType.GoExplore, standalone Go-Explore style)");
-                } else if ("llmexplorer".equalsIgnoreCase(mAgentType) || "llm_explorer".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.LLMExplorer;
-                    Logger.println("// init with LLMExplorer agent (AlgorithmType.LLMExplorer, AIG knowledge-guided)");
                 } else {
                     Logger.println("// unknown agent type: " + mAgentType + ", default to DoubleSarsaAgent (DoubleSarsa)");
                 }
@@ -830,15 +827,12 @@ public class Monkey {
                 } else if ("frontier".equalsIgnoreCase(mAgentType)) {
                     algo = AiClient.AlgorithmType.Frontier;
                     Logger.println("// init with Frontier agent (AlgorithmType.Frontier)");
-                } else if ("icm".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.ICM;
-                    Logger.println("// init with ICM agent (AlgorithmType.ICM, curiosity-driven)");
+                } else if ("icm".equalsIgnoreCase(mAgentType) || "curiosity".equalsIgnoreCase(mAgentType)) {
+                    algo = AiClient.AlgorithmType.Curiosity;
+                    Logger.println("// init with CuriosityAgent (curiosity-driven, --agent icm or curiosity)");
                 } else if ("goexplore".equalsIgnoreCase(mAgentType)) {
                     algo = AiClient.AlgorithmType.GoExplore;
                     Logger.println("// init with GOExplore agent (AlgorithmType.GoExplore, standalone Go-Explore style)");
-                } else if ("llmexplorer".equalsIgnoreCase(mAgentType) || "llm_explorer".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.LLMExplorer;
-                    Logger.println("// init with LLMExplorer agent (AlgorithmType.LLMExplorer, AIG knowledge-guided)");
                 } else {
                     Logger.println("// unknown agent type: " + mAgentType + ", default to DoubleSarsaAgent (DoubleSarsa)");
                 }

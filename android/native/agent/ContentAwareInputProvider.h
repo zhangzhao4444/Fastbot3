@@ -2,7 +2,7 @@
  * Pluggable content-aware input provider for editable widgets.
  *
  * Extracts the "content_aware_input" LLM logic from LLMExplorerAgent into a
- * separate, replaceable component (similar to IStateEncoder for ICMAgent),
+ * separate, replaceable component (similar to IStateEncoder for CuriosityAgent),
  * with an LLM-based default implementation and internal caching.
  */
 /**

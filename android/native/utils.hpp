@@ -166,7 +166,7 @@ inline void logLongStringInfo(const std::string& longStr) {
 // Set to 1 to enable detailed line-by-line XML logging (for debugging)
 // Set to 0 to disable (default) for better performance on large dumps
 #ifndef FASTBOT_LOG_RAW_GUITREE
-#define FASTBOT_LOG_RAW_GUITREE 0
+#define FASTBOT_LOG_RAW_GUITREE 1
 #endif
 
 // Performance optimization: Control xpath matching detailed logging

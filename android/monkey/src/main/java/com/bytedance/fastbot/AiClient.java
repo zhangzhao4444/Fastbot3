@@ -85,9 +85,8 @@ public class AiClient {
      * Bfs:          breadth-first-search exploration agent (reserved).
      * DoubleSarsa:  Double SARSA reinforcement learning agent with reuse model.
      * Frontier:     frontier-based exploration agent (infoGain × distance, MA-SLAM style).
-     * ICM:          curiosity-driven agent (WebRLED-style dual novelty + ε-greedy).
+     * Curiosity:   curiosity-driven agent (WebRLED-style dual novelty + ε-greedy).
      * GoExplore:    standalone Go-Explore style agent (archive + return to cell + explore).
-     * LLMExplorer:  AIG-based knowledge-guided exploration (app-wide action selection + navigation).
      */
     public enum AlgorithmType {
         Random(0),
@@ -96,9 +95,8 @@ public class AiClient {
         Bfs(4),
         DoubleSarsa(8),
         Frontier(16),
-        ICM(32),
-        GoExplore(64),
-        LLMExplorer(128);
+        Curiosity(32),
+        GoExplore(64);
 
         private final int _value;
 
@@ -261,7 +259,7 @@ public class AiClient {
 
     /**
      * LLM HTTP POST with prompt assembled in Java from payload JSON (reduces JNI string copy).
-     * promptType: "executor" | "planner" | "step_summary" (LLMTaskAgent) | "knowledge_org" | "content_aware_input" (LLMExplorerAgent).
+     * promptType: "executor" | "planner" | "step_summary" (LLMTaskAgent) | "knowledge_org" (widget_priority) | "content_aware_input" (LLMExplorerAgent).
      * Called from native via JNI when using predictWithPayload.
      */
     public String doLlmHttpPostFromPayload(String url, String apiKey, String promptType, String payloadJson, String model, int maxTokens) {
@@ -448,26 +446,31 @@ public class AiClient {
     }
 
     /**
-     * LLMExplorerAgent knowledge organization: same prompt as C++ tryLlmKnowledgeOrganization.
-     * Payload: {"elements": [{"class":"","resource_id":"","text":"","content_desc":""}, ...], "max_index": N}.
+     * LLMExplorerAgent widget priorities: infer user operation popularity per element.
+     * Payload: {"elements": [{"id":"0x...", "class":"", ...}, ...], "max_index": N}.
+     * Response: priorities by index [p0,p1,...], by id {"priorities":{"0x...":p,...}}, or recommend_order [i0,i1,...].
      */
     private static String buildKnowledgeOrgPrompt(JSONObject j) throws JSONException {
         int maxIndex = j.optInt("max_index", 0);
         StringBuilder sb = new StringBuilder();
-        sb.append("You are helping an Android GUI testing agent. Group the following UI elements by function: elements that do the same thing (e.g. same button type, same list item) should be in the same group.\n\n");
-        sb.append("Keep REASONING to 1-2 sentences only, then immediately output the JSON line.\n\n");
-        sb.append("Required JSON format (must be valid, complete, and parseable JSON):\n");
-        sb.append("JSON: {\"groups\": [[0,1], [2], [3,4], ...], \"functions\": [\"desc for group 0\", \"desc for group 1\", ...]}\n");
-        sb.append("- \"groups\": array of arrays; each inner array is 0-based element indices (0 to ").append(maxIndex).append("); one group per cluster.\n");
-        sb.append("- \"functions\": array of strings; one string per group, same order as groups; short label (e.g. \"navigate back\", \"open settings\").\n");
-        sb.append("Important: Output the complete JSON in one go—include every group and every function label. Close the \"functions\" array with ] before the final }. Correct: ..., \"last label\"]} . Wrong: ..., \"last label\"} . Truncated or incomplete JSON will cause parse failure.\n\n");
+        sb.append("You are helping an Android GUI testing agent. Given the following UI elements on the current screen, infer which elements users are most likely to tap first (user operation popularity). Consider typical behavior: primary CTA, back, settings, list items, etc.\n\n");
+        sb.append("CRITICAL: Every element (index 0 to ").append(maxIndex).append(") MUST be assigned a priority. No element may be omitted.\n\n");
+        sb.append("INDEX CORRESPONDENCE: priorities[i] MUST be the priority for Element i below. recommend_order uses these same 0-based indices. Each element also has an \"id\" (e.g. 0x1a2b); you may return priorities by id for unambiguous matching.\n\n");
+        sb.append("Keep REASONING to 1-2 sentences, then output the JSON.\n\n");
+        sb.append("Required JSON format (output exactly one; must be valid, complete, parseable):\n");
+        sb.append("Option A (by index): {\"priorities\": [p0, p1, ..., p").append(maxIndex).append("]} — exactly ").append(maxIndex + 1).append(" floats, priorities[i] = priority for Element i (0 to 1).\n");
+        sb.append("Option B (by id, recommended for clarity): {\"priorities\": {\"<id>\": float, ...}} — key = element id (e.g. \"0x1a2b\"), value = priority 0-1. Include all element ids; missing ids get 0.5.\n");
+        sb.append("Option C: {\"recommend_order\": [i0, i1, ...]} — 0-based indices from most to least recommended. Include ALL indices for best results.\n");
+        sb.append("Important: Output the complete JSON in one go. Close all brackets. No truncation.\n\n");
         sb.append("Elements:\n");
         JSONArray elements = j.optJSONArray("elements");
         if (elements != null) {
             for (int i = 0; i < elements.length(); i++) {
                 JSONObject el = elements.optJSONObject(i);
                 if (el != null) {
-                    sb.append("Element ").append(i).append(": class=").append(el.optString("class", ""))
+                    String id = el.optString("id", "");
+                    sb.append("Element ").append(i).append(" id=").append(id.isEmpty() ? "?" : id)
+                            .append(": class=").append(el.optString("class", ""))
                             .append(" resource-id=").append(el.optString("resource_id", ""))
                             .append(" text=").append(el.optString("text", ""))
                             .append(" content-desc=").append(el.optString("content_desc", "")).append("\n");
@@ -509,7 +512,7 @@ public class AiClient {
     /**
      * Build request body. System prompt is chosen by promptType so LLMTaskAgent (executor/planner/step_summary)
      * and LLMExplorerAgent (knowledge_org/content_aware_input) get appropriate instructions.
-     * @param promptType null = legacy; "knowledge_org" | "content_aware_input" use different system prompt.
+     * @param promptType null = legacy; "knowledge_org" (widget_priority) | "content_aware_input" use different system prompt.
      */
     private String buildLlmRequestBody(String prompt, String model, int maxTokens, String promptType) {
         try {
@@ -529,7 +532,7 @@ public class AiClient {
             long screenshotMs = t1 - t0;
             String systemContent;
             if ("knowledge_org".equals(promptType)) {
-                systemContent = "You are a GUI testing agent. For this task output a short REASONING line, then a line starting with JSON: followed by a single, complete and parseable JSON object with \"groups\" (array of index arrays) and \"functions\" (array of strings). You must output the full JSON in one response—no truncation; incomplete JSON will cause parse failure.";
+                systemContent = "You are a GUI testing agent. Output a short REASONING line, then a line starting with JSON: followed by a single, complete, parseable JSON object. Use \"priorities\" as either (1) array of floats [p0,p1,...] by element index, or (2) object {\"<id>\": float, ...} keyed by element id for unambiguous matching; or use \"recommend_order\" as array of indices. No groups or functions. Output full JSON—no truncation.";
             } else if ("content_aware_input".equals(promptType)) {
                 systemContent = "You are a GUI testing agent. Reply with only the requested input text, no quotes or explanation.";
             } else {
@@ -660,11 +663,8 @@ public class AiClient {
     }
 
     /**
-     * Log LLMExplorerAgent LLM response (knowledge_org / content_aware_input), aligned with LLMTaskAgent log style.
-     * <p>
-     * For knowledge_org: LLM returns {"groups": [[0,1],[2],...], "functions": ["desc1", ...]}.
-     * - action_clusters (groups): number of semantic clusters; each cluster groups similar UI actions (e.g. same "back" behavior).
-     * - cluster_descriptions (functions): short natural-language label per cluster (e.g. "navigate back", "share content").
+     * Log LLMExplorerAgent LLM response (knowledge_org=widget_priority / content_aware_input).
+     * For knowledge_org: LLM returns {"priorities": [0.9, ...]} or {"recommend_order": [0, 2, 1, ...]}.
      */
     private void logLlmExplorerResponse(String promptType, String response) {
         if (response == null || response.isEmpty()) return;
@@ -684,16 +684,16 @@ public class AiClient {
 
             if ("knowledge_org".equals(promptType)) {
                 try {
-                    // 1) Print REASONING content (text before JSON: or {"groups")
                     int jsonMarkerPos = content.indexOf("JSON:");
-                    int bracePos = content.indexOf("{\"groups\"");
-                    int jsonStart = (jsonMarkerPos >= 0 && (bracePos < 0 || jsonMarkerPos <= bracePos))
-                            ? jsonMarkerPos : bracePos;
+                    int braceP = content.indexOf("{\"priorities\"");
+                    int braceR = content.indexOf("{\"recommend_order\"");
+                    int braceGen = content.indexOf('{');
+                    int jsonStart = jsonMarkerPos >= 0 ? jsonMarkerPos : (braceP >= 0 ? braceP : (braceR >= 0 ? braceR : braceGen));
                     if (jsonStart >= 0) {
                         String reasoning = content.substring(0, jsonStart).trim();
                         if (reasoning.startsWith("REASONING:")) reasoning = reasoning.substring(10).trim();
                         if (!reasoning.isEmpty()) {
-                            Logger.println("// [LLM Explorer knowledge_org] reasoning: " + reasoning);
+                            Logger.println("// [LLM Explorer widget_priority] reasoning: " + reasoning);
                         }
                     }
                     String toParse = content;
@@ -702,23 +702,50 @@ public class AiClient {
                         if (toParse.startsWith("JSON:")) toParse = toParse.substring(5).trim();
                     }
                     JSONObject inner = new JSONObject(toParse);
-                    JSONArray groups = inner.optJSONArray("groups");
-                    JSONArray functions = inner.optJSONArray("functions");
-                    int n = groups != null ? groups.length() : 0;
-                    StringBuilder sb = new StringBuilder();
-                    sb.append("// [LLM Explorer knowledge_org] action_clusters=").append(n)
-                            .append(" (semantic groups of UI actions on this screen)");
-                    if (functions != null && functions.length() > 0) {
-                        sb.append(", cluster_descriptions=[");
-                        for (int i = 0; i < functions.length(); i++) {
-                            if (i > 0) sb.append(", ");
-                            sb.append("\"").append(functions.optString(i, "").replace("\\", "\\\\").replace("\"", "\\\"")).append("\"");
+                    JSONArray prioritiesArr = inner.optJSONArray("priorities");
+                    JSONObject prioritiesObj = inner.optJSONObject("priorities");
+                    JSONArray recommendOrder = inner.optJSONArray("recommend_order");
+                    if (prioritiesArr != null && prioritiesArr.length() > 0) {
+                        StringBuilder sb = new StringBuilder();
+                        sb.append("// [LLM Explorer widget_priority] priorities (by index) len=").append(prioritiesArr.length());
+                        if (prioritiesArr.length() <= 8) {
+                            sb.append(" [");
+                            for (int i = 0; i < prioritiesArr.length(); i++) {
+                                if (i > 0) sb.append(", ");
+                                sb.append(prioritiesArr.optDouble(i, 0));
+                            }
+                            sb.append("]");
                         }
-                        sb.append("]");
+                        Logger.println(sb.toString());
+                        // for (int i = 0; i < prioritiesArr.length(); i++) {
+                        //     double p = prioritiesArr.optDouble(i, 0);
+                        //     Logger.println("// [LLM Explorer widget_priority] [index " + i + "] priority=" + p);
+                        // }
+                    } else if (prioritiesObj != null && prioritiesObj.length() > 0) {
+                        Logger.println("// [LLM Explorer widget_priority] priorities (by id) keys=" + prioritiesObj.length());
+                        // java.util.Iterator<String> keys = prioritiesObj.keys();
+                        // while (keys.hasNext()) {
+                        //     String id = keys.next();
+                        //     double p = prioritiesObj.optDouble(id, 0.5);
+                        //     Logger.println("// [LLM Explorer widget_priority] widget(id=" + id + ") priority=" + p);
+                        // }
+                    } else if (recommendOrder != null && recommendOrder.length() > 0) {
+                        StringBuilder sb = new StringBuilder();
+                        sb.append("// [LLM Explorer widget_priority] recommend_order len=").append(recommendOrder.length());
+                        if (recommendOrder.length() <= 12) {
+                            sb.append(" [");
+                            for (int i = 0; i < recommendOrder.length(); i++) {
+                                if (i > 0) sb.append(", ");
+                                sb.append(recommendOrder.optInt(i, -1));
+                            }
+                            sb.append("]");
+                        }
+                        Logger.println(sb.toString());
+                    } else {
+                        Logger.println("// [LLM Explorer widget_priority] content (parse: no priorities/recommend_order): " + (content.length() > 80 ? content.substring(0, 77) + "..." : content));
                     }
-                    Logger.println(sb.toString());
                 } catch (JSONException e) {
-                    Logger.println("// [LLM Explorer knowledge_org] content (parse failed): " + (content.length() > 80 ? content.substring(0, 77) + "..." : content));
+                    Logger.println("// [LLM Explorer widget_priority] content (parse failed): " + (content.length() > 80 ? content.substring(0, 77) + "..." : content));
                 }
             } else if ("content_aware_input".equals(promptType)) {
                 String suggested = content.trim();

@@ -2,13 +2,13 @@
  * @authors Zhao Zhang
  */
 /**
- * ICMAgent: curiosity-driven exploration (WebRLED-aligned dual novelty + ε-greedy).
+ * CuriosityAgent: curiosity-driven exploration (WebRLED-aligned dual novelty + ε-greedy).
  */
 
-#ifndef FASTBOTX_ICM_AGENT_CPP_
-#define FASTBOTX_ICM_AGENT_CPP_
+#ifndef FASTBOTX_CURIOSITY_AGENT_CPP_
+#define FASTBOTX_CURIOSITY_AGENT_CPP_
 
-#include "ICMAgent.h"
+#include "CuriosityAgent.h"
 
 #include "../utils.hpp"
 #include "../desc/State.h"
@@ -55,23 +55,23 @@ namespace fastbotx {
         }
     } // namespace
 
-    ICMAgent::ICMAgent(const ModelPtr &model)
+    CuriosityAgent::CuriosityAgent(const ModelPtr &model)
             : AbstractAgent(model) {
-        this->_algorithmType = AlgorithmType::ICM;
+        this->_algorithmType = AlgorithmType::Curiosity;
         _clusterDim = 16;  // handcrafted default (HandcraftedStateEncoder::kHandcraftedDim)
-        BLOG("ICMAgent: initialized (curiosity-driven, WebRLED-style dual novelty)");
+        BLOG("CuriosityAgent: initialized (curiosity-driven, WebRLED-style dual novelty)");
     }
 
-    void ICMAgent::setStateEncoder(const IStateEncoderPtr &encoder) {
+    void CuriosityAgent::setStateEncoder(const IStateEncoderPtr &encoder) {
         _stateEncoder = encoder;
         _clusterDim = encoder ? encoder->getOutputDim() : 16;
     }
 
-    void ICMAgent::updateStrategy() {
+    void CuriosityAgent::updateStrategy() {
         // No Q-values or reuse model; curiosity is purely count-based.
     }
 
-    void ICMAgent::onStateAbstractionChanged() {
+    void CuriosityAgent::onStateAbstractionChanged() {
         _episodeStateCount.clear();
         _episodeSteps = 0;
         _globalStateCount.clear();
@@ -85,10 +85,10 @@ namespace fastbotx {
         _stateClusterIndex.clear();
         _clusterCount.clear();
         _clusterCentroids.clear();
-        BDLOG("ICMAgent: state abstraction changed, cleared episode and global counts");
+        BDLOG("CuriosityAgent: state abstraction changed, cleared episode and global counts");
     }
 
-    void ICMAgent::moveForward(StatePtr nextState) {
+    void CuriosityAgent::moveForward(StatePtr nextState) {
         StatePtr fromState = this->_newState;
         ActivityStateActionPtr actionTaken = this->_newAction;
         AbstractAgent::moveForward(nextState);
@@ -100,14 +100,14 @@ namespace fastbotx {
             _recentStates.clear();
             _pathCount.clear();
             _lastPathSignatureValid = false;
-            BDLOG("ICMAgent: moveForward CLEAN_RESTART, reset episode");
+            BDLOG("CuriosityAgent: moveForward CLEAN_RESTART, reset episode");
         }
         // Finite-length episode: reset episode counts after kMaxEpisodeSteps (align with WebRLED §3.6)
         _episodeSteps++;
         if (_episodeSteps >= kMaxEpisodeSteps) {
             _episodeStateCount.clear();
             _episodeSteps = 0;
-            BDLOG("ICMAgent: episode step limit %d reached, reset episode", kMaxEpisodeSteps);
+            BDLOG("CuriosityAgent: episode step limit %d reached, reset episode", kMaxEpisodeSteps);
         }
         if (nextState) {
             uintptr_t toHash = nextState->hash();
@@ -136,7 +136,7 @@ namespace fastbotx {
                     if (cidx >= 0 && cidx < static_cast<int>(_clusterCount.size()))
                         _clusterCount[cidx] = _clusterCount[cidx] + 1;
                     if (kEnableEmbeddingLog && (kEmbeddingLogEvery > 0) && (_moveForwardCount % kEmbeddingLogEvery == 0)) {
-                        BDLOG("ICMAgent: embedding stateHash=0x%zx dim=%zu cluster=%d %s",
+                        BDLOG("CuriosityAgent: embedding stateHash=0x%zx dim=%zu cluster=%d %s",
                               (size_t)toHash, emb.size(), cidx, embeddingSummary(emb, kEmbeddingLogHead).c_str());
                     }
                 }
@@ -150,12 +150,12 @@ namespace fastbotx {
                 }
             }
             size_t widgetsInState = nextState->getWidgets().size();
-            BDLOG("ICMAgent: moveForward toHash=0x%zx episodeSteps=%d episodeCount[to]=%d globalCount[to]=%d #episode_states=%zu #global_states=%zu #graph_states=%zu #widgets=%zu",
+            BDLOG("CuriosityAgent: moveForward toHash=0x%zx episodeSteps=%d episodeCount[to]=%d globalCount[to]=%d #episode_states=%zu #global_states=%zu #graph_states=%zu #widgets=%zu",
                   (size_t)toHash, _episodeSteps, _episodeStateCount[toHash], _globalStateCount[toHash], _episodeStateCount.size(), _globalStateCount.size(), graphStates, widgetsInState);
             if (_episodeStateCount.size() > kMaxEpisodeStateCount) {
                 _episodeStateCount.clear();
                 _episodeSteps = 0;
-                BDLOG("ICMAgent: episode state count limit %zu reached, reset episode", kMaxEpisodeStateCount);
+                BDLOG("CuriosityAgent: episode state count limit %zu reached, reset episode", kMaxEpisodeStateCount);
             }
 
             // Update sliding window of recent state hashes for path diversity (optional; off by default).
@@ -223,7 +223,7 @@ namespace fastbotx {
         }
     }
 
-    double ICMAgent::getCuriosityScore(const ActivityStateActionPtr &action, double episodeMod, double stateFactor) const {
+    double CuriosityAgent::getCuriosityScore(const ActivityStateActionPtr &action, double episodeMod, double stateFactor) const {
         if (!action || !action->isValid()) return -1.0;
         int visitCount = action->getVisitedCount();
         double globalNovelty = 1.0 / (1.0 + static_cast<double>(visitCount));
@@ -234,7 +234,7 @@ namespace fastbotx {
         return (raw > kRewardCap) ? kRewardCap : raw;
     }
 
-    ActionPtr ICMAgent::fallbackPickAction() const {
+    ActionPtr CuriosityAgent::fallbackPickAction() const {
         StatePtr state = this->_newState;
         if (!state) return nullptr;
         const ActivityStateActionPtrVec &actions = state->getActions();
@@ -260,10 +260,10 @@ namespace fastbotx {
         return nullptr;
     }
 
-    ActionPtr ICMAgent::selectNewAction() {
+    ActionPtr CuriosityAgent::selectNewAction() {
         StatePtr state = this->_newState;
         if (!state) {
-            BDLOG("ICMAgent: no state, fallback");
+            BDLOG("CuriosityAgent: no state, fallback");
             return fallbackPickAction();
         }
         uintptr_t currentHash = state->hash();
@@ -271,11 +271,11 @@ namespace fastbotx {
 
         // ---------- Anti-stuck (align with Frontier/BFS/DFS) ----------
         if (blockTimes > kBlockCleanRestartThreshold) {
-            BDLOG("ICMAgent: blocked %d steps (>%d), CLEAN_RESTART", blockTimes, kBlockCleanRestartThreshold);
+            BDLOG("CuriosityAgent: blocked %d steps (>%d), CLEAN_RESTART", blockTimes, kBlockCleanRestartThreshold);
             return Action::CLEAN_RESTART;
         }
         if (blockTimes > kBlockDeepLinkThreshold) {
-            BDLOG("ICMAgent: blocked %d steps (>%d), DEEP_LINK", blockTimes, kBlockDeepLinkThreshold);
+            BDLOG("CuriosityAgent: blocked %d steps (>%d), DEEP_LINK", blockTimes, kBlockDeepLinkThreshold);
             return Action::DEEP_LINK;
         }
         if (blockTimes > kBlockBackThreshold) {
@@ -288,7 +288,7 @@ namespace fastbotx {
                 if (!_validateFilter || _validateFilter->include(a)) { validNonBack++; break; }
             }
             if (validNonBack == 0 && backAction && (!_validateFilter || _validateFilter->include(backAction))) {
-                BDLOG("ICMAgent: blocked %d steps (>%d), BACK (only action)", blockTimes, kBlockBackThreshold);
+                BDLOG("CuriosityAgent: blocked %d steps (>%d), BACK (only action)", blockTimes, kBlockBackThreshold);
                 return backAction;
             }
         }
@@ -315,7 +315,7 @@ namespace fastbotx {
             if (episodeMod < 1e-6) episodeMod = 1e-6;
             if (episodeMod > 1.0) episodeMod = 1.0;
         }
-        BDLOG("ICMAgent: select stateHash=0x%zx episodeCount=%d n=%d episodeMod=%.4f globalCount=%d stateFactor=%.4f",
+        BDLOG("CuriosityAgent: select stateHash=0x%zx episodeCount=%d n=%d episodeMod=%.4f globalCount=%d stateFactor=%.4f",
               (size_t)currentHash, episodeCount, n, episodeMod, globalCount, stateFactor);
 
         // Long-horizon novelty: frontier = states that have at least one unvisited action (lightweight, no BFS).
@@ -367,7 +367,7 @@ namespace fastbotx {
             double s = getCuriosityScore(a, episodeMod, stateFactor);
             if (s > 0.0) {
                 // Apply self-loop penalty: if this (state, action) has repeatedly resulted in the same state
-                // hash, down-weight its score so that ICMAgent is less likely to keep trying it.
+                // hash, down-weight its score so that CuriosityAgent is less likely to keep trying it.
                 uintptr_t actionHash = a->hash();
                 auto itSelf = _selfLoopCount.find(actionHash);
                 if (itSelf != _selfLoopCount.end() && itSelf->second >= kSelfLoopPenaltyThreshold) {
@@ -468,7 +468,7 @@ namespace fastbotx {
             if (s >= 0.0) scored.push_back({a, s});
         }
         if (scored.empty()) {
-            BDLOG("ICMAgent: no valid actions, fallback");
+            BDLOG("CuriosityAgent: no valid actions, fallback");
             return fallbackPickAction();
         }
 
@@ -491,7 +491,7 @@ namespace fastbotx {
                 // Should not happen in practice; fall back to uniform random.
                 std::uniform_int_distribution<size_t> idxDist(0, scored.size() - 1);
                 size_t i = idxDist(_rng);
-                BDLOG("ICMAgent: random(uniform-fallback) u=%.3f epsilon=%.3f selectCount=%d action=%s score=%.3f",
+                BDLOG("CuriosityAgent: random(uniform-fallback) u=%.3f epsilon=%.3f selectCount=%d action=%s score=%.3f",
                       u, epsilon, _selectCount, scored[i].first->toString().c_str(), scored[i].second);
                 return scored[i].first;
             }
@@ -505,7 +505,7 @@ namespace fastbotx {
                     break;
                 }
             }
-            BDLOG("ICMAgent: random(weighted) u=%.3f epsilon=%.3f selectCount=%d action=%s score=%.3f",
+            BDLOG("CuriosityAgent: random(weighted) u=%.3f epsilon=%.3f selectCount=%d action=%s score=%.3f",
                   u, epsilon, _selectCount, scored[chosenIdx].first->toString().c_str(), scored[chosenIdx].second);
             return scored[chosenIdx].first;
         }
@@ -543,12 +543,12 @@ namespace fastbotx {
             std::uniform_int_distribution<size_t> dist(0, typeBest.size() - 1);
             chosen = typeBest[dist(_rng)];
         }
-        BDLOG("ICMAgent: greedy epsilon=%.3f selectCount=%d action=%s score=%.3f",
+        BDLOG("CuriosityAgent: greedy epsilon=%.3f selectCount=%d action=%s score=%.3f",
               epsilon, _selectCount, scored[chosen].first->toString().c_str(), scored[chosen].second);
         return scored[chosen].first;
     }
 
-    std::vector<double> ICMAgent::computeStateEmbedding(const StatePtr &state) const {
+    std::vector<double> CuriosityAgent::computeStateEmbedding(const StatePtr &state) const {
         if (_stateEncoder) {
             std::vector<double> enc = _stateEncoder->encode(state);
             if (enc.size() == static_cast<size_t>(_clusterDim)) return enc;
@@ -556,11 +556,11 @@ namespace fastbotx {
         return computeStateEmbeddingHandcrafted(state);
     }
 
-    std::vector<double> ICMAgent::computeStateEmbeddingHandcrafted(const StatePtr &state) {
+    std::vector<double> CuriosityAgent::computeStateEmbeddingHandcrafted(const StatePtr &state) {
         return HandcraftedStateEncoder().encode(state);
     }
 
-    int ICMAgent::assignStateToCluster(uintptr_t stateHash, const std::vector<double> &embedding) {
+    int CuriosityAgent::assignStateToCluster(uintptr_t stateHash, const std::vector<double> &embedding) {
         if (embedding.size() != static_cast<size_t>(_clusterDim)) return -1;
         // Bootstrap: use first kNumClusters distinct states as initial centroids.
         if (_clusterCentroids.size() < static_cast<size_t>(kNumClusters)) {
@@ -569,7 +569,7 @@ namespace fastbotx {
             _clusterCount.push_back(0);
             _stateClusterIndex[stateHash] = static_cast<int>(idx);
             if (kEnableEmbeddingLog) {
-                BDLOG("ICMAgent: cluster_init idx=%zu stateHash=0x%zx dim=%zu %s",
+                BDLOG("CuriosityAgent: cluster_init idx=%zu stateHash=0x%zx dim=%zu %s",
                       idx, (size_t)stateHash, embedding.size(), embeddingSummary(embedding, kEmbeddingLogHead).c_str());
             }
             return static_cast<int>(idx);
@@ -601,7 +601,7 @@ namespace fastbotx {
             _clusterCentroids[static_cast<size_t>(best)][jj] += alpha * (embedding[jj] - _clusterCentroids[static_cast<size_t>(best)][jj]);
         }
         if (kEnableEmbeddingLog && (kEmbeddingLogEvery > 0) && (_moveForwardCount % kEmbeddingLogEvery == 0)) {
-            BDLOG("ICMAgent: cluster_assign stateHash=0x%zx best=%d dist2=%.6f count=%d",
+            BDLOG("CuriosityAgent: cluster_assign stateHash=0x%zx best=%d dist2=%.6f count=%d",
                   (size_t)stateHash, best, bestDist,
                   (best >= 0 && best < static_cast<int>(_clusterCount.size())) ? _clusterCount[static_cast<size_t>(best)] : -1);
         }
@@ -610,4 +610,4 @@ namespace fastbotx {
 
 }  // namespace fastbotx
 
-#endif  // FASTBOTX_ICM_AGENT_CPP_
+#endif  // FASTBOTX_CURIOSITY_AGENT_CPP_

@@ -11,8 +11,8 @@
  * - Action selection: ε-greedy over curiosity score (with probability ε random, else greedy max score).
  * - Episode resets on CLEAN_RESTART (state-abstraction change clears episode counts).
  */
-#ifndef FASTBOTX_ICM_AGENT_H
-#define FASTBOTX_ICM_AGENT_H
+#ifndef FASTBOTX_CURIOSITY_AGENT_H
+#define FASTBOTX_CURIOSITY_AGENT_H
 
 #include "AbstractAgent.h"
 #include "../desc/StateEncoder.h"
@@ -28,11 +28,11 @@
 
 namespace fastbotx {
 
-    class ICMAgent : public AbstractAgent {
+    class CuriosityAgent : public AbstractAgent {
     public:
-        explicit ICMAgent(const ModelPtr &model);
+        explicit CuriosityAgent(const ModelPtr &model);
 
-        ~ICMAgent() override = default;
+        ~CuriosityAgent() override = default;
 
         /** Set optional state encoder (e.g. DNN); clustering uses encoder->getOutputDim(). When null, handcrafted 16-dim is used and _clusterDim=16. */
         void setStateEncoder(const IStateEncoderPtr &encoder);
@@ -131,7 +131,7 @@ namespace fastbotx {
         /// Global state factor: stateFactor = 1 + kGlobalStateBonus * min(globalStateCount, kGlobalStateCap), encourage leaving globally over-visited state
         static constexpr double kGlobalStateBonus = 0.15;
         static constexpr int kGlobalStateCap = 20;
-        /// Count smoothing for stochastic UI (transfer noise): use EMA of global count; default on (see ICM_ALGORITHM_EXPLANATION §10.5).
+        /// Count smoothing for stochastic UI (transfer noise): use EMA of global count; default on (see CURIOSITY_ALGORITHM_EXPLANATION §2.4.5).
         static constexpr bool kEnableCountSmoothing = true;
         static constexpr double kSmoothBeta = 0.2;  // EMA: smoothed = (1-beta)*smoothed + beta*raw
         /// Curriculum: early bias global novelty, later bias episode (leave repeated states); disable by default.
@@ -201,8 +201,8 @@ namespace fastbotx {
         int assignStateToCluster(uintptr_t stateHash, const std::vector<double> &embedding);
     };
 
-    using ICMAgentPtr = std::shared_ptr<ICMAgent>;
+    using CuriosityAgentPtr = std::shared_ptr<CuriosityAgent>;
 
 }  // namespace fastbotx
 
-#endif  // FASTBOTX_ICM_AGENT_H
+#endif  // FASTBOTX_CURIOSITY_AGENT_H

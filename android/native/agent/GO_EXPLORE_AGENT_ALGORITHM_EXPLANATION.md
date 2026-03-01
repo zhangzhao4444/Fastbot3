@@ -6,7 +6,7 @@
 
 ## 执行摘要
 
-本文档详细解释 **GOExploreAgent** 在 Android UI 测试中采用的 **Go-Explore 风格「先回再探」(First return, then explore)** 算法的原理与实现。与 DoubleSarsa、ICM 等基于 Q 值或内在奖励的策略不同，GOExploreAgent 显式维护一个 **archive（关键 UI 状态集合）**，周期性地从 archive 中**选择一个 cell（UI 状态）作为子目标**，通过 **BFS 路径导航回该 cell**，然后在该 cell 附近进行若干步**局部探索**，再重新选择新的 cell，如此循环。
+本文档详细解释 **GOExploreAgent** 在 Android UI 测试中采用的 **Go-Explore 风格「先回再探」(First return, then explore)** 算法的原理与实现。与 DoubleSarsa、Curiosity 等基于 Q 值或内在奖励的策略不同，GOExploreAgent 显式维护一个 **archive（关键 UI 状态集合）**，周期性地从 archive 中**选择一个 cell（UI 状态）作为子目标**，通过 **BFS 路径导航回该 cell**，然后在该 cell 附近进行若干步**局部探索**，再重新选择新的 cell，如此循环。
 
 **当前实现**：GOExploreAgent 在共享状态图 `_outEdges` 与自维护的 `_archive`（cell 元数据）、路径缓存 `_pathToCell`、探索阶段 `_exploreTargetCell` / `_exploreStepsLeft` 之上，实现：
 
@@ -25,7 +25,7 @@ GOExploreAgent 不依赖环境「状态快照/重置」，采用的是 **Go-Expl
 
 ### 1.1 Go-Explore 思想在 Monkey/Fastbot 中的动机
 
-在 UI 自动化探索中，随机策略、BFS/DFS、Frontier、ICM/DoubleSarsa 等方法往往存在两类典型问题：
+在 UI 自动化探索中，随机策略、BFS/DFS、Frontier、Curiosity/DoubleSarsa 等方法往往存在两类典型问题：
 
 1. **Detachment（脱节）**  
    之前曾经到达过的「远端、高价值」UI 状态（例如深层设置页面），随着状态图扩张与策略更新，很少被再次访问，后续探索难以在这些前沿继续深入。
@@ -45,7 +45,7 @@ Go-Explore 提出的三条核心原则是：
 
 GOExploreAgent 是一个 **独立的、基于 archive + 图导航的探索策略**：
 
-- **不依赖 Q 值/奖励/内在奖励**，也不与 DoubleSarsa/Frontier/ICM 组合；
+- **不依赖 Q 值/奖励/内在奖励**，也不与 DoubleSarsa/Frontier/Curiosity 组合；
 - 显式维护 archive：每个已访问 UI 状态对应一个 cell，记录其被到达/被选为目标的次数；
 - 按权重从 archive 中选一个 cell，**要么就是当前状态 → 直接从当前状态探索**，要么是历史状态 → 先 BFS 导航回去，再局部探索；
 - 在「有限步数内提高广度与深度覆盖」的前提下，缓解 detachment/derailment。
@@ -162,7 +162,7 @@ selectNewAction():
 - 以概率 `kExploreRandomEpsilon=0.15` **完全随机**从 `valid` 中选一个动作，以保持多样性；
 - 否则选择 **全局访问次数最少** 的动作（通过 `getVisitedCount()`），鼓励探索新边。
 
-相比 ICM 的好奇心得分，GOExploreAgent 的探索动作仅依赖简单的访问计数与少量随机性。
+相比 CuriosityAgent 的好奇心得分，GOExploreAgent 的探索动作仅依赖简单的访问计数与少量随机性。
 
 ### 3.3 防卡死与 fallback
 
@@ -268,9 +268,9 @@ selectNewAction():
 | 到达后行为   | 执行一次 frontier 动作                          | 在该 cell 连续探索 `kExploreStepsPerCell` 步再重选    |
 | 显式记忆前沿 | 无独立 archive（仅 frontier 集合）             | 有 archive（全局 cell 存储与统计）                    |
 
-### 7.2 vs ICMAgent
+### 7.2 vs CuriosityAgent
 
-| 维度           | ICMAgent（好奇心驱动）                               | GOExploreAgent（Go-Explore 风格）                         |
+| 维度           | CuriosityAgent（好奇心驱动）                          | GOExploreAgent（Go-Explore 风格）                         |
 |----------------|-------------------------------------------------------|-----------------------------------------------------------|
 | 核心信号       | episode 新颖性 × 全局新颖性 × 状态因子              | archive 权重 + BFS 路径 + 本地少访问动作                 |
 | 决策粒度       | 在 **当前状态** 所有动作上算 curiosity score        | 在 **全局 archive** 上选目标 cell，再从 cell 局部探索   |

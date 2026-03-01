@@ -1185,6 +1185,7 @@ namespace fastbotx {
 #define StaticStateAbstractionSTR "max.staticStateAbstraction"
 #define LlmEnabledSTR             "max.llm.enabled"
 #define LlmKnowledgeSTR           "max.llm.knowledge"
+#define LlmWidgetPrioritySTR      "max.llm.widgetpriority"
 #define LlmContextAwareInputSTR   "max.llm.contextAwareInput"
 #define LlmApiUrlSTR              "max.llm.apiUrl"
 #define LlmApiKeySTR              "max.llm.apiKey"
@@ -1297,6 +1298,9 @@ namespace fastbotx {
             } else if (key == LlmKnowledgeSTR) {
                 this->_llmKnowledge = (value == "true");
                 if (this->_llmKnowledge) BDLOG("set %s (LLM knowledge_org enabled)", LlmKnowledgeSTR);
+            } else if (key == LlmWidgetPrioritySTR) {
+                this->_llmKnowledge = (value == "true");
+                if (this->_llmKnowledge) BDLOG("set %s (LLM widget_priority enabled)", LlmWidgetPrioritySTR);
             } else if (key == LlmContextAwareInputSTR) {
                 this->_llmContextAwareInput = (value == "true");
                 if (this->_llmContextAwareInput) BDLOG("set %s (LLM content_aware_input enabled)", LlmContextAwareInputSTR);

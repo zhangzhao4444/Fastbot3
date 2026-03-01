@@ -27,6 +27,29 @@ namespace fastbotx {
         return neg ? -v : v;
     }
 
+    /// Log parsed DOM tree with node hierarchy (indent by depth). Stops when *lineCount <= 0 or depth > maxDepth.
+    static void logDomTreeRecursive(const ElementPtr &e, int depth, int *lineCount, const int maxDepth = 40) {
+        if (!e || depth > maxDepth) return;
+        const int maxLines = 600;
+        if (depth == 0) *lineCount = maxLines;
+        if (*lineCount <= 0) return;
+        std::string indent(static_cast<size_t>(depth * 2), ' ');
+        std::string text = e->getText();
+        if (text.size() > 36) text = text.substr(0, 33) + "...";
+        for (char &c : text) if (c == '\n' || c == '\r') c = ' ';
+        const char *rid = e->getResourceID().c_str();
+        const char *clazz = e->getClassname().c_str();
+        RectPtr b = e->getBounds();
+        char boundsStr[32] = "";
+        if (b) std::snprintf(boundsStr, sizeof(boundsStr), "[%d,%d][%d,%d]", b->left, b->top, b->right, b->bottom);
+        BLOG("[domtree] %snode index=%d class=%s resource-id=%s text=\"%s\" bounds=%s children=%zu",
+             indent.c_str(), e->getIndex(), clazz[0] ? clazz : "(none)", rid[0] ? rid : "(none)",
+             text.c_str(), boundsStr, e->getChildren().size());
+        --(*lineCount);
+        for (const auto &child : e->getChildren())
+            logDomTreeRecursive(child, depth + 1, lineCount, maxDepth);
+    }
+
     /// Try short then long attribute name (SECURITY_AND_OPTIMIZATION §7 - Java outputs rid/cd/bnd etc.)
     static bool queryStringAttr(const tinyxml2::XMLElement *node, const char *shortName, const char *longName, const char *&out) {
         if (node->QueryStringAttribute(shortName, &out) == tinyxml2::XML_SUCCESS && out && *out != '\0') return true;
@@ -246,8 +269,7 @@ namespace fastbotx {
     ElementPtr Element::createFromXml(const std::string &xmlContent) {
         tinyxml2::XMLDocument doc;
         
-        // Raw guitree log for debugging: log XML line by line (same format as logcat)
-        // Performance optimization: Only log when FASTBOT_LOG_RAW_GUITREE is enabled
+        // Raw domtree XML log: line by line so node hierarchy is visible (from XML indentation)
 #if FASTBOT_LOG_RAW_GUITREE
         std::vector<std::string> strings;
         strings.reserve(xmlContent.size() / 100 + 1);
@@ -259,13 +281,14 @@ namespace fastbotx {
                 startIndex = endIndex + 1;
             }
         }
+        BLOG("[domtree] raw XML lines=%zu (hierarchy from indentation):", strings.size());
         for (const auto &line : strings) {
-            BLOG("The content of XML is: %s", line.c_str());
+            BLOG("[domtree] %s", line.c_str());
         }
-#else
-        // Only log size summary when detailed logging is disabled
-        BLOG("guitree size=%zu", xmlContent.size());
 #endif
+        if (!FASTBOT_LOG_RAW_GUITREE) {
+            BLOG("guitree size=%zu", xmlContent.size());
+        }
         
         // Parse XML content
         tinyxml2::XMLError errXml = doc.Parse(xmlContent.c_str());
@@ -292,7 +315,13 @@ namespace fastbotx {
         // Force set root element scrollable = true
         // Root element should always be scrollable to allow navigation
         elementPtr->_scrollable = true;
-        
+
+#if FASTBOT_LOG_RAW_GUITREE
+        int domTreeLineCount = 0;
+        logDomTreeRecursive(elementPtr, 0, &domTreeLineCount);
+        BLOG("[domtree] parsed tree (hierarchy by indent) logged above");
+#endif
+
         doc.Clear();
         return elementPtr;
     }
@@ -387,6 +416,11 @@ namespace fastbotx {
             root->recursiveDoElements([](const ElementPtr &elm) { elm->_clickable = true; });
         }
         root->_scrollable = true;
+#if FASTBOT_LOG_RAW_GUITREE
+        BLOG("[domtree] from binary (no raw XML); parsed tree hierarchy:");
+        int domTreeLineCount = 0;
+        logDomTreeRecursive(root, 0, &domTreeLineCount);
+#endif
         return root;
     }
 

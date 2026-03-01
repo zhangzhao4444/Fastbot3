@@ -589,7 +589,15 @@ namespace fastbotx {
         if (nullptr == action) {
             return DeviceOperateWrapper::OperateNop;
         }
-        
+
+        // Resolve merged widgets: when multiple concrete nodes share the same abstract widget,
+        // set action target to the next concrete node (visitCount % total) so each selection hits a different node (e.g. 特价→首页→秒送→新品).
+        if (state && action && action->requireTarget()) {
+            if (auto stateAction = std::dynamic_pointer_cast<ActivityStateAction>(action)) {
+                state->resolveAt(stateAction, _graph->getTimestamp());
+            }
+        }
+
         // Step 8: Convert action to operation object and apply patches
         OperatePtr opt = convertActionToOperate(action, state);
         if (llmAction) {

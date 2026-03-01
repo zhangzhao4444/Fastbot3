@@ -1,6 +1,6 @@
 /**
- * State encoder interface for pluggable embedding (e.g. DNN) in ICMAgent cluster novelty.
- * Implement this interface and set via ICMAgent::setStateEncoder() to replace hand-crafted embedding.
+ * State encoder interface for pluggable embedding (e.g. DNN) in CuriosityAgent cluster novelty.
+ * Implement this interface and set via CuriosityAgent::setStateEncoder() to replace hand-crafted embedding.
  */
 /**
  * @authors Zhao Zhang
@@ -25,8 +25,8 @@
 namespace fastbotx {
 
     /**
-     * Interface for state -> embedding. Used by ICMAgent when kEnableClusterNovelty is true.
-     * getOutputDim() must match encode() result size; ICMAgent uses it for runtime cluster dimension.
+     * Interface for state -> embedding. Used by CuriosityAgent when kEnableClusterNovelty is true.
+     * getOutputDim() must match encode() result size; CuriosityAgent uses it for runtime cluster dimension.
      */
     class IStateEncoder {
     public:
