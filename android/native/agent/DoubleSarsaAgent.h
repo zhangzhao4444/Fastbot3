@@ -447,6 +447,9 @@ namespace fastbotx {
          * @return true if in reuse model, false otherwise
          */
         bool isActionInReuseModel(uintptr_t actionHash) const;
+
+        /// Clear in-memory reuse model and Q-value tables when loading from disk fails or model is invalid.
+        void clearReuseModelOnLoadFailure();
     };
 
     typedef std::shared_ptr<DoubleSarsaAgent> DoubleSarsaAgentPtr;

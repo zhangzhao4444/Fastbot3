@@ -438,6 +438,11 @@ namespace fastbotx {
         }
     }
 
+    void SarsaAgent::clearReuseModelOnLoadFailure() {
+        std::lock_guard<std::mutex> lock(this->_reuseModelLock);
+        this->_reuseModel.clear();
+    }
+
     double SarsaAgent::getWidgetPriority(uintptr_t stateHash, uintptr_t actionHash) const {
         uintptr_t key = kActionPriorityKey(stateHash, actionHash);
         auto it = _actionPriority.find(key);
@@ -516,6 +521,7 @@ namespace fastbotx {
         std::ifstream modelFile(modelFilePath, std::ios::binary | std::ios::in);
         if (!modelFile.is_open()) {
             BLOGE("SarsaAgent: Failed to open model file: %s", modelFilePath.c_str());
+            clearReuseModelOnLoadFailure();
             return;
         }
 
@@ -525,6 +531,7 @@ namespace fastbotx {
 
         if (filesize <= 0) {
             BLOGE("SarsaAgent: Invalid model file size: %zu", filesize);
+            clearReuseModelOnLoadFailure();
             return;
         }
 
@@ -533,23 +540,27 @@ namespace fastbotx {
         if (bytesRead != static_cast<std::streamsize>(filesize)) {
             BLOGE("SarsaAgent: Failed to read complete model file: read %lld bytes, expected %zu bytes",
                   static_cast<long long>(bytesRead), filesize);
+            clearReuseModelOnLoadFailure();
             return;
         }
 
         flatbuffers::Verifier verifier(reinterpret_cast<const uint8_t *>(modelFileData.get()), filesize);
         if (!VerifyReuseModelBuffer(verifier)) {
             BLOGE("SarsaAgent: Invalid or corrupted model buffer");
+            clearReuseModelOnLoadFailure();
             return;
         }
         auto reuseFBModel = GetReuseModel(modelFileData.get());
         if (!reuseFBModel) {
             BLOGE("SarsaAgent: GetReuseModel returned null");
+            clearReuseModelOnLoadFailure();
             return;
         }
 
         auto modelDataPtr = reuseFBModel->model();
         if (!modelDataPtr) {
             BLOG("SarsaAgent: model data is null");
+            clearReuseModelOnLoadFailure();
             return;
         }
 

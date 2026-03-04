@@ -144,6 +144,9 @@ namespace fastbotx {
         void ensureWidgetPrioritiesForState(const StatePtr &state);
         /// Get widget priority for (state, action); 1.0 if not in map.
         double getWidgetPriority(uintptr_t stateHash, uintptr_t actionHash) const;
+
+        /// Clear in-memory reuse model when loading from disk fails or model is invalid.
+        void clearReuseModelOnLoadFailure();
     };
 
     typedef std::shared_ptr<SarsaAgent> SarsaAgentPtr;

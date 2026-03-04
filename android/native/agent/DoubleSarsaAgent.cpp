@@ -65,6 +65,13 @@ namespace fastbotx {
         BLOG("Double SARSA: Agent destructed, all resources cleaned up");
     }
 
+    void DoubleSarsaAgent::clearReuseModelOnLoadFailure() {
+        std::lock_guard<std::mutex> reuseGuard(this->_reuseModelLock);
+        this->_reuseModel.clear();
+        this->_reuseQValue1.clear();
+        this->_reuseQValue2.clear();
+    }
+
     /**
      * @brief Compute alpha value
      * 
@@ -1014,6 +1021,7 @@ namespace fastbotx {
         std::ifstream modelFile(modelFilePath, std::ios::binary | std::ios::in);
         if (!modelFile.is_open()) {
             BLOGE("Double SARSA: Failed to open model file: %s", modelFilePath.c_str());
+            clearReuseModelOnLoadFailure();
             return;
         }
 
@@ -1025,6 +1033,7 @@ namespace fastbotx {
         // Check if file size is valid
         if (filesize <= 0 || filesize > DoubleSarsaRLConstants::MaxModelFileSize) {
             BLOGE("Double SARSA: Invalid model file size: %zu", filesize);
+            clearReuseModelOnLoadFailure();
             return;
         }
         
@@ -1035,6 +1044,7 @@ namespace fastbotx {
         if (bytesRead != static_cast<std::streamsize>(filesize)) {
             BLOGE("Double SARSA: Failed to read complete model file: read %lld bytes, expected %zu bytes", 
                   static_cast<long long>(bytesRead), filesize);
+            clearReuseModelOnLoadFailure();
             return;
         }
         
@@ -1042,11 +1052,13 @@ namespace fastbotx {
         flatbuffers::Verifier verifier(reinterpret_cast<const uint8_t*>(modelFileData.get()), filesize);
         if (!VerifyReuseModelBuffer(verifier)) {
             BLOGE("Double SARSA: Invalid or corrupted model buffer");
+            clearReuseModelOnLoadFailure();
             return;
         }
         auto reuseFBModel = GetReuseModel(modelFileData.get());
         if (!reuseFBModel) {
             BLOGE("Double SARSA: GetReuseModel returned null");
+            clearReuseModelOnLoadFailure();
             return;
         }
 
