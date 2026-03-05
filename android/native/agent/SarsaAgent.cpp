@@ -163,8 +163,27 @@ namespace fastbotx {
                     unvisited += entry.second;
                 }
             }
-            if (total > 0 && unvisited > 0) {
-                value = 1.0 * unvisited / total;
+            if (total > 0) {
+                // Cap the effective sample size to avoid very old experience dominating forever.
+                static const int kMaxEffectiveSamplesPerAction = 100000;
+                int cappedTotal = total;
+                int cappedUnvisited = unvisited;
+                if (total > kMaxEffectiveSamplesPerAction) {
+                    const double scale = static_cast<double>(kMaxEffectiveSamplesPerAction) /
+                                         static_cast<double>(total);
+                    cappedTotal = kMaxEffectiveSamplesPerAction;
+                    cappedUnvisited = static_cast<int>(std::round(unvisited * scale));
+                }
+
+                // Use a simple Beta prior over "unvisited vs visited" rather than raw ratio,
+                // to smooth early noise and keep very large histories from fully overwhelming the prior.
+                const double alphaPrior = 1.0;  // prior pseudo-count for "unvisited"
+                const double betaPrior = 1.0;   // prior pseudo-count for "visited"
+                const double totalEffective = static_cast<double>(cappedTotal);
+                const double unvisitedEffective = static_cast<double>(cappedUnvisited);
+
+                value = (unvisitedEffective + alphaPrior) /
+                        (totalEffective + alphaPrior + betaPrior);
             }
         }
         return value;
@@ -604,6 +623,31 @@ namespace fastbotx {
             snapshot = this->_reuseModel;
         }
 
+        // Apply a simple exponential decay to long-lived counts so that very old
+        // experience does not dominate forever. This keeps the effective history
+        // window bounded without changing the on-disk schema.
+        static const double kDecayFactor = 0.99; // Decay ~1% per save.
+        if (kDecayFactor > 0.0 && kDecayFactor < 1.0) {
+            for (auto it = snapshot.begin(); it != snapshot.end(); ) {
+                ReuseEntryM &actMap = it->second;
+                for (auto actIt = actMap.begin(); actIt != actMap.end(); ) {
+                    int count = actIt->second;
+                    int decayed = static_cast<int>(std::floor(count * kDecayFactor));
+                    if (decayed <= 0) {
+                        actIt = actMap.erase(actIt);
+                    } else {
+                        actIt->second = decayed;
+                        ++actIt;
+                    }
+                }
+                if (actMap.empty()) {
+                    it = snapshot.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
         for (const auto &iter : snapshot) {
             uint64_t actionHash = iter.first;
             const ReuseEntryM &actMap = iter.second;
@@ -625,16 +669,40 @@ namespace fastbotx {
                                          builder.CreateVector(entries.data(), entries.size()));
         builder.Finish(modelBuf);
 
-        std::string outFilePath = modelFilepath.empty() ? this->_tmpSavePath : modelFilepath;
-        BLOG("SarsaAgent: save model to path: %s (entries=%zu)", outFilePath.c_str(), snapshot.size());
-        std::ofstream out(outFilePath, std::ios::binary);
+        // Determine final output path: use provided path if non-empty, otherwise use tmpSavePath.
+        std::string finalPath = modelFilepath.empty() ? this->_tmpSavePath : modelFilepath;
+        if (finalPath.empty()) {
+            BLOGE("SarsaAgent: Cannot save model: output file path is empty");
+            return;
+        }
+
+        // Write to a temporary file first, then atomically rename to final path for better robustness.
+        std::string tempFilePath = finalPath + ".tmp";
+        BLOG("SarsaAgent: save model to temporary path: %s (entries=%zu)", tempFilePath.c_str(), snapshot.size());
+
+        std::ofstream out(tempFilePath, std::ios::binary);
         if (!out.is_open()) {
-            BLOGE("SarsaAgent: Failed to open file for writing: %s", outFilePath.c_str());
+            BLOGE("SarsaAgent: Failed to open temporary file for writing: %s", tempFilePath.c_str());
             return;
         }
         out.write(reinterpret_cast<const char *>(builder.GetBufferPointer()),
                   static_cast<std::streamsize>(builder.GetSize()));
         out.close();
+
+        if (out.fail()) {
+            BLOGE("SarsaAgent: Failed to write model to temporary file: %s", tempFilePath.c_str());
+            std::remove(tempFilePath.c_str());
+            return;
+        }
+
+        if (std::rename(tempFilePath.c_str(), finalPath.c_str()) != 0) {
+            BLOGE("SarsaAgent: Failed to rename temporary file to final file: %s -> %s",
+                  tempFilePath.c_str(), finalPath.c_str());
+            std::remove(tempFilePath.c_str());
+            return;
+        }
+
+        BLOG("SarsaAgent: Model saved successfully to: %s (entries=%zu)", finalPath.c_str(), snapshot.size());
     }
 
     void SarsaAgent::threadModelStorage(const std::weak_ptr<SarsaAgent> &agent) {

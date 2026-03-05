@@ -269,6 +269,8 @@ Push a `max.config` with placeholders (`max.llm.apiUrl=${MAX_LLM_API_URL}` and `
      #!/system/bin/sh
      export CLASSPATH=/sdcard/monkeyq.jar:/sdcard/framework.jar:/sdcard/fastbot-thirdpart.jar
      export MAX_LLM_API_URL='https://your-llm-server.com/v1/chat/completions'
+     #export MAX_LLM_API_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+
      export MAX_LLM_API_KEY='your-api-key-here'
      export LLM_LOGIN_ACCOUNT='user@example.com'   # optional, for task placeholder
      export LLM_LOGIN_PASSWORD='secret'            # optional

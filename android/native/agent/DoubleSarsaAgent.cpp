@@ -543,9 +543,27 @@ namespace fastbotx {
                 }
             }
             
-            // Calculate probability: unvisited activity visit counts / total visit counts
-            if (total > 0 && unvisited > 0) {
-                value = static_cast<double>(unvisited) / total;
+            if (total > 0) {
+                // Cap the effective sample size to avoid very old experience dominating forever.
+                static const int kMaxEffectiveSamplesPerAction = 100000;
+                int cappedTotal = total;
+                int cappedUnvisited = unvisited;
+                if (total > kMaxEffectiveSamplesPerAction) {
+                    const double scale = static_cast<double>(kMaxEffectiveSamplesPerAction) /
+                                         static_cast<double>(total);
+                    cappedTotal = kMaxEffectiveSamplesPerAction;
+                    cappedUnvisited = static_cast<int>(std::round(unvisited * scale));
+                }
+
+                // Use a simple Beta prior over "unvisited vs visited" rather than raw ratio,
+                // to smooth early noise and keep very large histories from fully overwhelming the prior.
+                const double alphaPrior = 1.0;  // prior pseudo-count for "unvisited"
+                const double betaPrior = 1.0;   // prior pseudo-count for "visited"
+                const double totalEffective = static_cast<double>(cappedTotal);
+                const double unvisitedEffective = static_cast<double>(cappedUnvisited);
+
+                value = (unvisitedEffective + alphaPrior) /
+                        (totalEffective + alphaPrior + betaPrior);
             }
         }
         
@@ -1118,43 +1136,68 @@ namespace fastbotx {
         // Create FlatBuffers builder
         flatbuffers::FlatBufferBuilder builder;
         std::vector<flatbuffers::Offset<fastbotx::ReuseEntry>> actionActivityVector;
-        
-        // Lock to protect concurrent access to reuse model
+
+        // Take a snapshot of the reuse model under lock, then serialize off-lock.
+        ReuseEntryIntMap snapshot;
         {
             std::lock_guard<std::mutex> reuseGuard(this->_reuseModelLock);
-            
-            // Iterate through reuse model, build FlatBuffers data structure
-            for (const auto &actionIterator: this->_reuseModel) {
-                uint64_t actionHash = actionIterator.first;
-                ReuseEntryM activityCountEntryMap = actionIterator.second;
-                
-                // FlatBuffers needs vector instead of map
-                std::vector<flatbuffers::Offset<fastbotx::ActivityTimes>> activityCountEntryVector;
-                
-                // Iterate through activity mapping
-                for (const auto &activityCountEntry: activityCountEntryMap) {
-                    const std::string &actName = *(activityCountEntry.first);
-                    size_t actLen = std::min(actName.size(), ModelStorageConstants::MaxActivityNameLength);
-                    auto sentryActT = CreateActivityTimes(
-                            builder,
-                            builder.CreateString(actName.c_str(), actLen),  // Activity name (length capped)
-                            activityCountEntry.second);
-                    activityCountEntryVector.push_back(sentryActT);
+            snapshot = this->_reuseModel;
+        }
+
+        // Apply a simple exponential decay to long-lived counts so that very old
+        // experience does not dominate forever. This keeps the effective history
+        // window bounded without changing the on-disk schema.
+        static const double kDecayFactor = 0.99; // Decay ~1% per save.
+        if (kDecayFactor > 0.0 && kDecayFactor < 1.0) {
+            for (auto it = snapshot.begin(); it != snapshot.end(); ) {
+                ReuseEntryM &actMap = it->second;
+                for (auto actIt = actMap.begin(); actIt != actMap.end(); ) {
+                    int count = actIt->second;
+                    int decayed = static_cast<int>(std::floor(count * kDecayFactor));
+                    if (decayed <= 0) {
+                        actIt = actMap.erase(actIt);
+                    } else {
+                        actIt->second = decayed;
+                        ++actIt;
+                    }
                 }
-                
-                // Create ReuseEntry object
-                auto savedActivityCountEntries = CreateReuseEntry(
-                        builder, 
-                        actionHash,
-                        builder.CreateVector(activityCountEntryVector.data(),
-                                          activityCountEntryVector.size()));
-                actionActivityVector.push_back(savedActivityCountEntries);
+                if (actMap.empty()) {
+                    it = snapshot.erase(it);
+                } else {
+                    ++it;
+                }
             }
         }
-        
+
+        // Iterate through decayed snapshot, build FlatBuffers data structure
+        for (const auto &actionIterator : snapshot) {
+            uint64_t actionHash = actionIterator.first;
+            const ReuseEntryM &activityCountEntryMap = actionIterator.second;
+
+            // FlatBuffers needs vector instead of map
+            std::vector<flatbuffers::Offset<fastbotx::ActivityTimes>> activityCountEntryVector;
+
+            for (const auto &activityCountEntry : activityCountEntryMap) {
+                const std::string &actName = *(activityCountEntry.first);
+                size_t actLen = std::min(actName.size(), ModelStorageConstants::MaxActivityNameLength);
+                auto sentryActT = CreateActivityTimes(
+                        builder,
+                        builder.CreateString(actName.c_str(), actLen),
+                        activityCountEntry.second);
+                activityCountEntryVector.push_back(sentryActT);
+            }
+
+            auto savedActivityCountEntries = CreateReuseEntry(
+                    builder,
+                    actionHash,
+                    builder.CreateVector(activityCountEntryVector.data(),
+                                         activityCountEntryVector.size()));
+            actionActivityVector.push_back(savedActivityCountEntries);
+        }
+
         // Create ReuseModel root object and complete serialization
         auto savedActionActivityEntries = CreateReuseModel(
-                builder, 
+                builder,
                 builder.CreateVector(actionActivityVector.data(), actionActivityVector.size()));
         builder.Finish(savedActionActivityEntries);
 
