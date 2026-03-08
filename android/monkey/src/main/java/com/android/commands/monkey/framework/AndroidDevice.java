@@ -138,7 +138,14 @@ public class AndroidDevice {
         iActivityManager = mAm;
         iWindowManager = mWm;
         iPackageManager = mPm;
-        packageManager = APIAdapter.getSystemContext().getPackageManager();
+        Context ctx = APIAdapter.getSystemContext();
+        if (ctx == null) {
+            throw new IllegalStateException("System context not available. Ensure running as system/shell.");
+        }
+        packageManager = ctx.getPackageManager();
+        if (packageManager == null) {
+            throw new IllegalStateException("PackageManager not available from system context.");
+        }
         // Non-startup services (IStatusBarService, IInputMethodManager, etc.) are lazy-loaded on first use.
     }
 

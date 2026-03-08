@@ -24,7 +24,7 @@ import static com.android.commands.monkey.utils.Config.allowStartActivityEscapeP
 import static com.android.commands.monkey.utils.Config.fastbotversion;
 import static com.android.commands.monkey.utils.Config.grantAllPermission;
 import static com.android.commands.monkey.utils.Config.requestLogcat;
-import static com.android.commands.monkey.utils.Config.startMutaion;
+import static com.android.commands.monkey.utils.Config.startMutation;
 
 import android.app.IActivityController;
 import android.app.IActivityManager;
@@ -57,11 +57,11 @@ import com.android.commands.monkey.events.base.mutation.MutationAirplaneEvent;
 import com.android.commands.monkey.events.base.mutation.MutationWifiEvent;
 import com.android.commands.monkey.framework.APIAdapter;
 import com.android.commands.monkey.framework.AndroidDevice;
+import com.android.commands.monkey.source.MonkeySourceApeBase;
 import com.android.commands.monkey.source.MonkeySourceApeNative;
 import com.android.commands.monkey.source.MonkeySourceApeU2;
 import com.android.commands.monkey.source.MonkeySourceRandom;
 import com.android.commands.monkey.utils.Config;
-import com.android.commands.monkey.framework.APIAdapter;
 import com.android.commands.monkey.utils.Logger;
 import com.android.commands.monkey.utils.MonkeyUtils;
 import com.android.commands.monkey.utils.RandomHelper;
@@ -79,9 +79,12 @@ import java.io.Writer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 
@@ -102,7 +105,25 @@ public class Monkey {
      */
     private static int DEBUG_ALLOW_ANY_STARTS = 0;
     private static final long ONE_MINUTE_IN_MILLISECOND = 1000 * 60;
+    private static final long ANR_TRACES_WAIT_MS = 5 * 1000;
+    private static final long INITIAL_DELAY_MS = 3 * 1000;
+    private static final long HPROF_WAIT_MS = 20 * 1000;
     private static final File TOMBSTONES_PATH = new File("/data/tombstones");
+
+    private static final Map<String, AiClient.AlgorithmType> AGENT_TYPE_MAP;
+    static {
+        Map<String, AiClient.AlgorithmType> map = new HashMap<>();
+        map.put("dfs", AiClient.AlgorithmType.Dfs);
+        map.put("sarsa", AiClient.AlgorithmType.Sarsa);
+        map.put("double-sarsa", AiClient.AlgorithmType.DoubleSarsa);
+        map.put("reuseq", AiClient.AlgorithmType.DoubleSarsa);
+        map.put("bfs", AiClient.AlgorithmType.Bfs);
+        map.put("frontier", AiClient.AlgorithmType.Frontier);
+        map.put("icm", AiClient.AlgorithmType.Curiosity);
+        map.put("curiosity", AiClient.AlgorithmType.Curiosity);
+        map.put("goexplore", AiClient.AlgorithmType.GoExplore);
+        AGENT_TYPE_MAP = Collections.unmodifiableMap(map);
+    }
     /**
      * The monkey event source
      */
@@ -190,7 +211,7 @@ public class Monkey {
     private boolean mIgnoreTimeouts;
 
     /**
-     * (The activity launch still fails, but we keep pluggin' away)
+     * (The activity launch still fails, but we keep plugging away)
      */
     private boolean mIgnoreSecurityExceptions;
 
@@ -468,9 +489,7 @@ public class Monkey {
      * @return Returns false if any error occurs.
      */
     private static boolean loadPackageListFromFile(String fileName, Set<String> list) {
-        BufferedReader reader = null;
-        try {
-            reader = new BufferedReader(new FileReader(fileName));
+        try (BufferedReader reader = new BufferedReader(new FileReader(fileName))) {
             String s;
             while ((s = reader.readLine()) != null) {
                 s = s.trim();
@@ -481,14 +500,6 @@ public class Monkey {
         } catch (IOException ioe) {
             Logger.warningPrintln(ioe);
             return false;
-        } finally {
-            if (reader != null) {
-                try {
-                    reader.close();
-                } catch (IOException ioe) {
-                    Logger.warningPrintln(ioe);
-                }
-            }
         }
         return true;
     }
@@ -499,7 +510,7 @@ public class Monkey {
      */
     private void reportAnrTraces() {
         try {
-            Thread.sleep(5 * 1000);
+            Thread.sleep(ANR_TRACES_WAIT_MS);
         } catch (InterruptedException e) {
         }
         commandLineReport("anr traces", "cat /data/anr/traces.txt");
@@ -527,9 +538,8 @@ public class Monkey {
 
     /**
      * Print report from a single command line.
-     * <p>
-     * TODO: Use ProcessBuilder & redirectErrorStream(true) to capture both
-     * streams (might be important for some command lines)
+     * Uses ProcessBuilder with redirectErrorStream(true) to capture both stdout and stderr.
+     * Uses try-with-resources for proper stream cleanup.
      *
      * @param reportName Simple tag that will print before the report and in various
      *                   annotations.
@@ -537,63 +547,49 @@ public class Monkey {
      */
     private void commandLineReport(String reportName, String command) {
         System.err.println(reportName + ":");
-        Writer logOutput = null;
-        Writer tracesOutput = null;
-
+        if (mOutputDirectory == null) {
+            Logger.warningPrintln("// Skipping " + reportName + ": output directory not set");
+            return;
+        }
         try {
-            // Process must be fully qualified here because android.os.Process
-            // is used elsewhere
-            java.lang.Process p = Runtime.getRuntime().exec(command);
+            ProcessBuilder pb = new ProcessBuilder();
+            pb.command("/system/bin/sh", "-c", command);
+            pb.redirectErrorStream(true);
+            java.lang.Process p = pb.start();
 
+            Writer logOutput = null;
+            Writer tracesOutput = null;
             if (mRequestBugreport) {
                 logOutput = new BufferedWriter(new FileWriter(new File(mOutputDirectory, reportName).getAbsolutePath(), true));
             }
-
             if ("anr traces".equals(reportName)) {
                 tracesOutput = new BufferedWriter(new FileWriter(new File(mOutputDirectory, "oom-traces.log").getAbsolutePath(), true));
-            }
-
-            if ("dropbox".equals(reportName)) {
+            } else if ("dropbox".equals(reportName)) {
                 tracesOutput = new BufferedWriter(new FileWriter(new File(mOutputDirectory, "dumpsys-dropbox.log").getAbsolutePath(), true));
-            }
-
-            if (reportName.contains("Logcat")) {
+            } else if (reportName.contains("Logcat")) {
                 tracesOutput = new BufferedWriter(new FileWriter(new File(mOutputDirectory, reportName).getAbsolutePath(), true));
             }
 
-
-            // pipe everything from process stdout -> System.err
-            InputStream inStream = p.getInputStream();
-            InputStreamReader inReader = new InputStreamReader(inStream);
-            BufferedReader inBuffer = new BufferedReader(inReader);
-            String s;
-            while ((s = inBuffer.readLine()) != null) {
-
-                if (mRequestBugreport && logOutput != null) {
-                    logOutput.write(s);
-                    logOutput.write("\n");
-                } else {
-                    Logger.warningPrintln(s);
-                }
-
-                if ("anr traces".equals(reportName) || "dropbox".equals(reportName) || reportName.contains("Logcat")) {
-                    if (tracesOutput != null) {
-                        tracesOutput.write(s);
-                        tracesOutput.write("\n");
+            try (Writer log = logOutput;
+                 Writer traces = tracesOutput;
+                 BufferedReader inBuffer = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+                String s;
+                while ((s = inBuffer.readLine()) != null) {
+                    if (mRequestBugreport && log != null) {
+                        log.write(s);
+                        log.write("\n");
+                    } else {
+                        Logger.warningPrintln(s);
+                    }
+                    if (("anr traces".equals(reportName) || "dropbox".equals(reportName) || reportName.contains("Logcat")) && traces != null) {
+                        traces.write(s);
+                        traces.write("\n");
                     }
                 }
             }
 
             int status = p.waitFor();
             Logger.warningPrintln("// " + reportName + " status was " + status);
-
-            if (logOutput != null) {
-                logOutput.close();
-            }
-
-            if (tracesOutput != null) {
-                tracesOutput.close();
-            }
         } catch (Exception e) {
             Logger.warningPrintln("// Exception from " + reportName + ":");
             Logger.warningPrintln(e.toString());
@@ -606,14 +602,54 @@ public class Monkey {
      * @param count TODO: Add the script file name to the log.
      */
     private void writeScriptLog(int count) {
-        try {
-            Writer output = new BufferedWriter(
-                    new FileWriter(new File(Environment.getLegacyExternalStorageDirectory(), "scriptlog.txt"), true));
+        try (Writer output = new BufferedWriter(
+                new FileWriter(new File(Environment.getLegacyExternalStorageDirectory(), "scriptlog.txt"), true))) {
             output.write(
                     "iteration: " + count + " time: " + MonkeyUtils.toCalendarTime(System.currentTimeMillis()) + "\n");
-            output.close();
         } catch (IOException e) {
             Logger.warningPrintln(e.toString());
+        }
+    }
+
+    /**
+     * Parse agent type string to AlgorithmType. Returns DoubleSarsa for unknown.
+     */
+    private AiClient.AlgorithmType parseAgentType(String agentType) {
+        if (agentType == null || agentType.isEmpty()) {
+            return AiClient.AlgorithmType.DoubleSarsa;
+        }
+        AiClient.AlgorithmType algo = AGENT_TYPE_MAP.get(agentType.toLowerCase(Locale.US));
+        if (algo != null) {
+            return algo;
+        }
+        Logger.println("// unknown agent type: " + agentType + ", default to DoubleSarsaAgent (DoubleSarsa)");
+        return AiClient.AlgorithmType.DoubleSarsa;
+    }
+
+    /**
+     * Common init for ApeNative and ApeU2 event sources. Reduces duplication.
+     */
+    private void initApeEventSource(MonkeyEventSource source, String modeLabel) {
+        Logger.println("// running " + modeLabel);
+        AndroidDevice.initializeAndroidDevice(mAm, mWm, mPm);
+        AndroidDevice.checkInteractive();
+        if (!"".equals(mMappingFilePath) && !"max.mapping".equals(mMappingFilePath)) {
+            AiClient.loadResMapping(mMappingFilePath);
+        }
+        mEventSource = source;
+        mEventSource.setVerbose(mVerbose);
+        MonkeySourceApeBase apeBase = (MonkeySourceApeBase) mEventSource;
+        if (grantAllPermission) {
+            apeBase.grantRuntimePermissions("GrantPermissionsActivity");
+        }
+        if (RandomHelper.toss(startMutation)) {
+            apeBase.startMutation(mWm, mAm, mVerbose);
+        }
+        apeBase.setAttribute(mMainApps.get(0).getPackageName(), appVersionCode, mMainIntentAction, mMainIntentData, mMainQuickAppActivity);
+        if (mAgentType != null && !mAgentType.isEmpty()) {
+            AiClient.AlgorithmType algo = parseAgentType(mAgentType);
+            Logger.println("// init with " + algo + " agent");
+            apeBase.initAgent(algo);
         }
     }
 
@@ -699,7 +735,7 @@ public class Monkey {
                 Logger.println("// IncludeAction: " + mMainIntentAction);
                 Logger.println("// IncludeData: " + mMainIntentData);
             }
-            Config.setIntger("max.verbose", mVerbose);
+            Config.setInteger("max.verbose", mVerbose);
         }
 
         // never use
@@ -727,7 +763,7 @@ public class Monkey {
         mRandom = new Random(mSeed);
         String name = mMainApps.get(0).getPackageName();
         try {
-            Thread.sleep(3 * 1000);
+            Thread.sleep(INITIAL_DELAY_MS);
         } catch (InterruptedException e) {
         }
 
@@ -737,108 +773,16 @@ public class Monkey {
         Logger.println("// phone info： " + android.os.Build.MANUFACTURER + "_" + android.os.Build.MODEL + "_" + Build.VERSION.RELEASE);
 
         if (mUseApeNative) {
-            // fastbot monkey
-            Logger.println("// runing fastbot");
-
-            // init framework android device
+            // Must initialize AndroidDevice before creating source (constructor calls getTotalActivities which uses packageManager)
             AndroidDevice.initializeAndroidDevice(mAm, mWm, mPm);
             AndroidDevice.checkInteractive();
-
-            if (!"".equals(mMappingFilePath) && !"max.mapping".equals(mMappingFilePath)) {
-                AiClient.loadResMapping(mMappingFilePath);
-            }
-
-            mEventSource = new MonkeySourceApeNative(mRandom, mMainApps, mThrottle, mRandomizeThrottle, mPermissionTargetSystem, mOutputDirectory);
-            mEventSource.setVerbose(mVerbose);
-
-            // grant all permissions required, enabled by default
-            if (grantAllPermission) {
-                ((MonkeySourceApeNative) mEventSource).grantRuntimePermissions("GrantPermissionsActivity");
-            }
-            if (RandomHelper.toss(startMutaion)) {
-                ((MonkeySourceApeNative) mEventSource).startMutation(mWm, mAm, mVerbose);
-            }
-            ((MonkeySourceApeNative) mEventSource).setAttribute(mMainApps.get(0).getPackageName(), appVersionCode, mMainIntentAction, mMainIntentData, mMainQuickAppActivity);
-            if (mAgentType != null && !mAgentType.isEmpty()) {
-                AiClient.AlgorithmType algo = AiClient.AlgorithmType.DoubleSarsa;
-                if ("dfs".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.Dfs;
-                    Logger.println("// init with DFS agent (AlgorithmType.Dfs)");
-                } else if ("sarsa".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.Sarsa;
-                    Logger.println("// init with SarsaAgent");
-                } else if ("double-sarsa".equalsIgnoreCase(mAgentType) || "reuseq".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.DoubleSarsa;
-                    Logger.println("// init with DoubleSarsaAgent (AlgorithmType.DoubleSarsa)");
-                } else if ("bfs".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.Bfs;
-                    Logger.println("// init with BFS agent (AlgorithmType.Bfs)");
-                } else if ("frontier".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.Frontier;
-                    Logger.println("// init with Frontier agent (AlgorithmType.Frontier)");
-                } else if ("icm".equalsIgnoreCase(mAgentType) || "curiosity".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.Curiosity;
-                    Logger.println("// init with CuriosityAgent (curiosity-driven, --agent icm or curiosity)");
-                } else if ("goexplore".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.GoExplore;
-                    Logger.println("// init with GOExplore agent (AlgorithmType.GoExplore, standalone Go-Explore style)");
-                } else {
-                    Logger.println("// unknown agent type: " + mAgentType + ", default to DoubleSarsaAgent (DoubleSarsa)");
-                }
-                ((MonkeySourceApeNative) mEventSource).initAgent(algo);
-            }
+            MonkeyEventSource source = new MonkeySourceApeNative(mRandom, mMainApps, mThrottle, mRandomizeThrottle, mPermissionTargetSystem, mOutputDirectory);
+            initApeEventSource(source, "fastbot");
         } else if (mUseApeU2) {
-            // fastbot monkey
-            Logger.println("// runing fastbot-U2");
-
-            // init framework android device
             AndroidDevice.initializeAndroidDevice(mAm, mWm, mPm);
             AndroidDevice.checkInteractive();
-
-            if (!"".equals(mMappingFilePath) && !"max.mapping".equals(mMappingFilePath)) {
-                AiClient.loadResMapping(mMappingFilePath);
-            }
-
-            mEventSource = new MonkeySourceApeU2(mRandom, mMainApps, mThrottle, mRandomizeThrottle, mPermissionTargetSystem, mOutputDirectory, mProfilePeriod);
-            mEventSource.setVerbose(mVerbose);
-
-            // grant all permissions required, enabled by default
-            if (grantAllPermission) {
-                ((MonkeySourceApeU2) mEventSource).grantRuntimePermissions("GrantPermissionsActivity");
-            }
-            if (RandomHelper.toss(startMutaion)) {
-                ((MonkeySourceApeU2) mEventSource).startMutation(mWm, mAm, mVerbose);
-            }
-            ((MonkeySourceApeU2) mEventSource).setAttribute(mMainApps.get(0).getPackageName(), appVersionCode, mMainIntentAction, mMainIntentData, mMainQuickAppActivity);
-            if (mAgentType != null && !mAgentType.isEmpty()) {
-                AiClient.AlgorithmType algo = AiClient.AlgorithmType.DoubleSarsa;
-                if ("dfs".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.Dfs;
-                    Logger.println("// init with DFS agent (AlgorithmType.Dfs)");
-                } else if ("sarsa".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.Sarsa;
-                    Logger.println("// init with SarsaAgent (AlgorithmType.Sarsa, single-Q SARSA + reuse model)");
-                } else if ("double-sarsa".equalsIgnoreCase(mAgentType) || "reuseq".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.DoubleSarsa;
-                    Logger.println("// init with DoubleSarsaAgent (AlgorithmType.DoubleSarsa)");
-                } else if ("bfs".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.Bfs;
-                    Logger.println("// init with BFS agent (AlgorithmType.Bfs)");
-                } else if ("frontier".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.Frontier;
-                    Logger.println("// init with Frontier agent (AlgorithmType.Frontier)");
-                } else if ("icm".equalsIgnoreCase(mAgentType) || "curiosity".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.Curiosity;
-                    Logger.println("// init with CuriosityAgent (curiosity-driven, --agent icm or curiosity)");
-                } else if ("goexplore".equalsIgnoreCase(mAgentType)) {
-                    algo = AiClient.AlgorithmType.GoExplore;
-                    Logger.println("// init with GOExplore agent (AlgorithmType.GoExplore, standalone Go-Explore style)");
-                } else {
-                    Logger.println("// unknown agent type: " + mAgentType + ", default to DoubleSarsaAgent (DoubleSarsa)");
-                }
-                ((MonkeySourceApeU2) mEventSource).initAgent(algo);
-            }
-
+            MonkeyEventSource source = new MonkeySourceApeU2(mRandom, mMainApps, mThrottle, mRandomizeThrottle, mPermissionTargetSystem, mOutputDirectory, mProfilePeriod);
+            initApeEventSource(source, "fastbot-U2");
         } else {
             // random monkey by default
             Logger.println("// runing google monkey mode");
@@ -908,38 +852,62 @@ public class Monkey {
             ((MonkeySourceApeU2) this.mEventSource).tearDown();
         }
 
-        // sync handle error information
+        // Sync: copy request flags, then run I/O outside lock to avoid blocking ActivityController
+        boolean doReportAnrTraces = false;
+        boolean doReportDumpsysMemInfo = false;
+        String doBugreportAnr = null;
+        String doBugreportWatchdog = null;
+        String doBugreportAppCrash = null;
+        boolean doBugreportPeriodic = false;
         synchronized (this) {
             if (mRequestAnrTraces) {
-                reportAnrTraces();
+                doReportAnrTraces = true;
                 mRequestAnrTraces = false;
             }
             if (mRequestAnrBugreport) {
-                Logger.warningPrintln("Print the anr report");
-                getBugreport("anr_" + mReportProcessName + "_");
+                doBugreportAnr = "anr_" + mReportProcessName + "_";
                 mRequestAnrBugreport = false;
             }
             if (mRequestWatchdogBugreport) {
-                Logger.warningPrintln("Print the watchdog report");
-                getBugreport("anr_watchdog_");
+                doBugreportWatchdog = "anr_watchdog_";
                 mRequestWatchdogBugreport = false;
             }
             if (mRequestAppCrashBugreport) {
-                getBugreport("app_crash" + mReportProcessName + "_");
+                doBugreportAppCrash = "app_crash" + mReportProcessName + "_";
                 mRequestAppCrashBugreport = false;
             }
             if (mRequestDumpsysMemInfo) {
-                reportDumpsysMemInfo();
+                doReportDumpsysMemInfo = true;
                 mRequestDumpsysMemInfo = false;
             }
             if (mRequestPeriodicBugreport) {
-                getBugreport("Bugreport_");
+                doBugreportPeriodic = true;
                 mRequestPeriodicBugreport = false;
             }
             if (mWatchdogWaiting) {
                 mWatchdogWaiting = false;
                 notifyAll();
             }
+        }
+        if (doReportAnrTraces) {
+            reportAnrTraces();
+        }
+        if (doReportDumpsysMemInfo) {
+            reportDumpsysMemInfo();
+        }
+        if (doBugreportAnr != null) {
+            Logger.warningPrintln("Print the anr report");
+            getBugreport(doBugreportAnr);
+        }
+        if (doBugreportWatchdog != null) {
+            Logger.warningPrintln("Print the watchdog report");
+            getBugreport(doBugreportWatchdog);
+        }
+        if (doBugreportAppCrash != null) {
+            getBugreport(doBugreportAppCrash);
+        }
+        if (doBugreportPeriodic) {
+            getBugreport("Bugreport_");
         }
 
         // unregister
@@ -1447,6 +1415,11 @@ public class Monkey {
 
         boolean shouldReportAnrTraces = false;
         boolean shouldReportDumpsysMemInfo = false;
+        String bugreportAnrPrefix = null;
+        String bugreportWatchdogPrefix = null;
+        String bugreportAppCrashPrefix = null;
+        String bugreportNativeCrashPrefix = null;
+        boolean shouldReportPeriodicBugreport = false;
         boolean shouldAbort = false;
         boolean systemCrashed = false;
 
@@ -1477,20 +1450,19 @@ public class Monkey {
                     shouldReportAnrTraces = true;
                 }
                 if (mRequestAnrBugreport) {
-                    getBugreport("anr_" + mReportProcessName + "_");
+                    bugreportAnrPrefix = "anr_" + mReportProcessName + "_";
                     mRequestAnrBugreport = false;
                 }
                 if (mRequestWatchdogBugreport) {
-                    Logger.println("Print the watchdog report");
-                    getBugreport("anr_watchdog_");
+                    bugreportWatchdogPrefix = "anr_watchdog_";
                     mRequestWatchdogBugreport = false;
                 }
                 if (mRequestAppCrashBugreport) {
-                    getBugreport("app_crash" + mReportProcessName + "_");
+                    bugreportAppCrashPrefix = "app_crash" + mReportProcessName + "_";
                     mRequestAppCrashBugreport = false;
                 }
                 if (mRequestPeriodicBugreport) {
-                    getBugreport("Bugreport_");
+                    shouldReportPeriodicBugreport = true;
                     mRequestPeriodicBugreport = false;
                 }
                 if (mRequestDumpsysMemInfo) {
@@ -1504,7 +1476,7 @@ public class Monkey {
                     if (checkNativeCrashes() && (eventCounter > 0)) {
                         Logger.println("** New native crash detected.");
                         if (mRequestBugreport) {
-                            getBugreport("native_crash_");
+                            bugreportNativeCrashPrefix = "native_crash_";
                         }
                         mAbort = mAbort || !mIgnoreNativeCrashes || mKillProcessAfterError;
                     }
@@ -1518,9 +1490,9 @@ public class Monkey {
                 }
             }
 
-            // Report ANR, dumpsys after releasing lock on this.
+            // Report ANR, dumpsys, bugreport after releasing lock on this.
             // This ensures the availability of the lock to Activity
-            // controller's appNotResponding
+            // controller's appNotResponding (avoids ANR risk from I/O in sync block)
             if (shouldReportAnrTraces) {
                 shouldReportAnrTraces = false;
                 reportAnrTraces();
@@ -1529,6 +1501,29 @@ public class Monkey {
             if (shouldReportDumpsysMemInfo) {
                 shouldReportDumpsysMemInfo = false;
                 reportDumpsysMemInfo();
+            }
+
+            if (bugreportAnrPrefix != null) {
+                Logger.warningPrintln("Print the anr report");
+                getBugreport(bugreportAnrPrefix);
+                bugreportAnrPrefix = null;
+            }
+            if (bugreportWatchdogPrefix != null) {
+                Logger.warningPrintln("Print the watchdog report");
+                getBugreport(bugreportWatchdogPrefix);
+                bugreportWatchdogPrefix = null;
+            }
+            if (bugreportAppCrashPrefix != null) {
+                getBugreport(bugreportAppCrashPrefix);
+                bugreportAppCrashPrefix = null;
+            }
+            if (bugreportNativeCrashPrefix != null) {
+                getBugreport(bugreportNativeCrashPrefix);
+                bugreportNativeCrashPrefix = null;
+            }
+            if (shouldReportPeriodicBugreport) {
+                shouldReportPeriodicBugreport = false;
+                getBugreport("Bugreport_");
             }
 
             if (shouldHookAppCrashed) {
@@ -1569,11 +1564,12 @@ public class Monkey {
                 Logger.println("    // Sending event #" + eventCounter);
             }
 
-            // generate next event and inject it
-            MonkeyEvent ev = mEventSource.getNextEvent();
-            if (shouldStop(cycleCounter)){
+            // Check stop condition before generating event to avoid wasted work
+            if (shouldStop(cycleCounter)) {
                 break;
             }
+            // generate next event and inject it
+            MonkeyEvent ev = mEventSource.getNextEvent();
             if (ev != null) {
                 int injectCode = ev.injectEvent(mWm, mAm, mVerbose);
                 if (ev instanceof MonkeyThrottleEvent) {
@@ -1637,7 +1633,7 @@ public class Monkey {
             mAm.signalPersistentProcesses(Process.SIGNAL_USR1);
 
             synchronized (this) {
-                wait(20000);
+                wait(HPROF_WAIT_MS);
             }
         } catch (RemoteException e) {
             Logger.warningPrintln("** Failed talking with activity manager!");
@@ -1772,59 +1768,32 @@ public class Monkey {
      * @param msg       some information，etc crash stack
      */
     private void writeDumpLog(String logTimeStamp, String msg) {
-        FileWriter fileWriter = null;
-
-
-        try {
-            fileWriter = new FileWriter(new File(mOutputDirectory + "/" + logTimeStamp + "/", logTimeStamp + ".log").getAbsolutePath(), true);
+        if (mOutputDirectory == null) {
+            return;
+        }
+        try (FileWriter fileWriter = new FileWriter(new File(mOutputDirectory + "/" + logTimeStamp + "/", logTimeStamp + ".log").getAbsolutePath(), true)) {
             fileWriter.write(String.format("%s\n", msg));
         } catch (IOException e) {
             Logger.println("cannot write dump msg to " + mOutputDirectory + "/" + logTimeStamp + "/" + logTimeStamp + ".log");
-        } finally {
-            if (fileWriter != null) {
-                try {
-                    fileWriter.close();
-                } catch (IOException e) {
-                    Logger.println("cannot close dump filewriter");
-                }
-            }
         }
 
-        try {
-            fileWriter = new FileWriter(new File("/sdcard/", "crash-dump.log").getAbsolutePath(), true);
+        try (FileWriter fileWriter = new FileWriter(new File("/sdcard/", "crash-dump.log").getAbsolutePath(), true)) {
             fileWriter.write(String.format("%s\n", msg));
         } catch (IOException e) {
             Logger.println("cannot write dump msg to " + "/sdcard/crash-dump.log");
-        } finally {
-            if (fileWriter != null) {
-                try {
-                    fileWriter.close();
-                } catch (IOException e) {
-                    Logger.println("cannot close dump filewriter");
-                }
-            }
         }
 
-        if (mEventSource instanceof MonkeySourceApeU2){
+        if (mEventSource instanceof MonkeySourceApeU2) {
             MonkeySourceApeU2 monkeySourceApeU2 = ((MonkeySourceApeU2) mEventSource);
             String crashScreen = monkeySourceApeU2.peekImageQueue();
             monkeySourceApeU2.processFailureNScreenshots();
             msg = String.format("StepsCount: %d\nCrashScreen: %s%s", monkeySourceApeU2.getStepsCount(), crashScreen, msg);
 
             String outFile = new File(monkeySourceApeU2.getDeviceOutputDir(), "crash-dump.log").getAbsolutePath();
-            try {
-                fileWriter = new FileWriter(outFile, true);
+            try (FileWriter fileWriter = new FileWriter(outFile, true)) {
                 fileWriter.write(String.format("%s\n", msg));
             } catch (IOException e) {
                 Logger.println("cannot write dump msg to " + outFile);
-            } finally {
-                if (fileWriter != null) {
-                    try {
-                        fileWriter.close();
-                    } catch (IOException e) {
-                        Logger.println("cannot close dump filewriter");
-                    }
-                }
             }
         }
     }
