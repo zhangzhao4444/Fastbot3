@@ -113,6 +113,11 @@ public class AiClient {
         singleton.initAgentNative(agentType.value(), packagename, 0);
     }
 
+    /** Call when test ends normally to persist reuse model (Agent destructor is not run). */
+    public static void saveReuseModel() {
+        singleton.saveReuseModelNative();
+    }
+
     private boolean loaded = false;
 
     /** Fallback when no LlmScreenshotProvider is set (e.g. tests). */
@@ -895,6 +900,7 @@ public class AiClient {
 
     private native String getOperateJsonNative(String activity, String pageDesc);
     private native void initAgentNative(int algorithmType, String packageName, int flags);
+    private native void saveReuseModelNative();
     private native boolean checkPointInShieldNative(String activity, float x, float y);
 
     /**

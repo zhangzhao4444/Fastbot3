@@ -63,6 +63,7 @@ import com.android.commands.monkey.events.base.MonkeyTouchEvent;
 import com.android.commands.monkey.events.base.mutation.MutationAirplaneEvent;
 import com.android.commands.monkey.events.base.mutation.MutationAlwaysFinishActivityEvent;
 import com.android.commands.monkey.events.base.mutation.MutationWifiEvent;
+import com.android.commands.monkey.events.customize.AbstractCustomEvent;
 import com.android.commands.monkey.events.customize.ClickEvent;
 import com.android.commands.monkey.events.customize.DragEvent;
 import com.android.commands.monkey.events.customize.PinchOrZoomEvent;
@@ -709,19 +710,25 @@ public abstract class MonkeySourceApeBase {
                 click.setPoint(s.x, s.y);
             } else if (event instanceof DragEvent) {
                 DragEvent drag = (DragEvent) event;
-                drag.applyShieldInPlace((x, y, out, off) -> {
-                    shieldReuse.set(x, y);
-                    PointF s = shieldBlackRect(shieldReuse);
-                    out[off] = s.x;
-                    out[off + 1] = s.y;
+                drag.applyShieldInPlace(new AbstractCustomEvent.ShieldInPlace() {
+                    @Override
+                    public void apply(float x, float y, float[] out, int outOffset) {
+                        shieldReuse.set(x, y);
+                        PointF s = shieldBlackRect(shieldReuse);
+                        out[outOffset] = s.x;
+                        out[outOffset + 1] = s.y;
+                    }
                 });
             } else if (event instanceof PinchOrZoomEvent) {
                 PinchOrZoomEvent pinch = (PinchOrZoomEvent) event;
-                pinch.applyShieldInPlace((x, y, out, off) -> {
-                    shieldReuse.set(x, y);
-                    PointF s = shieldBlackRect(shieldReuse);
-                    out[off] = s.x;
-                    out[off + 1] = s.y;
+                pinch.applyShieldInPlace(new AbstractCustomEvent.ShieldInPlace() {
+                    @Override
+                    public void apply(float x, float y, float[] out, int outOffset) {
+                        shieldReuse.set(x, y);
+                        PointF s = shieldBlackRect(shieldReuse);
+                        out[outOffset] = s.x;
+                        out[outOffset + 1] = s.y;
+                    }
                 });
             }
             for (MonkeyEvent me : event.generateMonkeyEvents()) {

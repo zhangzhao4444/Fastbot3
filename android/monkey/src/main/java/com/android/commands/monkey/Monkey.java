@@ -886,6 +886,10 @@ public class Monkey {
             // original orientation.
             Logger.println("// Monkey is over!");
             new MonkeyRotationEvent(Surface.ROTATION_0, false).injectEvent(mWm, mAm, mVerbose);
+            // Persist reuse model on normal/abnormal end (Agent destructor is not run; process may stay alive).
+            if (mEventSource instanceof MonkeySourceApeNative || mEventSource instanceof MonkeySourceApeU2) {
+                AiClient.saveReuseModel();
+            }
         }
 
         if (this.mEventSource instanceof MonkeySourceRandom) {

@@ -149,6 +149,9 @@ namespace fastbotx {
          */
         void saveReuseModel(const std::string &modelFilepath);
 
+        /// Save reuse model to current path (for JNI when test ends normally).
+        void saveReuseModelNow();
+
         /**
          * @brief Background thread function for periodic model saving
          * 
@@ -447,6 +450,15 @@ namespace fastbotx {
          * @return true if in reuse model, false otherwise
          */
         bool isActionInReuseModel(uintptr_t actionHash) const;
+
+        /// Whether to enable advanced reuse-based decision tuning (loop avoidance, coverage bias).
+        static bool isReuseDecisionTuningEnabled();
+
+        /// Compute how strongly this action tends to stay within the current activity / small loop.
+        double computeLoopBias(uint64_t actionHash, const stringPtr &currentActivity) const;
+
+        /// Compute a simple coverage diversity score based on the number of distinct target activities.
+        double computeCoverageDiversity(uint64_t actionHash) const;
 
         /// Clear in-memory reuse model and Q-value tables when loading from disk fails or model is invalid.
         void clearReuseModelOnLoadFailure();

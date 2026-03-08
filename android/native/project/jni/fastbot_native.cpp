@@ -351,6 +351,20 @@ jstring JNICALL Java_com_bytedance_fastbot_AiClient_getCoverageJsonNative(JNIEnv
     return env->NewStringUTF(json.c_str());
 }
 
+// Save reuse model when test ends normally (Agent destructor is not called because _fastbot_model is static).
+void JNICALL Java_com_bytedance_fastbot_AiClient_saveReuseModelNative(JNIEnv *, jobject) {
+    if (nullptr == _fastbot_model) return;
+    auto agent = _fastbot_model->getAgent("");
+    if (!agent) return;
+    if (auto sarsa = std::dynamic_pointer_cast<fastbotx::SarsaAgent>(agent)) {
+        sarsa->saveReuseModelNow();
+        BLOG("SarsaAgent: saveReuseModelNow() called on test end");
+    } else if (auto doubleSarsa = std::dynamic_pointer_cast<fastbotx::DoubleSarsaAgent>(agent)) {
+        doubleSarsa->saveReuseModelNow();
+        BLOG("Double SARSA: saveReuseModelNow() called on test end");
+    }
+}
+
 // Fuzzing: get next fuzz action JSON from C++ (performance §3.3)
 jstring JNICALL Java_com_bytedance_fastbot_AiClient_getNextFuzzActionNative(JNIEnv *env, jobject,
                                                                             jint displayWidth,

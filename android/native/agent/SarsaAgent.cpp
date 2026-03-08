@@ -9,6 +9,7 @@
 #define fastbotx_SarsaAgent_CPP_
 
 #include "SarsaAgent.h"
+#include "ReuseDecisionTuning.h"
 #include "Model.h"
 #include "ModelStorageConstants.h"
 #include "ContentAwareInputProvider.h"
@@ -22,6 +23,7 @@
 #include <thread>
 #include <chrono>
 #include <cinttypes>
+#include <cstdlib>
 
 namespace fastbotx {
 
@@ -73,6 +75,11 @@ namespace fastbotx {
     void SarsaAgent::moveForward(StatePtr nextState) {
         AbstractAgent::moveForward(nextState);
         _stepCount++;
+    }
+
+    bool SarsaAgent::isReuseDecisionTuningEnabled() {
+        auto pref = Preference::inst();
+        return pref && pref->isReuseDecisionTuningEnabled();
     }
 
     std::string SarsaAgent::getInputTextForAction(const StatePtr &state, const ActionPtr &action) const {
@@ -128,7 +135,18 @@ namespace fastbotx {
                     if (std::abs(reuseValue - 0.0) < 0.0001) {
                         reuseValue = 1.0;
                     }
-                    reward += (reuseValue / std::sqrt(lastSelectedAct->getVisitedCount() + 1.0));
+
+                    if (isReuseDecisionTuningEnabled()) {
+                        stringPtr curActivity = this->_newState->getActivityString();
+                        uint64_t lastHash = static_cast<uint64_t>(lastSelectedAct->hash());
+                        double loopBias = this->computeLoopBias(lastHash, curActivity);
+                        double diversity = this->computeCoverageDiversity(lastHash);
+                        double reusePrior = ReuseDecisionTuning::computeReusePrior(reuseValue, loopBias, diversity);
+                        reward += ReuseDecisionTuning::kBetaReuse * (reusePrior /
+                                               std::sqrt(lastSelectedAct->getVisitedCount() + 1.0));
+                    } else {
+                        reward += (reuseValue / std::sqrt(lastSelectedAct->getVisitedCount() + 1.0));
+                    }
                 }
             }
 
@@ -187,6 +205,20 @@ namespace fastbotx {
             }
         }
         return value;
+    }
+
+    double SarsaAgent::computeLoopBias(uint64_t actionHash, const stringPtr &currentActivity) const {
+        std::lock_guard<std::mutex> lock(this->_reuseModelLock);
+        auto it = this->_reuseModel.find(actionHash);
+        if (it == this->_reuseModel.end()) return 0.0;
+        return ReuseDecisionTuning::computeLoopBiasFromEntry(it->second, currentActivity);
+    }
+
+    double SarsaAgent::computeCoverageDiversity(uint64_t actionHash) const {
+        std::lock_guard<std::mutex> lock(this->_reuseModelLock);
+        auto it = this->_reuseModel.find(actionHash);
+        if (it == this->_reuseModel.end()) return 0.0;
+        return ReuseDecisionTuning::computeCoverageDiversityFromEntry(it->second);
     }
 
     double SarsaAgent::getStateActionValue(const StatePtr &state,
@@ -583,21 +615,23 @@ namespace fastbotx {
             return;
         }
 
-        // Build a fresh model map off-lock, then swap in under mutex.
+        // Build a fresh model map off-lock, then swap in under mutex. Merge by activity name
+        // so duplicate (hash, activity) rows in file sum to one entry (fixes duplicate keys from stringPtr).
         ReuseEntryIntMap newModel;
         for (flatbuffers::uoffset_t i = 0; i < modelDataPtr->size(); ++i) {
             auto modelEntry = modelDataPtr->Get(i);
             uint64_t actionHash = modelEntry->action();
             auto activityEntries = modelEntry->targets();
-            ReuseEntryM entryMap;
+            std::unordered_map<std::string, int> mergedByName;
             for (flatbuffers::uoffset_t j = 0; j < activityEntries->size(); ++j) {
                 auto targetEntry = activityEntries->Get(j);
-                BDLOG("SarsaAgent: load model hash: %" PRIu64 " %s %d",
-                      actionHash,
-                      targetEntry->activity()->str().c_str(),
-                      static_cast<int>(targetEntry->times()));
-                entryMap.emplace(std::make_shared<std::string>(targetEntry->activity()->str()),
-                                 static_cast<int>(targetEntry->times()));
+                std::string actStr = targetEntry->activity()->str();
+                mergedByName[actStr] += static_cast<int>(targetEntry->times());
+            }
+            ReuseEntryM entryMap;
+            for (const auto &kv : mergedByName) {
+                entryMap.emplace(std::make_shared<std::string>(kv.first), kv.second);
+                BDLOG("SarsaAgent: load model hash: %" PRIu64 " %s %d", actionHash, kv.first.c_str(), kv.second);
             }
             if (!entryMap.empty()) {
                 newModel.emplace(actionHash, std::move(entryMap));
@@ -648,15 +682,20 @@ namespace fastbotx {
             }
         }
 
+        // Merge by activity name so we write one row per activity (same string under different stringPtrs are merged).
         for (const auto &iter : snapshot) {
             uint64_t actionHash = iter.first;
             const ReuseEntryM &actMap = iter.second;
-            std::vector<flatbuffers::Offset<fastbotx::ActivityTimes>> targets;
-            targets.reserve(actMap.size());
+            std::unordered_map<std::string, int> byName;
             for (const auto &entry : actMap) {
+                byName[*(entry.first)] += entry.second;
+            }
+            std::vector<flatbuffers::Offset<fastbotx::ActivityTimes>> targets;
+            targets.reserve(byName.size());
+            for (const auto &kv : byName) {
                 auto actTimes = CreateActivityTimes(builder,
-                                                    builder.CreateString(*(entry.first)),
-                                                    entry.second);
+                                                    builder.CreateString(kv.first),
+                                                    kv.second);
                 targets.push_back(actTimes);
             }
             auto reuseEntry = CreateReuseEntry(builder,
@@ -705,8 +744,17 @@ namespace fastbotx {
         BLOG("SarsaAgent: Model saved successfully to: %s (entries=%zu)", finalPath.c_str(), snapshot.size());
     }
 
+    void SarsaAgent::saveReuseModelNow() {
+        if (!_modelSavePath.empty()) {
+            saveReuseModel(_modelSavePath);
+        }
+    }
+
     void SarsaAgent::threadModelStorage(const std::weak_ptr<SarsaAgent> &agent) {
         int saveIntervalMs = 1000 * 60 * 10; // 10 minutes
+        // Sleep one full interval before first save, so we do not overwrite a good
+        // on-disk model with an empty/small snapshot from the first few seconds.
+        std::this_thread::sleep_for(std::chrono::milliseconds(saveIntervalMs));
         while (true) {
             auto locked = agent.lock();
             if (!locked) {

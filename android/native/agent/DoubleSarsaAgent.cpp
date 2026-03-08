@@ -6,6 +6,7 @@
 #define fastbotx_DoubleSarsaAgent_CPP_
 
 #include "DoubleSarsaAgent.h"
+#include "ReuseDecisionTuning.h"
 #include "Model.h"
 #include <cmath>
 #include "ActivityNameAction.h"
@@ -22,6 +23,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cinttypes>
+#include <cstdlib>
 
 namespace fastbotx {
 
@@ -48,6 +50,11 @@ namespace fastbotx {
              DoubleSarsaRLConstants::DefaultEpsilon,
              DoubleSarsaRLConstants::DefaultGamma,
              DoubleSarsaRLConstants::NStep);
+    }
+
+    bool DoubleSarsaAgent::isReuseDecisionTuningEnabled() {
+        auto pref = Preference::inst();
+        return pref && pref->isReuseDecisionTuningEnabled();
     }
 
     /**
@@ -171,26 +178,36 @@ namespace fastbotx {
             // Get latest executed action (last in action history)
             if (auto lastSelectedAction = std::dynamic_pointer_cast<ActivityStateAction>(
                     this->_previousActions.back())) {
-                
+
                 // Compute probability that action can reach unvisited activities
                 double probValue = this->probabilityOfVisitingNewActivities(lastSelectedAction,
-                                                                       visitedActivities);
-                rewardValue = probValue;
-                
-                BDLOG("Double SARSA: Reward computation - action=%s, probOfNewActivities=%.4f, visitedCount=%d", 
-                      lastSelectedAction->toString().c_str(), probValue, lastSelectedAction->getVisitedCount());
-                
-                // If action not in reuse model (new action), directly give reward
-                if (std::abs(rewardValue - 0.0) < DoubleSarsaRLConstants::RewardEpsilon) {
-                    rewardValue = DoubleSarsaRLConstants::NewActionReward;
-                    BDLOG("Double SARSA: Action not in reuse model, using NewActionReward=%.4f", rewardValue);
+                                                                            visitedActivities);
+                if (std::abs(probValue - 0.0) < DoubleSarsaRLConstants::RewardEpsilon) {
+                    probValue = DoubleSarsaRLConstants::NewActionReward;
+                    BDLOG("Double SARSA: Action not in reuse model, using NewActionReward=%.4f", probValue);
                 }
-                
-                // Normalize: divide by square root of visit count
-                double normalizedReward = rewardValue / sqrt(lastSelectedAction->getVisitedCount() + 1.0);
-                BDLOG("Double SARSA: Normalized reward (action): %.4f / sqrt(%d+1) = %.4f", 
-                      rewardValue, lastSelectedAction->getVisitedCount(), normalizedReward);
-                rewardValue = normalizedReward;
+
+                if (isReuseDecisionTuningEnabled()) {
+                    stringPtr curActivity = this->_newState->getActivityString();
+                    uint64_t lastHash = static_cast<uint64_t>(lastSelectedAction->hash());
+                    double loopBias = this->computeLoopBias(lastHash, curActivity);
+                    double diversity = this->computeCoverageDiversity(lastHash);
+                    double reusePrior = ReuseDecisionTuning::computeReusePrior(probValue, loopBias, diversity);
+                    double normalizedReward = reusePrior / std::sqrt(lastSelectedAction->getVisitedCount() + 1.0);
+                    BDLOG("Double SARSA: Normalized reuse reward (action): reusePrior=%.4f / sqrt(%d+1) = %.4f",
+                          reusePrior, lastSelectedAction->getVisitedCount(), normalizedReward);
+                    rewardValue = normalizedReward;
+                } else {
+                    rewardValue = probValue;
+                    BDLOG("Double SARSA: Reward computation - action=%s, probOfNewActivities=%.4f, visitedCount=%d",
+                          lastSelectedAction->toString().c_str(), probValue, lastSelectedAction->getVisitedCount());
+
+                    // Normalize: divide by square root of visit count
+                    double normalizedReward = rewardValue / std::sqrt(lastSelectedAction->getVisitedCount() + 1.0);
+                    BDLOG("Double SARSA: Normalized reward (action): %.4f / sqrt(%d+1) = %.4f",
+                          rewardValue, lastSelectedAction->getVisitedCount(), normalizedReward);
+                    rewardValue = normalizedReward;
+                }
             }
             
             // Add state expectation value (normalized)
@@ -568,6 +585,20 @@ namespace fastbotx {
         }
         
         return value;
+    }
+
+    double DoubleSarsaAgent::computeLoopBias(uint64_t actionHash, const stringPtr &currentActivity) const {
+        std::lock_guard<std::mutex> reuseGuard(this->_reuseModelLock);
+        auto it = this->_reuseModel.find(actionHash);
+        if (it == this->_reuseModel.end()) return 0.0;
+        return ReuseDecisionTuning::computeLoopBiasFromEntry(it->second, currentActivity);
+    }
+
+    double DoubleSarsaAgent::computeCoverageDiversity(uint64_t actionHash) const {
+        std::lock_guard<std::mutex> reuseGuard(this->_reuseModelLock);
+        auto it = this->_reuseModel.find(actionHash);
+        if (it == this->_reuseModel.end()) return 0.0;
+        return ReuseDecisionTuning::computeCoverageDiversityFromEntry(it->second);
     }
 
     /**
@@ -1095,29 +1126,27 @@ namespace fastbotx {
             return;
         }
         
-        // Iterate through all reuse entries, load to memory
+        // Iterate through all reuse entries, load to memory. Merge by activity name so
+        // duplicate (hash, activity) rows in file sum to one entry (fixes duplicate keys from stringPtr).
         for (flatbuffers::uoffset_t entryIndex = 0; entryIndex < reusedModelDataPtr->size(); entryIndex++) {
             auto reuseEntryInReuseModel = reusedModelDataPtr->Get(entryIndex);
             uint64_t actionHash = reuseEntryInReuseModel->action();
             auto activityEntry = reuseEntryInReuseModel->targets();
             
-            // Build activity mapping
-            ReuseEntryM entryPtr;
+            std::unordered_map<std::string, int> mergedByName;
             for (flatbuffers::uoffset_t targetIndex = 0; targetIndex < activityEntry->size(); targetIndex++) {
                 auto targetEntry = activityEntry->Get(targetIndex);
-                BDLOG("Double SARSA: load model hash: %" PRIu64 " %s %d", actionHash,
-                      targetEntry->activity()->str().c_str(), static_cast<int>(targetEntry->times()));
-                
-                entryPtr.emplace(
-                        std::make_shared<std::string>(targetEntry->activity()->str()),
-                        static_cast<int>(targetEntry->times()));
+                std::string actStr = targetEntry->activity()->str();
+                mergedByName[actStr] += static_cast<int>(targetEntry->times());
             }
-            
-            // If entry not empty, add to reuse model
+            ReuseEntryM entryPtr;
+            for (const auto &kv : mergedByName) {
+                entryPtr.emplace(std::make_shared<std::string>(kv.first), kv.second);
+                BDLOG("Double SARSA: load model hash: %" PRIu64 " %s %d", actionHash, kv.first.c_str(), kv.second);
+            }
             if (!entryPtr.empty()) {
                 std::lock_guard<std::mutex> reuseGuard(this->_reuseModelLock);
                 this->_reuseModel.emplace(actionHash, entryPtr);
-                // Note: Q-values start from 0, not loaded from file
             }
         }
         
@@ -1169,21 +1198,24 @@ namespace fastbotx {
             }
         }
 
-        // Iterate through decayed snapshot, build FlatBuffers data structure
+        // Iterate through decayed snapshot, build FlatBuffers. Merge by activity name so
+        // we write one row per activity (same string under different stringPtrs are merged).
         for (const auto &actionIterator : snapshot) {
             uint64_t actionHash = actionIterator.first;
             const ReuseEntryM &activityCountEntryMap = actionIterator.second;
 
-            // FlatBuffers needs vector instead of map
-            std::vector<flatbuffers::Offset<fastbotx::ActivityTimes>> activityCountEntryVector;
-
+            std::unordered_map<std::string, int> byName;
             for (const auto &activityCountEntry : activityCountEntryMap) {
                 const std::string &actName = *(activityCountEntry.first);
-                size_t actLen = std::min(actName.size(), ModelStorageConstants::MaxActivityNameLength);
+                byName[actName] += activityCountEntry.second;
+            }
+            std::vector<flatbuffers::Offset<fastbotx::ActivityTimes>> activityCountEntryVector;
+            for (const auto &kv : byName) {
+                size_t actLen = std::min(kv.first.size(), ModelStorageConstants::MaxActivityNameLength);
                 auto sentryActT = CreateActivityTimes(
                         builder,
-                        builder.CreateString(actName.c_str(), actLen),
-                        activityCountEntry.second);
+                        builder.CreateString(kv.first.c_str(), actLen),
+                        kv.second);
                 activityCountEntryVector.push_back(sentryActT);
             }
 
@@ -1247,6 +1279,10 @@ namespace fastbotx {
         BDLOG("Double SARSA: Note - Q-values (Q1 and Q2) are not saved to file, only reuse model is persisted");
     }
 
+    void DoubleSarsaAgent::saveReuseModelNow() {
+        saveReuseModel(this->_modelSavePath);
+    }
+
     /**
      * @brief Background thread function for periodic model saving
      * 
@@ -1264,6 +1300,10 @@ namespace fastbotx {
     void DoubleSarsaAgent::threadModelStorage(const std::weak_ptr<DoubleSarsaAgent> &agent) {
         constexpr int saveInterval = DoubleSarsaRLConstants::ModelSaveIntervalMs;  // 10 minutes
         constexpr auto interval = std::chrono::milliseconds(saveInterval);
+        
+        // Sleep one full interval before first save, so we do not overwrite a good
+        // on-disk model with an empty/small snapshot from the first few seconds.
+        std::this_thread::sleep_for(interval);
         
         // Loop to save until Agent is destructed (weak_ptr becomes invalid)
         while (true) {

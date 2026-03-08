@@ -31,7 +31,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.function.Consumer;
 
 /**
  * @author Zhao Zhang
@@ -135,12 +134,17 @@ public class CustomEventFuzzer {
         double getRate();
     }
 
+    /** Lightweight callback interface for generating events (avoid Java8 lambdas/method refs). */
+    private interface EventGenerator {
+        void generate(List<CustomEvent> events);
+    }
+
     /** Table-driven fuzzer: rate + generator. Weights are from Config; add same fuzzer multiple times to increase weight. */
     private static final class ConfigurableFuzzer implements EventFuzzer {
         private final double rate;
-        private final Consumer<List<CustomEvent>> generator;
+        private final EventGenerator generator;
 
-        ConfigurableFuzzer(double rate, Consumer<List<CustomEvent>> generator) {
+        ConfigurableFuzzer(double rate, EventGenerator generator) {
             this.rate = rate;
             this.generator = generator;
         }
@@ -148,7 +152,7 @@ public class CustomEventFuzzer {
         @Override
         public void genEvent(List<CustomEvent> events, boolean enableRate) {
             if (!enableRate || RandomHelper.nextFloat() < rate) {
-                generator.accept(events);
+                generator.generate(events);
             }
         }
 
@@ -170,19 +174,47 @@ public class CustomEventFuzzer {
     private static void initEventFuzzers() {
         if (eventFuzzers != null) return;
         eventFuzzers = new ArrayList<EventFuzzer>();
-        eventFuzzers.add(new ConfigurableFuzzer(Config.doRotationFuzzing, CustomEventFuzzer::generateRotationEvent));
-        eventFuzzers.add(new ConfigurableFuzzer(Config.doAppSwitchFuzzing, CustomEventFuzzer::generateAppSwitchEvent));
-        eventFuzzers.add(new ConfigurableFuzzer(Config.doTrackballFuzzing, CustomEventFuzzer::generateTrackballEvent));
-        eventFuzzers.add(new ConfigurableFuzzer(Config.doNavKeyFuzzing, CustomEventFuzzer::generateFuzzingNavKeyEvent));
-        eventFuzzers.add(new ConfigurableFuzzer(Config.doNavKeyFuzzing, CustomEventFuzzer::generateFuzzingMajorNavKeyEvent));
-        eventFuzzers.add(new ConfigurableFuzzer(Config.doKeyCodeFuzzing, CustomEventFuzzer::generateKeyCodeEvent));
-        eventFuzzers.add(new ConfigurableFuzzer(Config.doSystemKeyFuzzing, CustomEventFuzzer::generateFuzzingSysKeyEvent));
-        eventFuzzers.add(new ConfigurableFuzzer(Config.doDragFuzzing, CustomEventFuzzer::generateDragEvent));
-        eventFuzzers.add(new ConfigurableFuzzer(Config.doPinchZoomFuzzing, CustomEventFuzzer::generatePinchOrZoomEvent));
-        eventFuzzers.add(new ConfigurableFuzzer(Config.doMutationWifiFuzzing, CustomEventFuzzer::generateWifiEvent));
-        eventFuzzers.add(new ConfigurableFuzzer(Config.doMutationAirplaneFuzzing, CustomEventFuzzer::generateAirplaneEvent));
-        eventFuzzers.add(new ConfigurableFuzzer(Config.doMutationMutationAlwaysFinishActivitysFuzzing, CustomEventFuzzer::generateAlwaysFinishActivitiesEvent));
-        eventFuzzers.add(new ConfigurableFuzzer(Config.doClickFuzzing, events -> generateClickEvent(events, RandomHelper.nextInt(1000))));
+        eventFuzzers.add(new ConfigurableFuzzer(Config.doRotationFuzzing, new EventGenerator() {
+            @Override public void generate(List<CustomEvent> events) { generateRotationEvent(events); }
+        }));
+        eventFuzzers.add(new ConfigurableFuzzer(Config.doAppSwitchFuzzing, new EventGenerator() {
+            @Override public void generate(List<CustomEvent> events) { generateAppSwitchEvent(events); }
+        }));
+        eventFuzzers.add(new ConfigurableFuzzer(Config.doTrackballFuzzing, new EventGenerator() {
+            @Override public void generate(List<CustomEvent> events) { generateTrackballEvent(events); }
+        }));
+        eventFuzzers.add(new ConfigurableFuzzer(Config.doNavKeyFuzzing, new EventGenerator() {
+            @Override public void generate(List<CustomEvent> events) { generateFuzzingNavKeyEvent(events); }
+        }));
+        eventFuzzers.add(new ConfigurableFuzzer(Config.doNavKeyFuzzing, new EventGenerator() {
+            @Override public void generate(List<CustomEvent> events) { generateFuzzingMajorNavKeyEvent(events); }
+        }));
+        eventFuzzers.add(new ConfigurableFuzzer(Config.doKeyCodeFuzzing, new EventGenerator() {
+            @Override public void generate(List<CustomEvent> events) { generateKeyCodeEvent(events); }
+        }));
+        eventFuzzers.add(new ConfigurableFuzzer(Config.doSystemKeyFuzzing, new EventGenerator() {
+            @Override public void generate(List<CustomEvent> events) { generateFuzzingSysKeyEvent(events); }
+        }));
+        eventFuzzers.add(new ConfigurableFuzzer(Config.doDragFuzzing, new EventGenerator() {
+            @Override public void generate(List<CustomEvent> events) { generateDragEvent(events); }
+        }));
+        eventFuzzers.add(new ConfigurableFuzzer(Config.doPinchZoomFuzzing, new EventGenerator() {
+            @Override public void generate(List<CustomEvent> events) { generatePinchOrZoomEvent(events); }
+        }));
+        eventFuzzers.add(new ConfigurableFuzzer(Config.doMutationWifiFuzzing, new EventGenerator() {
+            @Override public void generate(List<CustomEvent> events) { generateWifiEvent(events); }
+        }));
+        eventFuzzers.add(new ConfigurableFuzzer(Config.doMutationAirplaneFuzzing, new EventGenerator() {
+            @Override public void generate(List<CustomEvent> events) { generateAirplaneEvent(events); }
+        }));
+        eventFuzzers.add(new ConfigurableFuzzer(Config.doMutationMutationAlwaysFinishActivitysFuzzing, new EventGenerator() {
+            @Override public void generate(List<CustomEvent> events) { generateAlwaysFinishActivitiesEvent(events); }
+        }));
+        eventFuzzers.add(new ConfigurableFuzzer(Config.doClickFuzzing, new EventGenerator() {
+            @Override public void generate(List<CustomEvent> events) {
+                generateClickEvent(events, RandomHelper.nextInt(1000));
+            }
+        }));
         int n = eventFuzzers.size();
         cumulativeRates = new double[n];
         double sum = 0.0;

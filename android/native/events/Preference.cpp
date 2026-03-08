@@ -1192,6 +1192,7 @@ namespace fastbotx {
 #define LlmModelSTR               "max.llm.model"
 #define LlmMaxTokensSTR           "max.llm.maxTokens"
 #define LlmTimeoutMsSTR           "max.llm.timeoutMs"
+#define ReuseDecisionTuningSTR    "max.reuse.decisionTuning"
 
     /**
      * @brief Load base configuration file
@@ -1340,6 +1341,8 @@ namespace fastbotx {
                 } catch (...) {
                     BLOGE("invalid max.llm.timeoutMs value: %s", value.c_str());
                 }
+            } else if (key == ReuseDecisionTuningSTR) {
+                this->_reuseDecisionTuning = (value == "true");
             }
         }
     }

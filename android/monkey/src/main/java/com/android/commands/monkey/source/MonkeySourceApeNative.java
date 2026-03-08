@@ -552,7 +552,13 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
         // If node is not null, build tree and recycle this resource.
         if (info!=null){
             // So when C++ triggers LLM request (doLlmHttpPostFromPrompt), we capture on demand — no per-step screenshot.
-            AiClient.setLlmScreenshotProvider(this::captureScreenshotForLlmRequest);
+            // Avoid Java 8 method refs for Android 5.1 compatibility.
+            AiClient.setLlmScreenshotProvider(new AiClient.LlmScreenshotProvider() {
+                @Override
+                public byte[] captureForLlm() {
+                    return captureScreenshotForLlmRequest();
+                }
+            });
             boolean useXmlOnly = "xml".equalsIgnoreCase(Config.treeDumpMode);
             if (useXmlOnly) {
                 // max.treeDumpMode=xml: skip binary, always dump XML (e.g. for perf comparison or compatibility).

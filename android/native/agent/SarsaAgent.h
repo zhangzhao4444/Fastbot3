@@ -61,6 +61,9 @@ namespace fastbotx {
         /// Save reuse model to FBM file.
         void saveReuseModel(const std::string &modelFilepath);
 
+        /// Save reuse model to current _modelSavePath (for JNI when test ends normally).
+        void saveReuseModelNow();
+
         /// Background thread: periodically save reuse model.
         static void threadModelStorage(const std::weak_ptr<SarsaAgent> &agent);
 
@@ -147,6 +150,15 @@ namespace fastbotx {
 
         /// Clear in-memory reuse model when loading from disk fails or model is invalid.
         void clearReuseModelOnLoadFailure();
+
+        /// Whether to enable advanced reuse-based decision tuning (loop avoidance, coverage bias).
+        static bool isReuseDecisionTuningEnabled();
+
+        /// Compute how strongly this action tends to stay within the current activity / small loop.
+        double computeLoopBias(uint64_t actionHash, const stringPtr &currentActivity) const;
+
+        /// Compute a simple coverage diversity score based on the number of distinct target activities.
+        double computeCoverageDiversity(uint64_t actionHash) const;
     };
 
     typedef std::shared_ptr<SarsaAgent> SarsaAgentPtr;
