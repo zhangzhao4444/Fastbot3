@@ -55,14 +55,18 @@ import com.android.commands.monkey.utils.AndroidVersions;
 import com.android.internal.statusbar.IStatusBarService;
 import com.android.internal.view.IInputMethodManager;
 
+import com.android.commands.monkey.utils.RandomHelper;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.StringReader;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -100,6 +104,13 @@ public class AndroidDevice {
     /** Package names of installed IMEs; populated by caller. Used to avoid targeting IME as app. */
     public static final Set<String> inputMethodPackages = new HashSet<>();
 
+    /** Deep link cache (Delm_survey.md §4.3.1): main package and per-package URIs from GET_RESOLVED_FILTER + queryIntentActivities. */
+    private static List<ComponentName> sMainApps = null;
+    private static String sDeepLinkMainPackage = null;
+    private static final Map<String, List<String>> sDeepLinkUrisByPackage = new HashMap<>();
+    private static final Set<String> sTriedDeepLinkUris = new HashSet<>();
+    private static final List<String> sReusableUntriedUris = new ArrayList<>();
+
     /** Permissions that failed to grant at least once; skipped on subsequent grant attempts. */
     private static final Set<String> blacklistPermissions = new HashSet<>();
 
@@ -127,7 +138,14 @@ public class AndroidDevice {
         iActivityManager = mAm;
         iWindowManager = mWm;
         iPackageManager = mPm;
-        packageManager = APIAdapter.getSystemContext().getPackageManager();
+        Context ctx = APIAdapter.getSystemContext();
+        if (ctx == null) {
+            throw new IllegalStateException("System context not available. Ensure running as system/shell.");
+        }
+        packageManager = ctx.getPackageManager();
+        if (packageManager == null) {
+            throw new IllegalStateException("PackageManager not available from system context.");
+        }
         // Non-startup services (IStatusBarService, IInputMethodManager, etc.) are lazy-loaded on first use.
     }
 
@@ -777,6 +795,84 @@ public class AndroidDevice {
         return 0;
     }
 
+    // ----- Deep link cache (lazy init on first use) -----
+
+    /** Registers main apps for deep link; cache is filled lazily when first needed. Call once (e.g. from MonkeySourceApeNative ctor). */
+    public static void setMainApps(List<ComponentName> mainApps) {
+        sMainApps = mainApps;
+        // [deep link] temporary log
+        if (mainApps == null || mainApps.isEmpty()) {
+            Logger.println("// [deep link] setMainApps: mainApps is null or empty");
+        } else {
+            StringBuilder sb = new StringBuilder("// [deep link] setMainApps: count=").append(mainApps.size());
+            for (ComponentName cn : mainApps) {
+                if (cn != null) sb.append(" ").append(cn.getPackageName());
+            }
+            Logger.println(sb.toString());
+            // Eager init so schema extraction logs appear at startup (temp debug)
+            getDeepLinkMainPackage();
+        }
+    }
+
+    private static void ensureDeepLinkCacheInited() {
+        if (sDeepLinkMainPackage != null) {
+            return;
+        }
+        if (sMainApps == null || sMainApps.isEmpty()) {
+            Logger.println("// [deep link] ensureDeepLinkCacheInited: skip, sMainApps null or empty");
+            return;
+        }
+        if (packageManager == null) {
+            Logger.println("// [deep link] ensureDeepLinkCacheInited: skip, packageManager null");
+            return;
+        }
+        for (ComponentName cn : sMainApps) {
+            String pkg = cn.getPackageName();
+            if (pkg == null || pkg.isEmpty()) continue;
+            if (sDeepLinkMainPackage == null) sDeepLinkMainPackage = pkg;
+            List<String> uris = DeepLinkHelper.collectDeepLinkUris(packageManager, pkg);
+            Logger.println("// [deep link] ensureDeepLinkCacheInited: pkg=" + pkg + " uris=" + (uris == null ? 0 : uris.size()));
+            if (uris != null && !uris.isEmpty()) {
+                sDeepLinkUrisByPackage.put(pkg, uris);
+            }
+        }
+        Logger.println("// [deep link] ensureDeepLinkCacheInited: done mainPkg=" + sDeepLinkMainPackage + " mapSize=" + sDeepLinkUrisByPackage.size());
+        sMainApps = null;
+    }
+
+    /** Main app package used for deep link (被测 app); null if not initialized. */
+    public static String getDeepLinkMainPackage() {
+        ensureDeepLinkCacheInited();
+        return sDeepLinkMainPackage;
+    }
+
+    /** Picks one URI from cache (prefer untried), marks it tried, and returns it. Returns null if no URIs available. */
+    public static String pickNextDeepLinkUri() {
+        ensureDeepLinkCacheInited();
+        String pkg = sDeepLinkMainPackage;
+        if (pkg == null || pkg.isEmpty()) {
+            Logger.println("// [deep link] pickNextDeepLinkUri: null (mainPkg null or empty)");
+            return null;
+        }
+        List<String> cached = sDeepLinkUrisByPackage.get(pkg);
+        if (cached == null || cached.isEmpty()) {
+            Logger.println("// [deep link] pickNextDeepLinkUri: null (no cached uris for pkg=" + pkg + ")");
+            return null;
+        }
+        List<String> pickFrom;
+        if (sTriedDeepLinkUris.size() >= cached.size()) {
+            pickFrom = cached;
+        } else {
+            sReusableUntriedUris.clear();
+            for (String u : cached) {
+                if (!sTriedDeepLinkUris.contains(u)) sReusableUntriedUris.add(u);
+            }
+            pickFrom = sReusableUntriedUris.isEmpty() ? cached : sReusableUntriedUris;
+        }
+        String uri = pickFrom.get(RandomHelper.nextBetween(0, pickFrom.size() - 1));
+        sTriedDeepLinkUris.add(uri);
+        return uri;
+    }
 
     // ----- Text input (clipboard + key injection) -----
 

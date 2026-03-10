@@ -144,7 +144,7 @@ public class Config {
     /**
      * start mutation at startup
      */
-    public static final double startMutaion = Config.getDouble("max.startMutation", 0.3D);
+    public static final double startMutation = Config.getDouble("max.startMutation", 0.3D);
 
     /**
      * enable exec shell event, default disable execution shell per startup
@@ -257,7 +257,7 @@ public class Config {
         return configurations.setProperty(key, Double.toString(value));
     }
 
-    public static Object setIntger(String key, int value) {
+    public static Object setInteger(String key, int value) {
         return configurations.setProperty(key, Integer.toString(value));
     }
 

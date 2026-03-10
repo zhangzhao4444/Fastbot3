@@ -48,6 +48,10 @@ namespace fastbotx {
         return DefaultWidgetKeyMask;
     }
 
+    std::shared_ptr<LlmClient> Model::getLlmClient() const {
+        return _llmTaskAgent ? _llmTaskAgent->getLlmClient() : nullptr;
+    }
+
     void Model::setActivityKeyMask(const std::string &activity, WidgetKeyMask mask) {
         _activityKeyMask[activity] = mask;
     }
@@ -135,7 +139,7 @@ namespace fastbotx {
         this->_preference = Preference::inst();
         this->_netActionParam.netActionTaskid = 0;
 
-        // Initialize AutodevAgent with HTTP LLM client if LLM is enabled in config.
+        // Initialize LLMTaskAgent with HTTP LLM client if LLM is enabled in config.
         LlmRuntimeConfig llmCfg;
         if (this->_preference) {
             llmCfg = this->_preference->getLlmRuntimeConfig();
@@ -143,11 +147,11 @@ namespace fastbotx {
         std::shared_ptr<LlmClient> client = nullptr;
         if (llmCfg.enabled) {
             client = std::make_shared<HttpLlmClient>(llmCfg);
-            BLOG("AutodevAgent: HTTP LLM client initialized with model %s", llmCfg.model.c_str());
+            BLOG("LLMTaskAgent: HTTP LLM client initialized with model %s", llmCfg.model.c_str());
         } else {
-            BLOG("AutodevAgent: LLM is disabled in config");
+            BLOG("LLMTaskAgent: LLM is disabled in config");
         }
-        this->_autodevAgent = std::make_shared<AutodevAgent>(this->_preference, client);
+        this->_llmTaskAgent = std::make_shared<LLMTaskAgent>(this->_preference, client);
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
         this->_transitionLog.resize(MaxTransitionLogSize);
         BLOG("state abstraction: enabled (check interval=%d, batch every %d steps)",
@@ -313,8 +317,8 @@ namespace fastbotx {
         AbstractAgentPtr Model::getOrCreateAgent(const std::string &deviceID) {
         // Create a default agent if map is empty
         if (this->_deviceIDAgentMap.empty()) {
-            BLOG("%s", "use reuseAgent as the default agent");
-            this->addAgent(ModelConstants::DefaultDeviceID, AlgorithmType::Reuse);
+            BLOG("%s", "use DoubleSarsaAgent as the default agent");
+            this->addAgent(ModelConstants::DefaultDeviceID, AlgorithmType::DoubleSarsa);
         }
         
         // Use find() instead of [] to avoid creating unnecessary map entries
@@ -348,21 +352,15 @@ namespace fastbotx {
      * @param activityPtr Shared pointer to activity name string
      * @return Shared pointer to the created/existing state, or nullptr if element is null
      */
-    StatePtr Model::createAndAddState(const ElementPtr &element, const AbstractAgentPtr &agent,
-                                      const stringPtr &activityPtr) {
-        // Validate input
+    StatePtr Model::buildStateOnly(const ElementPtr &element, const AbstractAgentPtr &agent,
+                                   const stringPtr &activityPtr) {
         if (nullptr == element) {
             return nullptr;
         }
-        
-        // Create state according to the agent's algorithm type
-        // The state includes all possible actions based on widgets in the element
         std::string activityStr = activityPtr ? *activityPtr : "";
         WidgetKeyMask mask = getActivityKeyMask(activityStr);
         StatePtr state = StateFactory::createState(agent->getAlgorithmType(), activityPtr, element, mask);
-
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
-        // Update text stats from newly built state (before addState) for accurate "skip Text" check (§22)
         if (state && !activityStr.empty()) {
             const auto textMask = static_cast<WidgetKeyMask>(WidgetKeyAttr::Text);
             ActivityLastStateTextStats &st = _activityLastStateTextStats[activityStr];
@@ -375,14 +373,15 @@ namespace fastbotx {
             }
         }
 #endif
+        return state;
+    }
 
-        // Add state to graph (may return existing state if duplicate)
-        // The graph handles deduplication based on state hash
+    StatePtr Model::createAndAddState(const ElementPtr &element, const AbstractAgentPtr &agent,
+                                      const stringPtr &activityPtr) {
+        StatePtr state = buildStateOnly(element, agent, activityPtr);
+        if (!state) return nullptr;
         state = this->_graph->addState(state);
-
-        // Mark state as visited with current graph timestamp
         state->visit(this->_graph->getTimestamp());
-
         return state;
     }
 
@@ -442,11 +441,10 @@ namespace fastbotx {
             double endGeneratingActionTimestamp = currentStamp();
             actionCost = endGeneratingActionTimestamp - startGeneratingActionTimestamp;
             
-            // If this is a model action and state exists, mark it as visited and update agent
-            if (action->isModelAct() && state) {
+            // moveForward is now called at the start of the next getOperateOpt (before addState),
+            // so (fromState, actionTaken, nextState) is correct for AIG/updateKnowledge.
+            if (state && action->isModelAct()) {
                 action->visit(this->_graph->getTimestamp());
-                // Update agent's current state/action with new state/action
-                agent->moveForward(state);
             }
         }
         
@@ -547,13 +545,18 @@ namespace fastbotx {
         // Step 4: Get or create agent for this device (creates default if needed)
         AbstractAgentPtr agent = getOrCreateAgent(deviceID);
         
-        // Step 5: Create state from element and add to graph
-        // The graph handles deduplication if a similar state already exists
-        // currentStamp() returns ms; record build-state-only duration for log
+        // Step 5: Build state, notify agent of transition (moveForward) before adding to graph, then add state
+        // moveForward(currentState) must run before addState so agent still has previous _newState/_newAction
+        // for (fromState, actionTaken, nextState) → updateKnowledge / AIG edges (see FIND_NAVIGATE_PATH_CODE_REVIEW §7).
         double buildStateStartTimestamp = currentStamp();
-        StatePtr state = createAndAddState(element, agent, activityPtr);
+        StatePtr state = buildStateOnly(element, agent, activityPtr);
+        if (state) {
+            agent->moveForward(state);
+            state = this->_graph->addState(state);
+            state->visit(this->_graph->getTimestamp());
+        }
         double buildStateEndTimestamp = currentStamp();
-        bool fromLlm = (_autodevAgent && _autodevAgent->inSession());
+        bool fromLlm = (_llmTaskAgent && _llmTaskAgent->inSession());
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
         if (!fromLlm) {
             recordTransition(agent, state);
@@ -566,17 +569,17 @@ namespace fastbotx {
 #endif
         // Step 5b: Removed — image now stays in Java (setLastScreenshotForLlm + doLlmHttpPostFromPrompt).
         // Native no longer returns NOP when screenshotBytes is empty; Java always has the image when needed.
-        // Step 6: Optionally delegate to AutodevAgent before RL (pass pre-matched task from raw tree).
+        // Step 6: Optionally delegate to LLMTaskAgent before RL (pass pre-matched task from raw tree).
         ActionPtr llmAction = nullptr;
-        if (this->_autodevAgent) {
-            llmAction = this->_autodevAgent->selectNextAction(element, activity, deviceID, preMatchedLlmTask);
+        if (this->_llmTaskAgent) {
+            llmAction = this->_llmTaskAgent->selectNextAction(element, activity, deviceID, preMatchedLlmTask);
         }
 
         // Step 7: Select action (either LLM, custom, restart, or from agent)
         double actionCost = 0.0;
         ActionPtr action;
         if (llmAction) {
-            // When AutodevAgent returns an action, we bypass RL for this step.
+            // When LLMTaskAgent returns an action, we bypass RL for this step.
             action = llmAction;
         } else {
             action = selectAction(state, agent, customAction, actionCost);
@@ -586,13 +589,28 @@ namespace fastbotx {
         if (nullptr == action) {
             return DeviceOperateWrapper::OperateNop;
         }
-        
+
+        // Resolve merged widgets: when multiple concrete nodes share the same abstract widget,
+        // set action target to the next concrete node (visitCount % total) so each selection hits a different node (e.g. 特价→首页→秒送→新品).
+        if (state && action && action->requireTarget()) {
+            if (auto stateAction = std::dynamic_pointer_cast<ActivityStateAction>(action)) {
+                state->resolveAt(stateAction, _graph->getTimestamp());
+            }
+        }
+
         // Step 8: Convert action to operation object and apply patches
         OperatePtr opt = convertActionToOperate(action, state);
         if (llmAction) {
             opt->allowFuzzing = false;
         }
-        
+        // Optional: agent-provided LLM-generated input text (e.g. LLMExplorerAgent content-aware input)
+        if (agent) {
+            std::string agentInputText = agent->getInputTextForAction(state, action);
+            if (!agentInputText.empty()) {
+                opt->setText(agentInputText);
+            }
+        }
+
         // Record end time and log performance metrics (currentStamp returns ms, keep ms for log)
         double methodEndTimestamp = currentStamp();
         double buildStateCostMs = buildStateEndTimestamp - buildStateStartTimestamp;
@@ -757,6 +775,9 @@ namespace fastbotx {
     }
 
     void Model::runRefinementAndCoarseningIfScheduled() {
+        if (Preference::inst() && Preference::inst()->useStaticReuseAbstraction()) {
+            return;
+        }
         if (_stepCountSinceLastCheck < static_cast<size_t>(RefinementCheckInterval)) return;
         BLOG("state abstraction: batch at step %zu (interval=%d)", _stepCountSinceLastCheck, (int)RefinementCheckInterval);
         // Coarsen check for activities refined in a previous batch (oldStateToNewStates accumulated over last K steps)
@@ -814,6 +835,10 @@ namespace fastbotx {
                 BLOG("state abstraction: batch done refined=0 (all already finest or skipped)");
             }
         }
+        // Notify agents so they can clear hash-dependent caches (e.g. FrontierAgent _outEdges/path)
+        for (const auto &kv : _deviceIDAgentMap) {
+            if (kv.second) kv.second->onStateAbstractionChanged();
+        }
     }
 #endif
 
@@ -847,5 +872,6 @@ namespace fastbotx {
         this->_deviceIDAgentMap.clear();
     }
 
-}
-#endif //Model_CPP_
+}  // namespace fastbotx
+
+#endif  // Model_CPP_

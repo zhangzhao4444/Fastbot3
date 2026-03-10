@@ -39,15 +39,26 @@ public class RandomHelper {
             "yyyy.MM.dd HH:mm:ss",
     };
 
-    // Per-thread cache of date formatters to avoid repeated SimpleDateFormat allocations.
-    private static final ThreadLocal<SimpleDateFormat[]> DATE_FORMATTERS =
-            ThreadLocal.withInitial(() -> {
-                SimpleDateFormat[] arr = new SimpleDateFormat[DATE_PATTERNS.length];
-                for (int i = 0; i < DATE_PATTERNS.length; i++) {
-                    arr[i] = new SimpleDateFormat(DATE_PATTERNS[i]);
+    // Lazy-init date formatters (no ThreadLocal so Android 6/7 compatible). Shared array; SimpleDateFormat is not thread-safe.
+    private static SimpleDateFormat[] sDateFormatters;
+    private static final Object sDateFormattersLock = new Object();
+
+    private static SimpleDateFormat[] getDateFormatters() {
+        SimpleDateFormat[] arr = sDateFormatters;
+        if (arr == null) {
+            synchronized (sDateFormattersLock) {
+                arr = sDateFormatters;
+                if (arr == null) {
+                    arr = new SimpleDateFormat[DATE_PATTERNS.length];
+                    for (int i = 0; i < DATE_PATTERNS.length; i++) {
+                        arr[i] = new SimpleDateFormat(DATE_PATTERNS[i]);
+                    }
+                    sDateFormatters = arr;
                 }
-                return arr;
-            });
+            }
+        }
+        return arr;
+    }
 
     public static Random getRandom() {
         return ThreadLocalRandom.current();
@@ -85,7 +96,7 @@ public class RandomHelper {
         long timestamp = nextLong();
         int idx = nextInt(DATE_PATTERNS.length);
         Date date = new Date(timestamp);
-        return DATE_FORMATTERS.get()[idx].format(date);
+        return getDateFormatters()[idx].format(date);
     }
 
     public static String nextIntegerString(int maxLength) {

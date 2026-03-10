@@ -32,15 +32,31 @@ import com.android.commands.monkey.utils.Logger;
 
 public class MonkeySchemaEvent extends MonkeyEvent {
     private final String schema;
+    /** Optional target package for deep link (intent.setPackage + NEW_TASK). */
+    private final String packageName;
 
     public MonkeySchemaEvent(String schema) {
+        this(schema, null);
+    }
+
+    /**
+     * @param schema      URI string (e.g. "myapp://path").
+     * @param packageName Optional package to target; if non-null, intent will setPackage and NEW_TASK (for deep link).
+     */
+    public MonkeySchemaEvent(String schema, String packageName) {
         super(EVENT_TYPE_SCHEMA);
         this.schema = schema;
+        this.packageName = (packageName != null && !packageName.isEmpty()) ? packageName : null;
     }
 
     private Intent getIntent() {
         Uri uri = Uri.parse(schema);
-        return new Intent(Intent.ACTION_VIEW, uri);
+        Intent intent = new Intent(Intent.ACTION_VIEW, uri);
+        if (packageName != null) {
+            intent.setPackage(packageName);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        }
+        return intent;
     }
 
     @Override
@@ -51,6 +67,12 @@ public class MonkeySchemaEvent extends MonkeyEvent {
         if ("".equals(schema))
             return MonkeyEvent.INJECT_FAIL;
 
-        return AndroidDevice.startUri(getIntent());
+        int result = AndroidDevice.startUri(getIntent());
+        if (result == 1) {
+            Logger.println(":schema ok, uri=" + schema);
+        } else {
+            Logger.println(":schema fail, uri=" + schema);
+        }
+        return result;
     }
 }

@@ -63,6 +63,7 @@ import com.android.commands.monkey.events.base.MonkeyTouchEvent;
 import com.android.commands.monkey.events.base.mutation.MutationAirplaneEvent;
 import com.android.commands.monkey.events.base.mutation.MutationAlwaysFinishActivityEvent;
 import com.android.commands.monkey.events.base.mutation.MutationWifiEvent;
+import com.android.commands.monkey.events.customize.AbstractCustomEvent;
 import com.android.commands.monkey.events.customize.ClickEvent;
 import com.android.commands.monkey.events.customize.DragEvent;
 import com.android.commands.monkey.events.customize.PinchOrZoomEvent;
@@ -71,6 +72,7 @@ import com.android.commands.monkey.fastbot.client.ActionType;
 import com.android.commands.monkey.framework.AndroidDevice;
 import com.android.commands.monkey.provider.SchemaProvider;
 import com.android.commands.monkey.provider.ShellProvider;
+import com.bytedance.fastbot.AiClient;
 import com.android.commands.monkey.utils.Config;
 import com.android.commands.monkey.utils.Logger;
 import com.android.commands.monkey.utils.MonkeyUtils;
@@ -248,8 +250,12 @@ public abstract class MonkeySourceApeBase {
         this.quickActivity = quickActivity;
     }
 
-    public void initReuseAgent() {
-        AiClient.InitAgent(AiClient.AlgorithmType.Reuse, this.packageName);
+    /**
+     * Initialize native agent with the given algorithm type.
+     * (DoubleSarsa for reuse-model agent, DFS/BFS etc. for exploration agents.)
+     */
+    public void initAgent(AiClient.AlgorithmType type) {
+        AiClient.InitAgent(type, this.packageName);
     }
 
     public File getOutputDir() {
@@ -603,6 +609,16 @@ public abstract class MonkeySourceApeBase {
         }
     }
 
+    /**
+     * Generate deep-link schema event(s) when action is DEEP_LINK.
+     * Base: no-op (returns false). Native overrides to collect URIs and add MonkeySchemaEvent(uri, pkg).
+     *
+     * @return true if at least one event was enqueued, false to allow fallback to FUZZ
+     */
+    protected boolean generateDeepLinkEvents() {
+        return false;
+    }
+
     protected void generateActivityScrollEvents() {
         if (startAfterDoScrollAction) {
             int i = startAfterDoScrollActionTimes;
@@ -638,6 +654,9 @@ public abstract class MonkeySourceApeBase {
                 break;
             case CLEAN_RESTART:
                 restartPackage(randomlyPickMainApp(), true, "start action(CLEAN_RESTART)");
+                break;
+            case DEEP_LINK:
+                generateDeepLinkEvents();
                 break;
             case NOP:
                 generateThrottleEvent(action.getThrottle());
@@ -691,19 +710,25 @@ public abstract class MonkeySourceApeBase {
                 click.setPoint(s.x, s.y);
             } else if (event instanceof DragEvent) {
                 DragEvent drag = (DragEvent) event;
-                drag.applyShieldInPlace((x, y, out, off) -> {
-                    shieldReuse.set(x, y);
-                    PointF s = shieldBlackRect(shieldReuse);
-                    out[off] = s.x;
-                    out[off + 1] = s.y;
+                drag.applyShieldInPlace(new AbstractCustomEvent.ShieldInPlace() {
+                    @Override
+                    public void apply(float x, float y, float[] out, int outOffset) {
+                        shieldReuse.set(x, y);
+                        PointF s = shieldBlackRect(shieldReuse);
+                        out[outOffset] = s.x;
+                        out[outOffset + 1] = s.y;
+                    }
                 });
             } else if (event instanceof PinchOrZoomEvent) {
                 PinchOrZoomEvent pinch = (PinchOrZoomEvent) event;
-                pinch.applyShieldInPlace((x, y, out, off) -> {
-                    shieldReuse.set(x, y);
-                    PointF s = shieldBlackRect(shieldReuse);
-                    out[off] = s.x;
-                    out[off + 1] = s.y;
+                pinch.applyShieldInPlace(new AbstractCustomEvent.ShieldInPlace() {
+                    @Override
+                    public void apply(float x, float y, float[] out, int outOffset) {
+                        shieldReuse.set(x, y);
+                        PointF s = shieldBlackRect(shieldReuse);
+                        out[outOffset] = s.x;
+                        out[outOffset + 1] = s.y;
+                    }
                 });
             }
             for (MonkeyEvent me : event.generateMonkeyEvents()) {

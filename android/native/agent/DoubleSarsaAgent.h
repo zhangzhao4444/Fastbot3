@@ -1,9 +1,7 @@
-/*
- * This code is licensed under the Fastbot license. You may obtain a copy of this license in the LICENSE.txt file in the root directory of this source tree.
- */
 /**
- * @authors Zhao Zhang, Zhengwei Lv, Jianqiang Guo, Yuhui Su
+ * @authors Zhao Zhang
  */
+ 
 #ifndef DoubleSarsaAgent_H_
 #define DoubleSarsaAgent_H_
 
@@ -11,7 +9,7 @@
 #include "State.h"
 #include "Action.h"
 #include <vector>
-#include <map>
+#include <unordered_map>
 #include <random>
 
 namespace fastbotx {
@@ -74,9 +72,9 @@ namespace fastbotx {
 
     // ========== Reuse Model Data Structure Type Definitions ==========
     /// Reuse entry mapping: Activity name -> visit count
-    typedef std::map<stringPtr, int> ReuseEntryM;
+    typedef std::unordered_map<stringPtr, int> ReuseEntryM;
     /// Reuse model mapping: action hash -> (Activity name -> visit count)
-    typedef std::map<uint64_t, ReuseEntryM> ReuseEntryIntMap;
+    typedef std::unordered_map<uint64_t, ReuseEntryM> ReuseEntryIntMap;
     /// Q-value mapping: action hash -> Q-value (for Q1)
     typedef std::map<uint64_t, double> ReuseEntryQValueMap;
     /// Q-value mapping: action hash -> Q-value (for Q2)
@@ -150,6 +148,9 @@ namespace fastbotx {
          * @param modelFilepath Model file path, uses _defaultModelSavePath if empty
          */
         void saveReuseModel(const std::string &modelFilepath);
+
+        /// Save reuse model to current path (for JNI when test ends normally).
+        void saveReuseModelNow();
 
         /**
          * @brief Background thread function for periodic model saving
@@ -449,6 +450,18 @@ namespace fastbotx {
          * @return true if in reuse model, false otherwise
          */
         bool isActionInReuseModel(uintptr_t actionHash) const;
+
+        /// Whether to enable advanced reuse-based decision tuning (loop avoidance, coverage bias).
+        static bool isReuseDecisionTuningEnabled();
+
+        /// Compute how strongly this action tends to stay within the current activity / small loop.
+        double computeLoopBias(uint64_t actionHash, const stringPtr &currentActivity) const;
+
+        /// Compute a simple coverage diversity score based on the number of distinct target activities.
+        double computeCoverageDiversity(uint64_t actionHash) const;
+
+        /// Clear in-memory reuse model and Q-value tables when loading from disk fails or model is invalid.
+        void clearReuseModelOnLoadFailure();
     };
 
     typedef std::shared_ptr<DoubleSarsaAgent> DoubleSarsaAgentPtr;

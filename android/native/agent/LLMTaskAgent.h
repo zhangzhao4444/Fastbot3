@@ -1,5 +1,5 @@
 /**
- * AutodevAgent: LLM-based GUI agent that can temporarily take over action selection
+ * LLMTaskAgent: LLM-based GUI agent that can temporarily take over action selection
  * for predefined tasks (e.g. login flows) based on checkpoints configured in
  * external files. The agent runs on the C++ side and always returns standard
  * ActionPtr objects that are later converted to Operate and executed by the
@@ -14,8 +14,8 @@
  * @authors Zhao Zhang
  */
 
-#ifndef FASTBOTX_AUTODEV_AGENT_H
-#define FASTBOTX_AUTODEV_AGENT_H
+#ifndef FASTBOTX_LLM_TASK_AGENT_H
+#define FASTBOTX_LLM_TASK_AGENT_H
 
 #include <memory>
 #include <string>
@@ -71,7 +71,7 @@ namespace fastbotx {
 
     /**
     /**
-     * AutodevAgent:
+     * LLMTaskAgent:
      *
      * - Maintains session state for currently running LLM tasks.
      * - At each step, optionally starts a new session (when checkpoint matches)
@@ -83,17 +83,20 @@ namespace fastbotx {
      * - It only returns ActionPtr, which Model later converts into OperatePtr
      *   via Model::convertActionToOperate() and sends to the Java layer.
      */
-    class AutodevAgent {
+    class LLMTaskAgent {
     public:
-        AutodevAgent(const PreferencePtr &preference, std::shared_ptr<LlmClient> llmClient);
+        LLMTaskAgent(const PreferencePtr &preference, std::shared_ptr<LlmClient> llmClient);
 
         /**
          * Replace the underlying LLM client at runtime.
-         * Passing nullptr effectively disables AutodevAgent.
+         * Passing nullptr effectively disables LLMTaskAgent.
          */
         void setLlmClient(std::shared_ptr<LlmClient> llmClient) {
             _llmClient = std::move(llmClient);
         }
+
+        /** Return the current LLM client (may be null). Used by other agents (e.g. LLMExplorerAgent). */
+        std::shared_ptr<LlmClient> getLlmClient() const { return _llmClient; }
 
         /**
          * Main entry point called by Model on every step.
@@ -111,7 +114,7 @@ namespace fastbotx {
                                    LlmTaskConfigPtr preMatchedLlmTask = nullptr);
 
         /**
-         * Whether AutodevAgent is currently inside a running task session.
+         * Whether LLMTaskAgent is currently inside a running task session.
          */
         bool inSession() const;
 
@@ -253,5 +256,5 @@ namespace fastbotx {
 
 } // namespace fastbotx
 
-#endif // FASTBOTX_AUTODEV_AGENT_H
+#endif // FASTBOTX_LLM_TASK_AGENT_H
 

@@ -345,7 +345,8 @@ namespace fastbotx {
      */
     Preference::Preference()
             : _randomInputText(false), _doInputFuzzing(true), _pruningValidTexts(false),
-              _skipAllActionsFromModel(false), _rootScreenSize(nullptr) {
+              _skipAllActionsFromModel(false), _useStaticReuseAbstraction(false),
+              _rootScreenSize(nullptr) {
         loadConfigs();
     }
 
@@ -1155,7 +1156,7 @@ namespace fastbotx {
             BLOGE("Failed to load xpath actions: %s", ex.what());
         }
         
-        // 5.1 LLM tasks (AutodevAgent tasks)
+        // 5.1 LLM tasks (LLMTaskAgent tasks)
         try {
             loadLlmTasks();
         } catch (const std::exception &ex) {
@@ -1178,15 +1179,20 @@ namespace fastbotx {
 #endif
     }
 
-#define MaxRandomPickSTR        "max.randomPickFromStringList"
-#define InputFuzzSTR            "max.doinputtextFuzzing"
-#define ListenMode              "max.listenMode"
-#define LlmEnabledSTR           "max.llm.enabled"
-#define LlmApiUrlSTR            "max.llm.apiUrl"
-#define LlmApiKeySTR            "max.llm.apiKey"
-#define LlmModelSTR             "max.llm.model"
-#define LlmMaxTokensSTR         "max.llm.maxTokens"
-#define LlmTimeoutMsSTR         "max.llm.timeoutMs"
+#define MaxRandomPickSTR          "max.randomPickFromStringList"
+#define InputFuzzSTR              "max.doinputtextFuzzing"
+#define ListenMode                "max.listenMode"
+#define StaticStateAbstractionSTR "max.staticStateAbstraction"
+#define LlmEnabledSTR             "max.llm.enabled"
+#define LlmKnowledgeSTR           "max.llm.knowledge"
+#define LlmWidgetPrioritySTR      "max.llm.widgetpriority"
+#define LlmContextAwareInputSTR   "max.llm.contextAwareInput"
+#define LlmApiUrlSTR              "max.llm.apiUrl"
+#define LlmApiKeySTR              "max.llm.apiKey"
+#define LlmModelSTR               "max.llm.model"
+#define LlmMaxTokensSTR           "max.llm.maxTokens"
+#define LlmTimeoutMsSTR           "max.llm.timeoutMs"
+#define ReuseDecisionTuningSTR    "max.reuse.decisionTuning"
 
     /**
      * @brief Load base configuration file
@@ -1279,8 +1285,26 @@ namespace fastbotx {
             } else if (key == ListenMode) {
                 BDLOG("set %s", ListenMode);
                 this->setListenMode(value == "true");
+            } else if (key == StaticStateAbstractionSTR) {
+                // max.staticStateAbstraction=true  -> legacy static reuse abstraction
+                // max.staticStateAbstraction=false -> dynamic abstraction
+                this->_useStaticReuseAbstraction = (value == "true");
+                if (this->_useStaticReuseAbstraction) {
+                    BLOG("state abstraction: static (legacy static reuse state abstraction enabled)");
+                } else {
+                    BLOG("state abstraction: dynamic (runtime refinement/coarsening enabled)");
+                }
             } else if (key == LlmEnabledSTR) {
                 this->_llmRuntimeConfig.enabled = (value == "true");
+            } else if (key == LlmKnowledgeSTR) {
+                this->_llmKnowledge = (value == "true");
+                if (this->_llmKnowledge) BDLOG("set %s (LLM knowledge_org enabled)", LlmKnowledgeSTR);
+            } else if (key == LlmWidgetPrioritySTR) {
+                this->_llmKnowledge = (value == "true");
+                if (this->_llmKnowledge) BDLOG("set %s (LLM widget_priority enabled)", LlmWidgetPrioritySTR);
+            } else if (key == LlmContextAwareInputSTR) {
+                this->_llmContextAwareInput = (value == "true");
+                if (this->_llmContextAwareInput) BDLOG("set %s (LLM content_aware_input enabled)", LlmContextAwareInputSTR);
             } else if (key == LlmApiUrlSTR) {
                 if (value.size() >= 4 && value[0] == '$' && value[1] == '{' && value.back() == '}') {
                     std::string varName = value.substr(2, value.size() - 3);
@@ -1317,6 +1341,8 @@ namespace fastbotx {
                 } catch (...) {
                     BLOGE("invalid max.llm.timeoutMs value: %s", value.c_str());
                 }
+            } else if (key == ReuseDecisionTuningSTR) {
+                this->_reuseDecisionTuning = (value == "true");
             }
         }
     }
@@ -1959,6 +1985,10 @@ namespace fastbotx {
         std::string taskKey = cfg->activity + "|" + cfg->checkpointXpathString;
         _llmTaskRunCount[taskKey]++;
         BLOG("LLM task session started: activity=%s checkpoint_xpath=%s (run %d, max_times %d)", cfg->activity.c_str(), cfg->checkpointXpathString.c_str(), _llmTaskRunCount[taskKey], cfg->maxTimes);
+    }
+
+    bool Preference::useStaticReuseAbstraction() const {
+        return _useStaticReuseAbstraction;
     }
 
 } // namespace fastbotx

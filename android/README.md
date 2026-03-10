@@ -19,17 +19,21 @@ We gratefully acknowledge Prof. Ting Su, the SSE Lab at East China Normal Univer
 
 ### Reuse model (FBM)
 
-* **Path**: On device, the reuse model file is stored at `/sdcard/fastbot3_{packagename}.fbm` (e.g. `/sdcard/fastbot3_com.example.app.fbm`).
-* **Loading**: If this file exists when Fastbot starts, it is loaded by default for the given package.
-* **Saving**: During execution, the model is written back periodically (e.g. every 10 minutes). You can delete or copy the file as needed.
+* **Path (dynamic abstraction)**: On device, the default reuse model file is stored at `/sdcard/fastbot_{packagename}.fbm` (e.g. `/sdcard/fastbot_com.example.app.fbm`).
+* **Path (static reuse abstraction)**: When `max.staticStateAbstraction=true` (in `/sdcard/max.config`), a separate static reuse model file is used: `/sdcard/fastbot_{packagename}.static.fbm`. This allows you to switch between dynamic and legacy static state abstraction without polluting each other's FBM.
+* **Loading**: If the corresponding file exists when Fastbot starts, it is loaded by default for the given package (dynamic vs static chosen by `max.staticStateAbstraction`).
+* **Saving**: During execution, the selected model file is written back periodically (e.g. every 10 minutes). You can delete or copy the file as needed.
 * **Security**: The loader verifies the buffer before deserializing; invalid or corrupted files are rejected.
 
 ### Changelog
 
+**update 2026.3**
+* **Static reuse state abstraction**: Added a runtime switch in `max.config` (`max.staticStateAbstraction=true|false`) to control how UI states are abstracted for RL/reuse. The default `false` mode keeps the existing per-activity widget-key refinement/coarsening (mask over `Clazz|ResourceID|OperateMask|ScrollType|Text|ContentDesc|Index`). When set to `true`, runtime refinement/coarsening is disabled and a **legacy-compatible hash** is used: each widget is a `RichWidget` whose hash is built from `(class + resource-id + supported actions + valid text/children text, with clickable-children masking)`, and each state hash is `hash(activityName) XOR combineHash(RichWidgets, withOrder)`. This matches the older `ReuseAgent` abstraction and uses a separate FBM file `/sdcard/fastbot_{pkg}.static.fbm` so that dynamic and static reuse models do not interfere with each other.
+
 **update 2026.2**
-* **LLM agent (AutodevAgent)**: Optional LLM-based custom events via `/sdcard/max.llm.tasks`: when the current screen matches a checkpoint (Activity + XPath), action selection can be handed to an LLM (e.g. for login or guided tasks). Supports optional Planner/Executor layering, first-step screenshot retry, session-scoped todo/scratchpad, and safe_mode/forbidden_texts. Configure LLM in `max.config` (e.g. `max.llm.enabled`, `max.llm.apiUrl`, `max.llm.model`). See [Configuration → LLM custom events](#llm-custom-events-maxllmtasks) and [AUTODEV_AGENT_LLM_TECHNICAL_ANALYSIS.md](./native/agent/AUTODEV_AGENT_LLM_TECHNICAL_ANALYSIS.md).
-* **Script-driven custom events (max.xpath.actions)**: Configurable action sequences via `/sdcard/max.xpath.actions` (e.g. fixed login flow by activity). Disabled by default when LLM-driven custom events (max.llm.tasks + url/apiKey) are configured.
-* **Unified avoidance rules (max.avoid.rules)**: A single config file `/sdcard/max.avoid.rules` replaces the former `max.widget.black` and `max.tree.pruning`. Use it to avoid or soften UI elements (e.g. logout, ads) via `action: "avoid"` (remove from tree + click shield) or `action: "modify"` (e.g. set `clickable: false`). See [Configuration → Unified avoidance rules](#unified-avoidance-rules-maxavoidrules).
+* **LLM agent (LLMTaskAgent)**: Optional LLM-based custom events via `/sdcard/max.llm.tasks`: when the current screen matches a checkpoint (Activity + XPath), action selection can be handed to an LLM (e.g. for login or guided tasks). Supports optional Planner/Executor layering, first-step screenshot retry, session-scoped todo/scratchpad, and safe_mode/forbidden_texts. Configure LLM in `max.config` (e.g. `max.llm.enabled`, `max.llm.apiUrl`, `max.llm.model`). See [Configuration → LLM custom events](#llm-custom-events-maxllmtasks) and [LLM_TASK_AGENT_LLM_TECHNICAL_ANALYSIS.md](./native/agent/LLM_TASK_AGENT_LLM_TECHNICAL_ANALYSIS.md). For a survey of recent LLM/VLM-based traversal testing SOTA and technical proposals, see [LLM_VLM_TRAVERSAL_TESTING_SOTA_AND_PROPOSAL.md](./native/agent/LLM_VLM_TRAVERSAL_TESTING_SOTA_AND_PROPOSAL.md).
+* **Curiosity agent (CuriosityAgent)**: Curiosity-driven exploration selectable via `--agent curiosity`; NGU-style novelty scoring (episode × global × stateFactor × successorFactor, cap L=5) with ε-greedy action selection. No Q-values or reuse model; optional cluster novelty (16-dim handcrafted or DNN 16→16→8 embedding + online K=32 clustering). Implementation: [CuriosityAgent.cpp](./native/agent/CuriosityAgent.cpp). See [CURIOSITY_ALGORITHM_EXPLANATION.md](./native/agent/CURIOSITY_ALGORITHM_EXPLANATION.md).
+
 
 **update 2026.1**
 * **Double SARSA**: Default agent is now **DoubleSarsaAgent**, implementing N-step Double SARSA with two Q-functions (Q1, Q2) to reduce overestimation bias and improve action selection stability (see [DOUBLE_SARSA_ALGORITHM_EXPLANATION.md](./native/agent/DOUBLE_SARSA_ALGORITHM_EXPLANATION.md)). Experiment results (Widget Coverage vs Steps) show that Double SARSA consistently outperforms SARSA in coverage and convergence:
@@ -39,6 +43,9 @@ We gratefully acknowledge Prof. Ting Su, the SSE Lab at East China Normal Univer
 * **Dynamic state abstraction**: State granularity is tuned at runtime—finer when the same action leads to different screens or too many choices, coarser when states are over-split (see [STATE_ABSTRACTION_TECHNICAL_ARCHIVE.md](./native/desc/STATE_ABSTRACTION_TECHNICAL_ARCHIVE.md)). Experiment results (Widget Coverage vs Steps) show that dynamic state abstraction consistently outperforms the baseline:
 
   <img src="./doc/dynamic_state.jpg" width="560" alt="Dynamic state abstraction vs old: Widget Coverage over Steps" />
+
+  * **Script-driven custom events (max.xpath.actions)**: Configurable action sequences via `/sdcard/max.xpath.actions` (e.g. fixed login flow by activity). Disabled by default when LLM-driven custom events (max.llm.tasks + url/apiKey) are configured.
+* **Unified avoidance rules (max.avoid.rules)**: A single config file `/sdcard/max.avoid.rules` replaces the former `max.widget.black` and `max.tree.pruning`. Use it to avoid or soften UI elements (e.g. logout, ads) via `action: "avoid"` (remove from tree + click shield) or `action: "modify"` (e.g. set `clickable: false`). See [Configuration → Unified avoidance rules](#unified-avoidance-rules-maxavoidrules).
 
 * **Performance & security**: FBM loader verifies buffer before deserialization; activity name length is capped when serializing; KeyCompareLessThan and related reuse-model code hardened for null-safety and format.
 * **XXH64**: Introduced xxHash 64-bit for fast state/action hashing in native layer.
@@ -176,7 +183,7 @@ adb -s <device_serial> shell CLASSPATH=/sdcard/monkeyq.jar:/sdcard/framework.jar
 |-----------|-------------|
 | `-s <device_serial>` | Device ID (required if multiple devices are connected; check with `adb devices`) |
 | `-p <package_name>` | App package under test (e.g. from `adb shell pm list packages`) |
-| `--agent reuseq` | Strategy: Double SARSA agent (recommended) |
+| `--agent <type>` | Strategy: **`sarsa`** — legacy SarsaAgent (single-Q SARSA + reuse model); **`reuseq`** or **`double-sarsa`** — Double SARSA (default, recommended); |
 | `--running-minutes <duration>` | Total test duration in minutes |
 | `--throttle <delay_ms>` | Delay between actions in milliseconds |
 
@@ -221,7 +228,7 @@ Fastbot supports **LLM-based custom events**: when the current screen matches a 
 | LLM switch, API URL, model, etc. | **`/sdcard/max.config`** | `key=value`, one per line |
 | Task list (checkpoints + descriptions) | **`/sdcard/max.llm.tasks`** | JSON array |
 
-* **LLM runtime**: Configure in **`/sdcard/max.config`**. Native reads it in `Preference::loadBaseConfig()`; if the file is missing or `max.llm.enabled=true` is not set, AutodevAgent will not call the LLM.
+* **LLM runtime**: Configure in **`/sdcard/max.config`**. Native reads it in `Preference::loadBaseConfig()`; if the file is missing or `max.llm.enabled=true` is not set, LLMTaskAgent will not call the LLM.
 * **Task definitions**: Configure in **`/sdcard/max.llm.tasks`**. See the JSON example below; push with: `adb push test/max.llm.tasks /sdcard/max.llm.tasks`.
 
 **LLM-related keys in max.config (example)**
@@ -235,6 +242,17 @@ max.llm.apiKey=${MAX_LLM_API_KEY}
 max.llm.model=gpt-4o-mini
 max.llm.maxTokens=512
 max.llm.timeoutMs=20000
+```
+
+**State abstraction & reuse mode keys in max.config (example)**
+
+```properties
+# Dynamic state abstraction (default): mask refined/coarsened at runtime, reuse model at /sdcard/fastbot_{pkg}.fbm
+max.staticStateAbstraction=false
+
+# Legacy static reuse abstraction (optional): fully-aligned with old ReuseAgent state hashing,
+# reuse model stored in /sdcard/fastbot_{pkg}.static.fbm
+max.staticStateAbstraction=true
 ```
 
 **Setting environment variables on the device**
@@ -251,6 +269,8 @@ Push a `max.config` with placeholders (`max.llm.apiUrl=${MAX_LLM_API_URL}` and `
      #!/system/bin/sh
      export CLASSPATH=/sdcard/monkeyq.jar:/sdcard/framework.jar:/sdcard/fastbot-thirdpart.jar
      export MAX_LLM_API_URL='https://your-llm-server.com/v1/chat/completions'
+     #export MAX_LLM_API_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+
      export MAX_LLM_API_KEY='your-api-key-here'
      export LLM_LOGIN_ACCOUNT='user@example.com'   # optional, for task placeholder
      export LLM_LOGIN_PASSWORD='secret'            # optional
@@ -312,7 +332,7 @@ Config template with placeholders: **`test/max.config`**; the native layer will 
 * **Example**: See `test/max.llm.tasks` in the repo for a sample. Push to device:  
   `adb push test/max.llm.tasks /sdcard/max.llm.tasks`
 
-**LLM agent flow (summary)**: `Model::getOperateOpt` builds state, then calls `AutodevAgent::selectNextAction(activity, element, screenshot)`. If the current page matches a task’s activity + checkpoint_xpath, that task session runs and the LLM (optionally Planner→Executor) produces the next action as `ActionPtr`; otherwise normal RL is used. Config: `Preference::loadBaseConfig()` reads `max.config` for `LlmRuntimeConfig`, and `Preference::loadLlmTasks()` reads `max.llm.tasks` for the task list. See [AUTODEV_AGENT_LLM_TECHNICAL_ANALYSIS.md](./native/agent/AUTODEV_AGENT_LLM_TECHNICAL_ANALYSIS.md).
+**LLM agent flow (summary)**: `Model::getOperateOpt` builds state, then calls `LLMTaskAgent::selectNextAction(activity, element, screenshot)`. If the current page matches a task’s activity + checkpoint_xpath, that task session runs and the LLM (optionally Planner→Executor) produces the next action as `ActionPtr`; otherwise normal RL is used. Config: `Preference::loadBaseConfig()` reads `max.config` for `LlmRuntimeConfig`, and `Preference::loadLlmTasks()` reads `max.llm.tasks` for the task list. See [LLM_TASK_AGENT_LLM_TECHNICAL_ANALYSIS.md](./native/agent/LLM_TASK_AGENT_LLM_TECHNICAL_ANALYSIS.md).
 
 #### Unified avoidance rules (max.avoid.rules)
 

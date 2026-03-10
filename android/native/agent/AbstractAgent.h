@@ -143,6 +143,24 @@ namespace fastbotx {
          */
         ActivityStateActionPtr getCurrentAction() const { return this->_currentAction; }
 
+        /**
+         * @brief Callback when state abstraction has changed (refine/coarsen batch finished).
+         * Used by FrontierAgent to clear edge cache and path so BFS uses only post-change hashes.
+         * Default: no-op.
+         */
+        virtual void onStateAbstractionChanged() {}
+
+        /**
+         * @brief Optional: return LLM-generated input text for an action (e.g. content-aware input).
+         * Used when the chosen action targets an editable widget; if non-empty, Model sets it on the Operate.
+         * Default: returns empty string. LLMExplorerAgent overrides to call LLM (paper: Content-aware Input Text Generator).
+         */
+        virtual std::string getInputTextForAction(const StatePtr &state, const ActionPtr &action) const {
+            (void) state;
+            (void) action;
+            return "";
+        }
+
     protected:
 
         /**

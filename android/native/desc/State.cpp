@@ -101,7 +101,7 @@ namespace fastbotx {
         StatePtr sharedPtr = std::shared_ptr<State>(new State(std::move(activityName)));
         sharedPtr->buildFromElement(nullptr, std::move(elem));
         
-        // Compute hash based on activity name
+        // Compute base hash from activity name
         // Performance optimization: Use fast string hash instead of std::hash
         uintptr_t activityHash;
         if (sharedPtr->_activity == nullptr || sharedPtr->_activity.get() == nullptr) {
@@ -138,9 +138,10 @@ namespace fastbotx {
                           });
             }
         }
-        
+
         // Combine activity hash with widget hash
-        activityHash ^= (combineHash<Widget>(sharedPtr->_widgets, STATE_WITH_WIDGET_ORDER) << 1);
+        activityHash ^=
+                (combineHash<Widget>(sharedPtr->_widgets, STATE_WITH_WIDGET_ORDER) << 1);
         sharedPtr->_hashcode = activityHash;
         
         // Build actions for all widgets

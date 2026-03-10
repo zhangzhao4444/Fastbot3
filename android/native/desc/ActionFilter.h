@@ -168,6 +168,8 @@ namespace fastbotx {
                 case ActionType::START:
                 case ActionType::RESTART:
                 case ActionType::CLEAN_RESTART:
+                case ActionType::FUZZ:
+                case ActionType::DEEP_LINK:
                 case ActionType::NOP:
                 case ActionType::ACTIVATE:
                 case ActionType::BACK:

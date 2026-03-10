@@ -82,7 +82,12 @@ public enum ActionType {
     /**
      * Used for generate shell event
      */
-    SHELL_EVENT;
+    SHELL_EVENT,
+    /**
+     * Try launch an unexplored activity via deep link (Delm-style escape when stuck or in tarpit).
+     * Java layer attempts am start with a deep-link URI; if none available, falls back to FUZZ.
+     */
+    DEEP_LINK;
     // Enum types above are the same with of cpp, so they should be identical!
     // Enum types below are out of the scope of the c++ native code.
 

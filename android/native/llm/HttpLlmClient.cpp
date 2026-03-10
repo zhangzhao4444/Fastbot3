@@ -363,6 +363,7 @@ namespace fastbotx {
                 BDLOGE("HttpLlmClient: assistant message content is empty");
                 return false;
             }
+            // Return only the content string; parsing (executor/planner vs knowledge_org/content_aware) is done by the caller (LLMTaskAgent or LLMExplorerAgent).
             outResponse = std::move(content);
             return true;
         } catch (const std::exception &ex) {

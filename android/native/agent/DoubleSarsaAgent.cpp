@@ -1,16 +1,16 @@
-/*
- * This code is licensed under the Fastbot license. You may obtain a copy of this license in the LICENSE.txt file in the root directory of this source tree.
- */
 /**
  * @authors Zhao Zhang
  */
+ 
 #ifndef fastbotx_DoubleSarsaAgent_CPP_
 #define fastbotx_DoubleSarsaAgent_CPP_
 
 #include "DoubleSarsaAgent.h"
+#include "ReuseDecisionTuning.h"
 #include "Model.h"
 #include <cmath>
 #include "ActivityNameAction.h"
+#include "ModelStorageConstants.h"
 #include "../storage/ReuseModel_generated.h"
 #include <iostream>
 #include <fstream>
@@ -23,18 +23,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cinttypes>
-
-namespace ModelStorageConstants {
-#ifdef __ANDROID__
-    constexpr const char* StoragePrefix = "/sdcard/fastbot_";
-#else
-    constexpr const char* StoragePrefix = "";
-#endif
-    constexpr const char* ModelFileExtension = ".fbm";
-    constexpr const char* TempModelFileExtension = ".tmp.fbm";
-    /// Max length for activity name when serializing (security: prevent unbounded string)
-    constexpr size_t MaxActivityNameLength = 4096;
-}  // namespace ModelStorageConstants
+#include <cstdlib>
 
 namespace fastbotx {
 
@@ -63,6 +52,11 @@ namespace fastbotx {
              DoubleSarsaRLConstants::NStep);
     }
 
+    bool DoubleSarsaAgent::isReuseDecisionTuningEnabled() {
+        auto pref = Preference::inst();
+        return pref && pref->isReuseDecisionTuningEnabled();
+    }
+
     /**
      * @brief Destructor
      * 
@@ -76,6 +70,13 @@ namespace fastbotx {
         this->_reuseQValue1.clear();
         this->_reuseQValue2.clear();
         BLOG("Double SARSA: Agent destructed, all resources cleaned up");
+    }
+
+    void DoubleSarsaAgent::clearReuseModelOnLoadFailure() {
+        std::lock_guard<std::mutex> reuseGuard(this->_reuseModelLock);
+        this->_reuseModel.clear();
+        this->_reuseQValue1.clear();
+        this->_reuseQValue2.clear();
     }
 
     /**
@@ -177,26 +178,36 @@ namespace fastbotx {
             // Get latest executed action (last in action history)
             if (auto lastSelectedAction = std::dynamic_pointer_cast<ActivityStateAction>(
                     this->_previousActions.back())) {
-                
+
                 // Compute probability that action can reach unvisited activities
                 double probValue = this->probabilityOfVisitingNewActivities(lastSelectedAction,
-                                                                       visitedActivities);
-                rewardValue = probValue;
-                
-                BDLOG("Double SARSA: Reward computation - action=%s, probOfNewActivities=%.4f, visitedCount=%d", 
-                      lastSelectedAction->toString().c_str(), probValue, lastSelectedAction->getVisitedCount());
-                
-                // If action not in reuse model (new action), directly give reward
-                if (std::abs(rewardValue - 0.0) < DoubleSarsaRLConstants::RewardEpsilon) {
-                    rewardValue = DoubleSarsaRLConstants::NewActionReward;
-                    BDLOG("Double SARSA: Action not in reuse model, using NewActionReward=%.4f", rewardValue);
+                                                                            visitedActivities);
+                if (std::abs(probValue - 0.0) < DoubleSarsaRLConstants::RewardEpsilon) {
+                    probValue = DoubleSarsaRLConstants::NewActionReward;
+                    BDLOG("Double SARSA: Action not in reuse model, using NewActionReward=%.4f", probValue);
                 }
-                
-                // Normalize: divide by square root of visit count
-                double normalizedReward = rewardValue / sqrt(lastSelectedAction->getVisitedCount() + 1.0);
-                BDLOG("Double SARSA: Normalized reward (action): %.4f / sqrt(%d+1) = %.4f", 
-                      rewardValue, lastSelectedAction->getVisitedCount(), normalizedReward);
-                rewardValue = normalizedReward;
+
+                if (isReuseDecisionTuningEnabled()) {
+                    stringPtr curActivity = this->_newState->getActivityString();
+                    uint64_t lastHash = static_cast<uint64_t>(lastSelectedAction->hash());
+                    double loopBias = this->computeLoopBias(lastHash, curActivity);
+                    double diversity = this->computeCoverageDiversity(lastHash);
+                    double reusePrior = ReuseDecisionTuning::computeReusePrior(probValue, loopBias, diversity);
+                    double normalizedReward = reusePrior / std::sqrt(lastSelectedAction->getVisitedCount() + 1.0);
+                    BDLOG("Double SARSA: Normalized reuse reward (action): reusePrior=%.4f / sqrt(%d+1) = %.4f",
+                          reusePrior, lastSelectedAction->getVisitedCount(), normalizedReward);
+                    rewardValue = normalizedReward;
+                } else {
+                    rewardValue = probValue;
+                    BDLOG("Double SARSA: Reward computation - action=%s, probOfNewActivities=%.4f, visitedCount=%d",
+                          lastSelectedAction->toString().c_str(), probValue, lastSelectedAction->getVisitedCount());
+
+                    // Normalize: divide by square root of visit count
+                    double normalizedReward = rewardValue / std::sqrt(lastSelectedAction->getVisitedCount() + 1.0);
+                    BDLOG("Double SARSA: Normalized reward (action): %.4f / sqrt(%d+1) = %.4f",
+                          rewardValue, lastSelectedAction->getVisitedCount(), normalizedReward);
+                    rewardValue = normalizedReward;
+                }
             }
             
             // Add state expectation value (normalized)
@@ -549,13 +560,45 @@ namespace fastbotx {
                 }
             }
             
-            // Calculate probability: unvisited activity visit counts / total visit counts
-            if (total > 0 && unvisited > 0) {
-                value = static_cast<double>(unvisited) / total;
+            if (total > 0) {
+                // Cap the effective sample size to avoid very old experience dominating forever.
+                static const int kMaxEffectiveSamplesPerAction = 100000;
+                int cappedTotal = total;
+                int cappedUnvisited = unvisited;
+                if (total > kMaxEffectiveSamplesPerAction) {
+                    const double scale = static_cast<double>(kMaxEffectiveSamplesPerAction) /
+                                         static_cast<double>(total);
+                    cappedTotal = kMaxEffectiveSamplesPerAction;
+                    cappedUnvisited = static_cast<int>(std::round(unvisited * scale));
+                }
+
+                // Use a simple Beta prior over "unvisited vs visited" rather than raw ratio,
+                // to smooth early noise and keep very large histories from fully overwhelming the prior.
+                const double alphaPrior = 1.0;  // prior pseudo-count for "unvisited"
+                const double betaPrior = 1.0;   // prior pseudo-count for "visited"
+                const double totalEffective = static_cast<double>(cappedTotal);
+                const double unvisitedEffective = static_cast<double>(cappedUnvisited);
+
+                value = (unvisitedEffective + alphaPrior) /
+                        (totalEffective + alphaPrior + betaPrior);
             }
         }
         
         return value;
+    }
+
+    double DoubleSarsaAgent::computeLoopBias(uint64_t actionHash, const stringPtr &currentActivity) const {
+        std::lock_guard<std::mutex> reuseGuard(this->_reuseModelLock);
+        auto it = this->_reuseModel.find(actionHash);
+        if (it == this->_reuseModel.end()) return 0.0;
+        return ReuseDecisionTuning::computeLoopBiasFromEntry(it->second, currentActivity);
+    }
+
+    double DoubleSarsaAgent::computeCoverageDiversity(uint64_t actionHash) const {
+        std::lock_guard<std::mutex> reuseGuard(this->_reuseModelLock);
+        auto it = this->_reuseModel.find(actionHash);
+        if (it == this->_reuseModel.end()) return 0.0;
+        return ReuseDecisionTuning::computeCoverageDiversityFromEntry(it->second);
     }
 
     /**
@@ -1004,17 +1047,21 @@ namespace fastbotx {
      * Note: Q-values (Q1 and Q2) are not loaded from file, they start from 0.
      */
     void DoubleSarsaAgent::loadReuseModel(const std::string &packageName) {
-        // Build model file path
-        std::string modelFilePath = std::string(ModelStorageConstants::StoragePrefix) + 
-                                    packageName + ModelStorageConstants::ModelFileExtension;
+        // Build model file path (dynamic vs static reuse abstraction share same schema but use different files)
+        const bool useStatic = Preference::inst() && Preference::inst()->useStaticReuseAbstraction();
+        std::string basePath = std::string(ModelStorageConstants::StoragePrefix) + packageName;
+        std::string modelFilePath = useStatic
+                                    ? (basePath + ".static" + ModelStorageConstants::ModelFileExtension)
+                                    : (basePath + ModelStorageConstants::ModelFileExtension);
 
         // Set model save path
         this->_modelSavePath = modelFilePath;
         
         // Set default save path
         if (!this->_modelSavePath.empty()) {
-            this->_defaultModelSavePath = std::string(ModelStorageConstants::StoragePrefix) + 
-                                         packageName + ModelStorageConstants::TempModelFileExtension;
+            this->_defaultModelSavePath = useStatic
+                                          ? (basePath + ".static" + ModelStorageConstants::TempModelFileExtension)
+                                          : (basePath + ModelStorageConstants::TempModelFileExtension);
         }
         
         BLOG("Double SARSA: begin load model: %s", this->_modelSavePath.c_str());
@@ -1023,6 +1070,7 @@ namespace fastbotx {
         std::ifstream modelFile(modelFilePath, std::ios::binary | std::ios::in);
         if (!modelFile.is_open()) {
             BLOGE("Double SARSA: Failed to open model file: %s", modelFilePath.c_str());
+            clearReuseModelOnLoadFailure();
             return;
         }
 
@@ -1034,6 +1082,7 @@ namespace fastbotx {
         // Check if file size is valid
         if (filesize <= 0 || filesize > DoubleSarsaRLConstants::MaxModelFileSize) {
             BLOGE("Double SARSA: Invalid model file size: %zu", filesize);
+            clearReuseModelOnLoadFailure();
             return;
         }
         
@@ -1044,6 +1093,7 @@ namespace fastbotx {
         if (bytesRead != static_cast<std::streamsize>(filesize)) {
             BLOGE("Double SARSA: Failed to read complete model file: read %lld bytes, expected %zu bytes", 
                   static_cast<long long>(bytesRead), filesize);
+            clearReuseModelOnLoadFailure();
             return;
         }
         
@@ -1051,11 +1101,13 @@ namespace fastbotx {
         flatbuffers::Verifier verifier(reinterpret_cast<const uint8_t*>(modelFileData.get()), filesize);
         if (!VerifyReuseModelBuffer(verifier)) {
             BLOGE("Double SARSA: Invalid or corrupted model buffer");
+            clearReuseModelOnLoadFailure();
             return;
         }
         auto reuseFBModel = GetReuseModel(modelFileData.get());
         if (!reuseFBModel) {
             BLOGE("Double SARSA: GetReuseModel returned null");
+            clearReuseModelOnLoadFailure();
             return;
         }
 
@@ -1074,29 +1126,27 @@ namespace fastbotx {
             return;
         }
         
-        // Iterate through all reuse entries, load to memory
+        // Iterate through all reuse entries, load to memory. Merge by activity name so
+        // duplicate (hash, activity) rows in file sum to one entry (fixes duplicate keys from stringPtr).
         for (flatbuffers::uoffset_t entryIndex = 0; entryIndex < reusedModelDataPtr->size(); entryIndex++) {
             auto reuseEntryInReuseModel = reusedModelDataPtr->Get(entryIndex);
             uint64_t actionHash = reuseEntryInReuseModel->action();
             auto activityEntry = reuseEntryInReuseModel->targets();
             
-            // Build activity mapping
-            ReuseEntryM entryPtr;
+            std::unordered_map<std::string, int> mergedByName;
             for (flatbuffers::uoffset_t targetIndex = 0; targetIndex < activityEntry->size(); targetIndex++) {
                 auto targetEntry = activityEntry->Get(targetIndex);
-                BDLOG("Double SARSA: load model hash: %" PRIu64 " %s %d", actionHash,
-                      targetEntry->activity()->str().c_str(), static_cast<int>(targetEntry->times()));
-                
-                entryPtr.emplace(
-                        std::make_shared<std::string>(targetEntry->activity()->str()),
-                        static_cast<int>(targetEntry->times()));
+                std::string actStr = targetEntry->activity()->str();
+                mergedByName[actStr] += static_cast<int>(targetEntry->times());
             }
-            
-            // If entry not empty, add to reuse model
+            ReuseEntryM entryPtr;
+            for (const auto &kv : mergedByName) {
+                entryPtr.emplace(std::make_shared<std::string>(kv.first), kv.second);
+                BDLOG("Double SARSA: load model hash: %" PRIu64 " %s %d", actionHash, kv.first.c_str(), kv.second);
+            }
             if (!entryPtr.empty()) {
                 std::lock_guard<std::mutex> reuseGuard(this->_reuseModelLock);
                 this->_reuseModel.emplace(actionHash, entryPtr);
-                // Note: Q-values start from 0, not loaded from file
             }
         }
         
@@ -1115,43 +1165,71 @@ namespace fastbotx {
         // Create FlatBuffers builder
         flatbuffers::FlatBufferBuilder builder;
         std::vector<flatbuffers::Offset<fastbotx::ReuseEntry>> actionActivityVector;
-        
-        // Lock to protect concurrent access to reuse model
+
+        // Take a snapshot of the reuse model under lock, then serialize off-lock.
+        ReuseEntryIntMap snapshot;
         {
             std::lock_guard<std::mutex> reuseGuard(this->_reuseModelLock);
-            
-            // Iterate through reuse model, build FlatBuffers data structure
-            for (const auto &actionIterator: this->_reuseModel) {
-                uint64_t actionHash = actionIterator.first;
-                ReuseEntryM activityCountEntryMap = actionIterator.second;
-                
-                // FlatBuffers needs vector instead of map
-                std::vector<flatbuffers::Offset<fastbotx::ActivityTimes>> activityCountEntryVector;
-                
-                // Iterate through activity mapping
-                for (const auto &activityCountEntry: activityCountEntryMap) {
-                    const std::string &actName = *(activityCountEntry.first);
-                    size_t actLen = std::min(actName.size(), ModelStorageConstants::MaxActivityNameLength);
-                    auto sentryActT = CreateActivityTimes(
-                            builder,
-                            builder.CreateString(actName.c_str(), actLen),  // Activity name (length capped)
-                            activityCountEntry.second);
-                    activityCountEntryVector.push_back(sentryActT);
+            snapshot = this->_reuseModel;
+        }
+
+        // Apply a simple exponential decay to long-lived counts so that very old
+        // experience does not dominate forever. This keeps the effective history
+        // window bounded without changing the on-disk schema.
+        static const double kDecayFactor = 0.99; // Decay ~1% per save.
+        if (kDecayFactor > 0.0 && kDecayFactor < 1.0) {
+            for (auto it = snapshot.begin(); it != snapshot.end(); ) {
+                ReuseEntryM &actMap = it->second;
+                for (auto actIt = actMap.begin(); actIt != actMap.end(); ) {
+                    int count = actIt->second;
+                    int decayed = static_cast<int>(std::floor(count * kDecayFactor));
+                    if (decayed <= 0) {
+                        actIt = actMap.erase(actIt);
+                    } else {
+                        actIt->second = decayed;
+                        ++actIt;
+                    }
                 }
-                
-                // Create ReuseEntry object
-                auto savedActivityCountEntries = CreateReuseEntry(
-                        builder, 
-                        actionHash,
-                        builder.CreateVector(activityCountEntryVector.data(),
-                                          activityCountEntryVector.size()));
-                actionActivityVector.push_back(savedActivityCountEntries);
+                if (actMap.empty()) {
+                    it = snapshot.erase(it);
+                } else {
+                    ++it;
+                }
             }
         }
-        
+
+        // Iterate through decayed snapshot, build FlatBuffers. Merge by activity name so
+        // we write one row per activity (same string under different stringPtrs are merged).
+        for (const auto &actionIterator : snapshot) {
+            uint64_t actionHash = actionIterator.first;
+            const ReuseEntryM &activityCountEntryMap = actionIterator.second;
+
+            std::unordered_map<std::string, int> byName;
+            for (const auto &activityCountEntry : activityCountEntryMap) {
+                const std::string &actName = *(activityCountEntry.first);
+                byName[actName] += activityCountEntry.second;
+            }
+            std::vector<flatbuffers::Offset<fastbotx::ActivityTimes>> activityCountEntryVector;
+            for (const auto &kv : byName) {
+                size_t actLen = std::min(kv.first.size(), ModelStorageConstants::MaxActivityNameLength);
+                auto sentryActT = CreateActivityTimes(
+                        builder,
+                        builder.CreateString(kv.first.c_str(), actLen),
+                        kv.second);
+                activityCountEntryVector.push_back(sentryActT);
+            }
+
+            auto savedActivityCountEntries = CreateReuseEntry(
+                    builder,
+                    actionHash,
+                    builder.CreateVector(activityCountEntryVector.data(),
+                                         activityCountEntryVector.size()));
+            actionActivityVector.push_back(savedActivityCountEntries);
+        }
+
         // Create ReuseModel root object and complete serialization
         auto savedActionActivityEntries = CreateReuseModel(
-                builder, 
+                builder,
                 builder.CreateVector(actionActivityVector.data(), actionActivityVector.size()));
         builder.Finish(savedActionActivityEntries);
 
@@ -1201,6 +1279,10 @@ namespace fastbotx {
         BDLOG("Double SARSA: Note - Q-values (Q1 and Q2) are not saved to file, only reuse model is persisted");
     }
 
+    void DoubleSarsaAgent::saveReuseModelNow() {
+        saveReuseModel(this->_modelSavePath);
+    }
+
     /**
      * @brief Background thread function for periodic model saving
      * 
@@ -1218,6 +1300,10 @@ namespace fastbotx {
     void DoubleSarsaAgent::threadModelStorage(const std::weak_ptr<DoubleSarsaAgent> &agent) {
         constexpr int saveInterval = DoubleSarsaRLConstants::ModelSaveIntervalMs;  // 10 minutes
         constexpr auto interval = std::chrono::milliseconds(saveInterval);
+        
+        // Sleep one full interval before first save, so we do not overwrite a good
+        // on-disk model with an empty/small snapshot from the first few seconds.
+        std::this_thread::sleep_for(interval);
         
         // Loop to save until Agent is destructed (weak_ptr becomes invalid)
         while (true) {

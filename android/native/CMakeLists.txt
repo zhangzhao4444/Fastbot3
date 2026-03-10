@@ -48,6 +48,7 @@ include_directories(
   "agent/"
   "desc/"
   "desc/reuse"
+  "llm/"
   "events/"
   "model/"
   "monkey/"
@@ -65,6 +66,7 @@ file( GLOB SRC_LIST
       "*.cpp" 
       "desc/*.cpp" 
       "desc/reuse/*.cpp" 
+      "llm/*.cpp"
       "model/*.cpp" 
       "agent/*.cpp"
       "events/*.cpp"
@@ -73,6 +75,9 @@ file( GLOB SRC_LIST
       "thirdpart/flatbuffers/*.cpp"
       "thirdpart/xxhash/*.cpp"
       "thirdpart/json/*.hpp")
+
+# LVQExplorerAgent.cpp was removed; exclude from build in case of stale GLOB/cache
+list(REMOVE_ITEM SRC_LIST "agent/LVQExplorerAgent.cpp")
 
 message(STATUS ${SRC_LIST})
 
@@ -110,9 +115,13 @@ endif()
 string(TIMESTAMP BUILD_TIMESTAMP "%Y-%m-%d %H:%M:%S" UTC)
 message(STATUS "Build timestamp: ${BUILD_TIMESTAMP}")
 
-# Add build timestamp as compile definition
+# Add build timestamp and ICMAgent embedding compile-time options.
 target_compile_definitions(fastbot_native PRIVATE 
     FASTBOT_BUILD_TIMESTAMP="${BUILD_TIMESTAMP}"
+    # Define FASTBOTX_ICM_DISABLE_DNN_ENCODER to force ICMAgent to use 16-dim
+    # handcrafted embedding for clustering (no DnnStateEncoder). Comment out
+    # this line to re-enable 8-dim DNN embedding clustering for A/B tests.
+    FASTBOTX_ICM_DISABLE_DNN_ENCODER
 )
 
 # compatible with the 16kb page devices

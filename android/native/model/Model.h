@@ -16,7 +16,7 @@
 #include "AbstractAgent.h"
 #include "AgentFactory.h"
 #include "Preference.h"
-#include "agent/AutodevAgent.h"
+#include "agent/LLMTaskAgent.h"
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -153,6 +153,12 @@ namespace fastbotx {
         PreferencePtr getPreference() const { return this->_preference; }
 
         /**
+         * @brief Get the shared LLM client (if any) used by LLMTaskAgent.
+         * Other agents (e.g. LLMExplorerAgent) may use it for content-aware input or knowledge org.
+         */
+        std::shared_ptr<LlmClient> getLlmClient() const;
+
+        /**
          * @brief Get widget key mask for an activity (dynamic state abstraction).
          * Returns DefaultWidgetKeyMask if activity not found.
          */
@@ -231,6 +237,17 @@ namespace fastbotx {
         AbstractAgentPtr getOrCreateAgent(const std::string &deviceID);
         
         /**
+         * @brief Build a state from element without adding to the graph (for moveForward-before-addState flow).
+         * 
+         * @param element XML Element object of the current page
+         * @param agent The agent to use for state creation
+         * @param activityPtr Shared pointer to activity name string
+         * @return Shared pointer to the created state (not yet in graph)
+         */
+        StatePtr buildStateOnly(const ElementPtr &element, const AbstractAgentPtr &agent,
+                               const stringPtr &activityPtr);
+
+        /**
          * @brief Create a new state from element and add it to the graph
          * 
          * @param element XML Element object of the current page
@@ -289,10 +306,10 @@ namespace fastbotx {
         /// Parameters for communicating with network-based action models
         NetActionParam _netActionParam;
 
-        /// Optional LLM-based GUI agent (AutodevAgent). When configured with a concrete
+        /// Optional LLM-based GUI agent (LLMTaskAgent). When configured with a concrete
         /// LlmClient implementation, this agent can temporarily take over action
         /// selection for predefined tasks (e.g. login flows).
-        std::shared_ptr<AutodevAgent> _autodevAgent;
+        std::shared_ptr<LLMTaskAgent> _llmTaskAgent;
 
         /// Coverage tracking: visited activities and step count (performance optimization)
         std::unordered_set<std::string> _visitedActivities;

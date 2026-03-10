@@ -16,6 +16,7 @@
 #include "ActivityNameAction.h"
 #include "../utils.hpp"
 #include "ActionFilter.h"
+#include "../events/Preference.h"
 
 namespace fastbotx {
 
@@ -63,7 +64,6 @@ namespace fastbotx {
 
     void ReuseState::buildStateFromElement(WidgetPtr parentWidget, ElementPtr element) {
         buildBoundingBox(element);
-        // use RichWidget build the states
         WidgetPtr widget = std::make_shared<RichWidget>(parentWidget, element);
         this->_widgets.emplace_back(widget);
         for (const auto &childElement: element->getChildren()) {
@@ -86,10 +86,14 @@ namespace fastbotx {
      */
     void ReuseState::buildFromElement(WidgetPtr parentWidget, ElementPtr elem) {
         buildBoundingBox(elem);
-        // Performance: elem is already ElementPtr, no need for dynamic_cast
-        // This method is called recursively for children, using regular Widget
-        // (root uses RichWidget via buildStateFromElement)
-        WidgetPtr widget = std::make_shared<Widget>(parentWidget, elem);
+        WidgetPtr widget;
+        if (Preference::inst() && Preference::inst()->useStaticReuseAbstraction()) {
+            // Legacy static reuse mode: use RichWidget for all nodes so hash matches legacy ReuseWidget style
+            widget = std::make_shared<RichWidget>(parentWidget, elem);
+        } else {
+            // Dynamic abstraction mode: still use lightweight Widget for non-root nodes
+            widget = std::make_shared<Widget>(parentWidget, elem);
+        }
         this->_widgets.emplace_back(widget);
         for (const auto &childElement: elem->getChildren()) {
             buildFromElement(widget, childElement);
@@ -138,18 +142,21 @@ namespace fastbotx {
     void ReuseState::buildHashForState() {
         // Build hash from activity name (guard against null _activity)
         std::string activityString = (_activity && _activity.get()) ? *_activity : "";
-        // Performance optimization: Use fast string hash instead of std::hash
-        // This provides better performance for activity name strings
         uintptr_t activityHash = (fastbotx::fastStringHash(activityString) * 31U) << 5;
 
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
-        uintptr_t widgetsHash = 0x1;
-        for (const auto &w : _widgets) {
-            if (w) {
-                widgetsHash ^= w->hashWithMask(_widgetKeyMask);
+        // In static reuse abstraction mode, ignore WidgetKeyMask and fall back to legacy hash
+        if (Preference::inst() && Preference::inst()->useStaticReuseAbstraction()) {
+            activityHash ^= (combineHash<Widget>(_widgets, STATE_WITH_WIDGET_ORDER) << 1);
+        } else {
+            uintptr_t widgetsHash = 0x1;
+            for (const auto &w : _widgets) {
+                if (w) {
+                    widgetsHash ^= w->hashWithMask(_widgetKeyMask);
+                }
             }
+            activityHash ^= (widgetsHash << 1);
         }
-        activityHash ^= (widgetsHash << 1);
 #else
         // Combine with widget hash (may include order if STATE_WITH_WIDGET_ORDER is enabled)
         activityHash ^= (combineHash<Widget>(_widgets, STATE_WITH_WIDGET_ORDER) << 1);
@@ -205,34 +212,44 @@ namespace fastbotx {
      */
     void ReuseState::mergeWidgetsInState() {
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
-        std::unordered_map<uintptr_t, WidgetPtr> uniqueByMaskHash;
-        WidgetPtrVec uniqueWidgets;
-        int mergedCount = 0;
-        for (const auto &w : _widgets) {
-            if (!w) continue;
-            uintptr_t keyMask = w->hashWithMask(_widgetKeyMask);
-            auto it = uniqueByMaskHash.find(keyMask);
-            if (it == uniqueByMaskHash.end()) {
-                uniqueByMaskHash[keyMask] = w;
-                uniqueWidgets.push_back(w);
-            } else {
-                mergedCount++;
-                WidgetPtr representative = it->second;
-                uintptr_t repHash = representative->hash();
-                auto mergedIt = _mergedWidgets.find(repHash);
-                if (mergedIt == _mergedWidgets.end()) {
-                    WidgetPtrVec vec;
-                    vec.push_back(representative);
-                    vec.push_back(w);
-                    _mergedWidgets[repHash] = std::move(vec);
+        if (Preference::inst() && Preference::inst()->useStaticReuseAbstraction()) {
+            // Static reuse abstraction: fall back to legacy merge-by-Widget::hash behavior
+            WidgetPtrSet mergedWidgets;
+            int mergedCount = mergeWidgetAndStoreMergedOnes(mergedWidgets);
+            if (mergedCount != 0) {
+                BDLOG("build state merged  %d widget", mergedCount);
+                _widgets.assign(mergedWidgets.begin(), mergedWidgets.end());
+            }
+        } else {
+            std::unordered_map<uintptr_t, WidgetPtr> uniqueByMaskHash;
+            WidgetPtrVec uniqueWidgets;
+            int mergedCount = 0;
+            for (const auto &w : _widgets) {
+                if (!w) continue;
+                uintptr_t keyMask = w->hashWithMask(_widgetKeyMask);
+                auto it = uniqueByMaskHash.find(keyMask);
+                if (it == uniqueByMaskHash.end()) {
+                    uniqueByMaskHash[keyMask] = w;
+                    uniqueWidgets.push_back(w);
                 } else {
-                    mergedIt->second.push_back(w);
+                    mergedCount++;
+                    WidgetPtr representative = it->second;
+                    uintptr_t repHash = representative->hash();
+                    auto mergedIt = _mergedWidgets.find(repHash);
+                    if (mergedIt == _mergedWidgets.end()) {
+                        WidgetPtrVec vec;
+                        vec.push_back(representative);
+                        vec.push_back(w);
+                        _mergedWidgets[repHash] = std::move(vec);
+                    } else {
+                        mergedIt->second.push_back(w);
+                    }
                 }
             }
-        }
-        if (mergedCount != 0) {
-            BDLOG("build state merged  %d widget", mergedCount);
-            _widgets = std::move(uniqueWidgets);
+            if (mergedCount != 0) {
+                BDLOG("build state merged  %d widget", mergedCount);
+                _widgets = std::move(uniqueWidgets);
+            }
         }
 #else
         WidgetPtrSet mergedWidgets;

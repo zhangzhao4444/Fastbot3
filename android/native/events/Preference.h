@@ -94,7 +94,7 @@ namespace fastbotx {
 
         /**
          * Resolve the page: apply black widgets, tree pruning, valid texts, etc. to the element tree.
-         * Call this before using the element for state/AutodevAgent when custom actions (max.xpath.actions) are not used.
+         * Call this before using the element for state/LLMTaskAgent when custom actions (max.xpath.actions) are not used.
          */
         void resolvePage(const std::string &activity, const ElementPtr &rootXML);
 
@@ -113,6 +113,12 @@ namespace fastbotx {
 
         bool skipAllActionsFromModel() const { return this->_skipAllActionsFromModel; }
 
+        /**
+         * @brief Whether to use legacy static reuse state abstraction instead of dynamic abstraction.
+         * Controlled via max.config key: max.staticStateAbstraction=true|false.
+         */
+        bool useStaticReuseAbstraction() const;
+
         bool isForceUseTextModel() const { return this->_forceUseTextModel; }
 
         int getForceMaxBlockStateTimes() const { return this->_forceMaxBlockStateTimes; }
@@ -121,6 +127,23 @@ namespace fastbotx {
          * Get runtime LLM configuration (OpenAI-compatible HTTP endpoint).
          */
         const LlmRuntimeConfig &getLlmRuntimeConfig() const { return this->_llmRuntimeConfig; }
+
+        /**
+         * Whether to call LLM knowledge_org for same-function grouping (LLMExplorerAgent).
+         * Controlled via max.config: max.llm.knowledge=true|false. Only when true is the LLM called.
+         */
+        bool isLlmKnowledgeEnabled() const { return this->_llmKnowledge; }
+
+        /**
+         * Whether to call LLM content_aware_input for editable widgets (LLMExplorerAgent).
+         * Controlled via max.config: max.llm.contextAwareInput=true|false. Only when true is the LLM called.
+         */
+        bool isLlmContextAwareInputEnabled() const { return this->_llmContextAwareInput; }
+        /**
+         * Whether to enable advanced reuse-based decision tuning (loop avoidance, coverage bias).
+         * Controlled via max.config: max.reuse.decisionTuning=true|false.
+         */
+        bool isReuseDecisionTuningEnabled() const { return this->_reuseDecisionTuning; }
 
         /**
          * Load LLM task configurations from external file.
@@ -210,6 +233,7 @@ namespace fastbotx {
         std::set<std::string> _validTexts;
         bool _pruningValidTexts;
         bool _skipAllActionsFromModel;
+        bool _useStaticReuseAbstraction{};
         bool _forceUseTextModel{};
         int _forceMaxBlockStateTimes{};
         RectPtr _rootScreenSize;
@@ -223,6 +247,13 @@ namespace fastbotx {
 
         /// Runtime LLM HTTP configuration loaded from base config.
         LlmRuntimeConfig _llmRuntimeConfig;
+
+        /// max.llm.knowledge: when true, LLMExplorerAgent calls knowledge_org for same-function grouping.
+        bool _llmKnowledge{false};
+        /// max.llm.contextAwareInput: when true, LLMExplorerAgent calls content_aware_input for editable widgets.
+        bool _llmContextAwareInput{false};
+        /// max.reuse.decisionTuning: when true, enable advanced reuse-based decision tuning (loop avoidance, coverage bias).
+        bool _reuseDecisionTuning{false};
 
         /// max.xpath.actions: cases and current execution state.
         std::vector<XpathCase> _xpathActionCases;

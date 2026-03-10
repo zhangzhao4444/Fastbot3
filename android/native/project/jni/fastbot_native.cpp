@@ -9,6 +9,7 @@
 #include "Element.h"
 #include "DeviceOperateWrapper.h"
 #include "DoubleSarsaAgent.h"
+#include "SarsaAgent.h"
 #include "utils.hpp"
 #include "../llm/LlmJavaHttp.h"
 #include "../thirdpart/json/json.hpp"
@@ -224,16 +225,27 @@ void JNICALL Java_com_bytedance_fastbot_AiClient_initAgentNative(JNIEnv *env, jo
     auto agentPointer = _fastbot_model->addAgent("", algorithmType,
                                                  (fastbotx::DeviceType) deviceType);
     const char *packageNameCString = "";
-    if (env)
+    if (env && packageName) {
         packageNameCString = env->GetStringUTFChars(packageName, nullptr);
+    }
     _fastbot_model->setPackageName(std::string(packageNameCString));
 
     BLOG("init agent with type %d, %s,  %d", agentType, packageNameCString, deviceType);
-    auto doubleSarsaAgentPtr = std::dynamic_pointer_cast<fastbotx::DoubleSarsaAgent>(agentPointer);
-    if (doubleSarsaAgentPtr) {
-        doubleSarsaAgentPtr->loadReuseModel(std::string(packageNameCString));
-    } else {
-        BLOGE("Double SARSA: Failed to cast agent to DoubleSarsaAgent");
+    // Reuse model is supported by DoubleSarsaAgent and SarsaAgent.
+    if (algorithmType == fastbotx::AlgorithmType::DoubleSarsa) {
+        auto doubleSarsaAgentPtr = std::dynamic_pointer_cast<fastbotx::DoubleSarsaAgent>(agentPointer);
+        if (doubleSarsaAgentPtr) {
+            doubleSarsaAgentPtr->loadReuseModel(std::string(packageNameCString));
+        } else {
+            BLOGE("Double SARSA: Failed to cast agent to DoubleSarsaAgent");
+        }
+    } else if (algorithmType == fastbotx::AlgorithmType::Sarsa) {
+        auto sarsaAgentPtr = std::dynamic_pointer_cast<fastbotx::SarsaAgent>(agentPointer);
+        if (sarsaAgentPtr) {
+            sarsaAgentPtr->loadReuseModel(std::string(packageNameCString));
+        } else {
+            BLOGE("SarsaAgent: Failed to cast agent to SarsaAgent");
+        }
     }
     if (env)
         env->ReleaseStringUTFChars(packageName, packageNameCString);
@@ -337,6 +349,20 @@ jstring JNICALL Java_com_bytedance_fastbot_AiClient_getCoverageJsonNative(JNIEnv
     if (nullptr == _fastbot_model) return env->NewStringUTF("{}");
     std::string json = _fastbot_model->getCoverageJson();
     return env->NewStringUTF(json.c_str());
+}
+
+// Save reuse model when test ends normally (Agent destructor is not called because _fastbot_model is static).
+void JNICALL Java_com_bytedance_fastbot_AiClient_saveReuseModelNative(JNIEnv *, jobject) {
+    if (nullptr == _fastbot_model) return;
+    auto agent = _fastbot_model->getAgent("");
+    if (!agent) return;
+    if (auto sarsa = std::dynamic_pointer_cast<fastbotx::SarsaAgent>(agent)) {
+        sarsa->saveReuseModelNow();
+        BLOG("SarsaAgent: saveReuseModelNow() called on test end");
+    } else if (auto doubleSarsa = std::dynamic_pointer_cast<fastbotx::DoubleSarsaAgent>(agent)) {
+        doubleSarsa->saveReuseModelNow();
+        BLOG("Double SARSA: saveReuseModelNow() called on test end");
+    }
 }
 
 // Fuzzing: get next fuzz action JSON from C++ (performance §3.3)

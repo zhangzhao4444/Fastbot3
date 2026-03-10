@@ -63,6 +63,15 @@ namespace fastbotx {
 
         bool isEditable() const;
 
+        /** Get widget class name (e.g. "android.widget.TextView"). Empty if details cleared. */
+        const std::string &getClassname() const { return this->_clazz; }
+
+        /** Get widget resource ID. Empty if not set or details cleared. */
+        const std::string &getResourceID() const { return this->_resourceID; }
+
+        /** Get widget content description. Empty if not set or details cleared. */
+        const std::string &getContentDesc() const { return this->_contextDesc; }
+
         uintptr_t hash() const override;
 
         /// Hash using only the attributes specified by mask (for dynamic state abstraction).
