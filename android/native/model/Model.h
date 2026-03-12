@@ -202,6 +202,24 @@ namespace fastbotx {
          */
         std::string getCoverageJson() const;
 
+        /**
+         * @brief Load persisted dynamic state abstraction policy for the current package (if enabled).
+         *
+         * Policy file path (per package):
+         *   /sdcard/fastbot_{packageName}.statekey.json
+         *
+         * This method is a thin I/O wrapper and does not change any refinement/coarsening logic.
+         */
+        void loadStateAbstractionPolicy();
+
+        /**
+         * @brief Save current dynamic state abstraction policy for the current package (if enabled).
+         *
+         * Writes the same format as loadStateAbstractionPolicy() reads.
+         * Safe to call multiple times; errors are logged and otherwise ignored.
+         */
+        void saveStateAbstractionPolicy() const;
+
         virtual ~Model();
 
     protected:

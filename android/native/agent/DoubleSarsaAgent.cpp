@@ -541,49 +541,31 @@ namespace fastbotx {
         double value = 0.0;
         int total = 0;
         int unvisited = 0;
-        
+
         // Lock to protect concurrent access to reuse model
         std::lock_guard<std::mutex> reuseGuard(this->_reuseModelLock);
-        
+
         // Find action in reuse model (by hash value)
         auto actionMapIterator = this->_reuseModel.find(action->hash());
-        
+
         if (actionMapIterator != this->_reuseModel.end()) {
             // Iterate through all activities this action can reach and their visit counts
             for (const auto &activityCountMapIterator: actionMapIterator->second) {
                 total += activityCountMapIterator.second;
                 stringPtr activity = activityCountMapIterator.first;
-                
+
                 // Check if this activity is unvisited
                 if (visitedActivities.count(activity) == 0) {
                     unvisited += activityCountMapIterator.second;
                 }
             }
-            
-            if (total > 0) {
-                // Cap the effective sample size to avoid very old experience dominating forever.
-                static const int kMaxEffectiveSamplesPerAction = 100000;
-                int cappedTotal = total;
-                int cappedUnvisited = unvisited;
-                if (total > kMaxEffectiveSamplesPerAction) {
-                    const double scale = static_cast<double>(kMaxEffectiveSamplesPerAction) /
-                                         static_cast<double>(total);
-                    cappedTotal = kMaxEffectiveSamplesPerAction;
-                    cappedUnvisited = static_cast<int>(std::round(unvisited * scale));
-                }
 
-                // Use a simple Beta prior over "unvisited vs visited" rather than raw ratio,
-                // to smooth early noise and keep very large histories from fully overwhelming the prior.
-                const double alphaPrior = 1.0;  // prior pseudo-count for "unvisited"
-                const double betaPrior = 1.0;   // prior pseudo-count for "visited"
-                const double totalEffective = static_cast<double>(cappedTotal);
-                const double unvisitedEffective = static_cast<double>(cappedUnvisited);
-
-                value = (unvisitedEffective + alphaPrior) /
-                        (totalEffective + alphaPrior + betaPrior);
+            // Calculate probability: unvisited activity visit counts / total visit counts
+            if (total > 0 && unvisited > 0) {
+                value = static_cast<double>(unvisited) / static_cast<double>(total);
             }
         }
-        
+
         return value;
     }
 
