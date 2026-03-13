@@ -17,6 +17,7 @@
 #include <ctime>
 #include <iostream>
 #include <map>
+#include <fstream>
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
 #include <utility>
 #include <sstream>
@@ -859,6 +860,154 @@ namespace fastbotx {
         }
         j["testedActivities"] = arr;
         return j.dump();
+    }
+
+    void Model::loadStateAbstractionPolicy() {
+#if DYNAMIC_STATE_ABSTRACTION_ENABLED
+        auto pref = Preference::inst();
+        // Only meaningful when dynamic abstraction is actually used and policy persistence is enabled.
+        if (!pref || pref->useStaticReuseAbstraction() || !pref->isStateAbstractionPolicyEnabled()) {
+            return;
+        }
+
+        const std::string &pkg = getPackageName();
+        if (pkg.empty()) {
+            return;
+        }
+
+        std::string path = "/sdcard/fastbot_" + pkg + ".statekey.json";
+        BLOG("state abstraction: try load policy from %s", path.c_str());
+        std::ifstream in(path);
+        if (!in.is_open()) {
+            return;
+        }
+
+        try {
+            // Basic size guard to avoid attempting to parse extremely large / corrupted files.
+            in.seekg(0, std::ios::end);
+            std::streamoff sz = in.tellg();
+            if (sz <= 0 || sz > static_cast<std::streamoff>(1024 * 1024)) { // 1MB hard upper bound
+                BLOGE("state abstraction: skip loading %s (size=%lld bytes out of bounds)", path.c_str(),
+                      static_cast<long long>(sz));
+                return;
+            }
+            in.seekg(0, std::ios::beg);
+
+            nlohmann::json j;
+            in >> j;
+
+            size_t loadedActivities = 0;
+            size_t loadedBlacklistEntries = 0;
+
+            if (!j.is_object()) {
+                BLOGE("state abstraction: policy file %s is not a JSON object", path.c_str());
+                return;
+            }
+
+            auto itActs = j.find("activities");
+            if (itActs != j.end() && itActs->is_array()) {
+                for (const auto &item : *itActs) {
+                    if (!item.is_object()) continue;
+                    std::string name = item.value("name", "");
+                    // mask stored as unsigned int; silently ignore obviously invalid values.
+                    unsigned int maskVal = 0u;
+                    try {
+                        maskVal = item.at("mask").get<unsigned int>();
+                    } catch (...) {
+                        continue;
+                    }
+                    if (name.empty() || maskVal == 0u) continue;
+                    setActivityKeyMask(name, static_cast<WidgetKeyMask>(maskVal));
+                    loadedActivities++;
+                }
+            }
+
+            auto itBlk = j.find("coarseningBlacklist");
+            if (itBlk != j.end() && itBlk->is_array()) {
+                _coarseningBlacklist.clear();
+                for (const auto &item : *itBlk) {
+                    if (!item.is_object()) continue;
+                    std::string name = item.value("activity", "");
+                    unsigned int maskVal = 0u;
+                    try {
+                        maskVal = item.at("mask").get<unsigned int>();
+                    } catch (...) {
+                        continue;
+                    }
+                    if (name.empty() || maskVal == 0u) continue;
+                    _coarseningBlacklist.insert(std::make_pair(name, static_cast<WidgetKeyMask>(maskVal)));
+                    loadedBlacklistEntries++;
+                }
+            }
+
+            BLOG("state abstraction: loaded policy from %s (activities=%zu, blacklist=%zu)",
+                 path.c_str(), loadedActivities, loadedBlacklistEntries);
+        } catch (const std::exception &ex) {
+            BLOGE("state abstraction: failed to load policy from %s: %s", path.c_str(), ex.what());
+        }
+#else
+        (void)this;
+#endif
+    }
+
+    void Model::saveStateAbstractionPolicy() const {
+#if DYNAMIC_STATE_ABSTRACTION_ENABLED
+        auto pref = Preference::inst();
+        // Only meaningful when dynamic abstraction is actually used and policy persistence is enabled.
+        if (!pref || pref->useStaticReuseAbstraction() || !pref->isStateAbstractionPolicyEnabled()) {
+            return;
+        }
+
+        const std::string &pkg = getPackageName();
+        if (pkg.empty()) {
+            return;
+        }
+
+        std::string path = "/sdcard/fastbot_" + pkg + ".statekey.json";
+        std::string tmpPath = path + ".tmp";
+
+        nlohmann::json j;
+        j["version"] = 1;
+
+        // Serialize per-activity key masks
+        nlohmann::json acts = nlohmann::json::array();
+        for (const auto &kv : _activityKeyMask) {
+            nlohmann::json item;
+            item["name"] = kv.first;
+            item["mask"] = static_cast<unsigned int>(kv.second);
+            acts.push_back(item);
+        }
+        j["activities"] = acts;
+
+        // Serialize coarsening blacklist
+        nlohmann::json blk = nlohmann::json::array();
+        for (const auto &p : _coarseningBlacklist) {
+            nlohmann::json item;
+            item["activity"] = p.first;
+            item["mask"] = static_cast<unsigned int>(p.second);
+            blk.push_back(item);
+        }
+        j["coarseningBlacklist"] = blk;
+
+        try {
+            std::ofstream out(tmpPath, std::ios::trunc);
+            if (!out.is_open()) {
+                BLOGE("state abstraction: cannot open temp policy file %s for writing", tmpPath.c_str());
+                return;
+            }
+            out << j.dump();
+            out.close();
+            if (std::rename(tmpPath.c_str(), path.c_str()) != 0) {
+                BLOGE("state abstraction: failed to rename policy file %s -> %s", tmpPath.c_str(), path.c_str());
+            } else {
+                BLOG("state abstraction: policy saved to %s", path.c_str());
+            }
+        } catch (const std::exception &ex) {
+            BLOGE("state abstraction: failed to save policy to %s: %s", path.c_str(), ex.what());
+        }
+#else
+        (void)this;
+#endif
     }
 
     /**

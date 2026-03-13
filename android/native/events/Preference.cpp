@@ -1193,6 +1193,7 @@ namespace fastbotx {
 #define LlmMaxTokensSTR           "max.llm.maxTokens"
 #define LlmTimeoutMsSTR           "max.llm.timeoutMs"
 #define ReuseDecisionTuningSTR    "max.reuse.decisionTuning"
+#define StateAbstractionPolicySTR "max.stateAbstractionPolicy"
 
     /**
      * @brief Load base configuration file
@@ -1343,6 +1344,11 @@ namespace fastbotx {
                 }
             } else if (key == ReuseDecisionTuningSTR) {
                 this->_reuseDecisionTuning = (value == "true");
+            } else if (key == StateAbstractionPolicySTR) {
+                this->_stateAbstractionPolicyEnabled = (value == "true");
+                if (this->_stateAbstractionPolicyEnabled) {
+                    BLOG("state abstraction: statekey policy persistence enabled (max.stateAbstractionPolicy=true)");
+                }
             }
         }
     }

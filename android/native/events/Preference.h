@@ -146,6 +146,12 @@ namespace fastbotx {
         bool isReuseDecisionTuningEnabled() const { return this->_reuseDecisionTuning; }
 
         /**
+         * Whether to enable loading/saving dynamic state abstraction policy (statekey.json).
+         * Controlled via max.config: max.stateAbstractionPolicy=true|false.
+         */
+        bool isStateAbstractionPolicyEnabled() const { return this->_stateAbstractionPolicyEnabled; }
+
+        /**
          * Load LLM task configurations from external file.
          * This is typically called from loadConfigs().
          */
@@ -254,6 +260,8 @@ namespace fastbotx {
         bool _llmContextAwareInput{false};
         /// max.reuse.decisionTuning: when true, enable advanced reuse-based decision tuning (loop avoidance, coverage bias).
         bool _reuseDecisionTuning{false};
+        /// max.stateAbstractionPolicy: when true, load/save dynamic state abstraction policy (statekey.json).
+        bool _stateAbstractionPolicyEnabled{false};
 
         /// max.xpath.actions: cases and current execution state.
         std::vector<XpathCase> _xpathActionCases;

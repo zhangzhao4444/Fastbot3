@@ -221,14 +221,17 @@ void JNICALL Java_com_bytedance_fastbot_AiClient_initAgentNative(JNIEnv *env, jo
     if (nullptr == _fastbot_model) {
         _fastbot_model = fastbotx::Model::create();
     }
-    auto algorithmType = (fastbotx::AlgorithmType) agentType;
-    auto agentPointer = _fastbot_model->addAgent("", algorithmType,
-                                                 (fastbotx::DeviceType) deviceType);
     const char *packageNameCString = "";
     if (env && packageName) {
         packageNameCString = env->GetStringUTFChars(packageName, nullptr);
     }
     _fastbot_model->setPackageName(std::string(packageNameCString));
+    // Load persisted dynamic state abstraction policy for this package (if any).
+    _fastbot_model->loadStateAbstractionPolicy();
+
+    auto algorithmType = (fastbotx::AlgorithmType) agentType;
+    auto agentPointer = _fastbot_model->addAgent("", algorithmType,
+                                                 (fastbotx::DeviceType) deviceType);
 
     BLOG("init agent with type %d, %s,  %d", agentType, packageNameCString, deviceType);
     // Reuse model is supported by DoubleSarsaAgent and SarsaAgent.
@@ -363,6 +366,8 @@ void JNICALL Java_com_bytedance_fastbot_AiClient_saveReuseModelNative(JNIEnv *, 
         doubleSarsa->saveReuseModelNow();
         BLOG("Double SARSA: saveReuseModelNow() called on test end");
     }
+    // Persist dynamic state abstraction policy alongside reuse model.
+    _fastbot_model->saveStateAbstractionPolicy();
 }
 
 // Fuzzing: get next fuzz action JSON from C++ (performance §3.3)

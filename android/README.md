@@ -25,6 +25,35 @@ We gratefully acknowledge Prof. Ting Su, the SSE Lab at East China Normal Univer
 * **Saving**: During execution, the selected model file is written back periodically (e.g. every 10 minutes). You can delete or copy the file as needed.
 * **Security**: The loader verifies the buffer before deserializing; invalid or corrupted files are rejected.
 
+### Dynamic state abstraction policy (statekey)
+
+* **Optional persistence**: When `max.stateAbstractionPolicy=true` (in `/sdcard/max.config`), Fastbot will persist per-activity dynamic state abstraction masks (widget-key masks) and coarsening blacklist to a separate policy file: `/sdcard/fastbot_{packagename}.statekey.json`.
+* **Warm start**: On the next run (with `max.stateAbstractionPolicy=true` and dynamic abstraction enabled), the policy file is loaded before exploration so each activity starts from the last learned abstraction mask instead of the default; activities and masks refined/rolled-back in previous sessions are reused.
+* **Example**: A minimal `statekey` file may look like:
+
+  ```json
+  {
+    "version": 1,
+    "activities": [
+      { "name": "com.example.MainActivity", "mask": 47 },
+      { "name": "com.example.DetailActivity", "mask": 127 },
+      { "name": "com.example.SearchActivity", "mask": "Clazz|ResourceID|OperateMask|Text" }
+    ],
+    "coarseningBlacklist": [
+      { "activity": "com.example.MainActivity", "mask": 63 }
+    ]
+  }
+  ```
+
+  Here, `mask` is a bitmask over widget-key attributes (`Clazz`, `ResourceID`, `OperateMask`, `ScrollType`, `Text`, `ContentDesc`, `Index`) used internally by the native code. By default, these masks are **learned and updated automatically** by the dynamic abstraction algorithm; statekey persistence simply snapshots the final masks and blacklisted masks for reuse in the next run.
+
+  Advanced users may manually tweak masks per activity by editing the numeric `mask` values in `statekey.json` (at their own risk). At the moment there is **no separate max.config key for declaring a mask composition in text form**; the recommended workflow is to:
+
+  1. Enable `max.stateAbstractionPolicy=true`, run Fastbot once to generate `fastbot_{packagename}.statekey.json`.
+  2. Inspect the generated masks for each activity.
+  3. Optionally adjust individual numeric masks in the JSON to make a page coarser or finer, then rerun Fastbot with the same package and config so it warm-starts from your edited policy.
+* **Compatibility**: This feature only affects dynamic state abstraction (`max.staticStateAbstraction=false`). It does not change the refinement/coarsening algorithm itself—only its initial masks and the blacklist of masks that should not be retried.
+
 ### Changelog
 
 **update 2026.3**
