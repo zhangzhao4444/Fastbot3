@@ -348,6 +348,10 @@ namespace gui_tree {
         OperatePtr getOperateOpt(const ElementPtr &element, const std::string &activity,
                                  const std::string &deviceID = "");
 
+        /** Event-driven precondition page report: build state and forward to agent guide logic. */
+        void addCurrentPageAsPrecondition(const ElementPtr &element, const std::string &activity,
+                                          const std::string &deviceID = "");
+
         /**
          * @brief Get the preference object
          * 

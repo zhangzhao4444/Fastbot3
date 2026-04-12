@@ -985,6 +985,28 @@ namespace fastbotx {
         return state;
     }
 
+    void Model::addCurrentPageAsPrecondition(const ElementPtr &element, const std::string &activity,
+                                             const std::string &deviceID) {
+        if (!element) {
+            BLOG("[GUIDE] Model::addCurrentPageAsPrecondition skip: null element");
+            return;
+        }
+        AbstractAgentPtr agent = getOrCreateAgent(deviceID);
+        if (!agent) {
+            BLOG("[GUIDE] Model::addCurrentPageAsPrecondition skip: no agent");
+            return;
+        }
+        stringPtr activityPtr = getOrCreateActivityPtr(activity);
+        StatePtr state = buildStateOnly(element, agent, activityPtr);
+        if (!state) {
+            BLOG("[GUIDE] Model::addCurrentPageAsPrecondition skip: buildStateOnly failed activity=%s", activity.c_str());
+            return;
+        }
+        BLOG("[GUIDE] Model::addCurrentPageAsPrecondition activity=%s stateHash=%lu actions=%zu",
+             activity.c_str(), static_cast<unsigned long>(state->hash()), state->getActions().size());
+        agent->addCurrentPageAsPrecondition(state);
+    }
+
     /**
      * @brief Select an action based on state, agent, and custom preferences
      * 

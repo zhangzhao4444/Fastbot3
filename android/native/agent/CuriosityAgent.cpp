@@ -261,10 +261,16 @@ namespace fastbotx {
     }
 
     ActionPtr CuriosityAgent::selectNewAction() {
+        checkPendingGuideResult();
+
         StatePtr state = this->_newState;
         if (!state) {
             BDLOG("CuriosityAgent: no state, fallback");
             return fallbackPickAction();
+        }
+        if (ActionPtr guide = trySelectGuideAction()) {
+            BDLOG("[GUIDE] Curiosity select guide action - %s", guide->toString().c_str());
+            return guide;
         }
         uintptr_t currentHash = state->hash();
         int blockTimes = getCurrentStateBlockTimes();

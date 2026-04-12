@@ -1,0 +1,26 @@
+/*
+ * Strict FlatBuffers schema for separate .precond persistence.
+ */
+
+namespace fastbotx;
+
+table PreconditionTemplate {
+    length:int;
+    sequence:[ulong];
+    reliability:[double];
+}
+
+table PreconditionPage {
+    hashcode:ulong;
+    score:double;
+    templates:[PreconditionTemplate];
+}
+
+table PreconditionModel {
+    version:int;
+    pages:[PreconditionPage];
+}
+
+root_type PreconditionModel;
+file_identifier "PCND";
+

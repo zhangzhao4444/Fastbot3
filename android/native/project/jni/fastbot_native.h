@@ -13,8 +13,7 @@ extern "C" {
 #endif
 
 // getAction (returns operate as JSON string)
-JNIEXPORT jstring JNICALL
-Java_com_bytedance_fastbot_AiClient_getOperateJsonNative(JNIEnv *env, jobject, jstring, jstring);
+JNIEXPORT jstring JNICALL Java_com_bytedance_fastbot_AiClient_getOperateJsonNative(JNIEnv *env, jobject, jstring, jstring);
 
 // InitAgent
 JNIEXPORT void JNICALL
@@ -37,6 +36,9 @@ Java_com_bytedance_fastbot_AiClient_getActionFromBufferNative(JNIEnv *env, jobje
 JNIEXPORT jobject JNICALL
 Java_com_bytedance_fastbot_AiClient_getActionFromBufferNativeStructured(JNIEnv *env, jobject, jstring activity,
                                                                          jobject xmlBuffer, jint byteLength);
+JNIEXPORT void JNICALL
+Java_com_bytedance_fastbot_AiClient_addCurrentPageAsPreconditionSyncNative(JNIEnv *env, jobject, jstring activity,
+                                                                           jstring xmlDescOfGuiTree);
 JNIEXPORT jstring JNICALL
 Java_com_bytedance_fastbot_AiClient_getNativeVersion(JNIEnv *env, jclass clazz);
 JNIEXPORT void JNICALL

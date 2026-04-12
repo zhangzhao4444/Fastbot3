@@ -19,10 +19,28 @@
 #include "../events/Preference.h"
 #include "LLMTaskAgent.h"
 #include "../llm/LlmJavaHttp.h"
+#include <cinttypes>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
 #include <future>
+#include "../storage/PreconditionModel_generated.h"
 
 namespace fastbotx {
+
+    namespace GuideConstants {
+        constexpr double kMinCandidateScore = 0.3;
+        constexpr double kMinPageScore = 0.1;
+        constexpr double kMaxPageScore = 2.0;
+        constexpr int kMaxTemplateRewardPerEpisode = 10;
+        constexpr int kMaxTemplateSelectionPerEpisode = 10;
+        constexpr int kMaxPageSelectionPerEpisode = 20;
+        constexpr int kFailBlacklistThreshold = 3;
+        constexpr int kNoProgressThreshold = 3;
+        constexpr int kSystemFailStopThreshold = 20;
+        constexpr size_t kRecentActionHistoryCap = 32;
+    }
 
     enum class LlmdroidMode { EXPLORE, NAVIGATE, TEST_FUNCTION };
 
@@ -62,6 +80,84 @@ namespace fastbotx {
     };
 
     namespace {
+
+        struct GuideChoice {
+            ActionPtr action;
+            uint64_t pageHash{0};
+            int templateIndex{-1};
+            int pos{-1};
+            double score{-1.0};
+        };
+
+        inline bool isValidGuideActionHash(uint64_t h) {
+            return h != 0;
+        }
+
+        inline void clampTemplateLength(int *len) {
+            if (!len) return;
+            if (*len < 0) *len = 0;
+            if (*len > AbstractAgent::MAX_TEMPLATE_SEQUENCE_LEN) {
+                *len = AbstractAgent::MAX_TEMPLATE_SEQUENCE_LEN;
+            }
+        }
+
+        // Backward-compatible parser for legacy custom-binary .precond (PCTL v2)
+        bool parseLegacyPreconditionBinaryV2(
+                const std::vector<uint8_t> &buf,
+                std::unordered_map<uint64_t, AbstractAgent::PreconditionInfo> &out) {
+            auto readBytes = [&](size_t &off, void *dst, size_t n) -> bool {
+                if (off + n > buf.size()) return false;
+                std::memcpy(dst, buf.data() + off, n);
+                off += n;
+                return true;
+            };
+
+            size_t off = 0;
+            char magic[4] = {0, 0, 0, 0};
+            uint32_t version = 0;
+            uint32_t entryCount = 0;
+            if (!readBytes(off, magic, sizeof(magic))) return false;
+            if (!readBytes(off, &version, sizeof(version))) return false;
+            if (!readBytes(off, &entryCount, sizeof(entryCount))) return false;
+            if (magic[0] != 'P' || magic[1] != 'C' || magic[2] != 'T' || magic[3] != 'L') return false;
+            if (version != 2) return false;
+
+            std::unordered_map<uint64_t, AbstractAgent::PreconditionInfo> loaded;
+            for (uint32_t e = 0; e < entryCount; ++e) {
+                uint64_t pageHash = 0;
+                double score = 1.0;
+                uint32_t tcount = 0;
+                if (!readBytes(off, &pageHash, sizeof(pageHash))) return false;
+                if (!readBytes(off, &score, sizeof(score))) return false;
+                if (!readBytes(off, &tcount, sizeof(tcount))) return false;
+
+                AbstractAgent::PreconditionInfo info;
+                info.score = std::max(GuideConstants::kMinPageScore, std::min(score, GuideConstants::kMaxPageScore));
+                info.templateCount = std::min(static_cast<int>(tcount), AbstractAgent::MAX_TEMPLATE_SEQUENCE_LEN);
+
+                for (int i = 0; i < AbstractAgent::MAX_TEMPLATE_SEQUENCE_LEN; ++i) {
+                    uint32_t tlen = 0;
+                    AbstractAgent::GuidancePathTemplate tpl;
+                    if (!readBytes(off, &tlen, sizeof(tlen))) return false;
+                    if (!readBytes(off, tpl.sequence.data(), sizeof(uint64_t) * AbstractAgent::MAX_TEMPLATE_SEQUENCE_LEN)) return false;
+                    if (!readBytes(off, tpl.reliability.data(), sizeof(double) * AbstractAgent::MAX_TEMPLATE_SEQUENCE_LEN)) return false;
+                    tpl.length = static_cast<int>(tlen);
+                    clampTemplateLength(&tpl.length);
+                    for (int p = tpl.length; p < AbstractAgent::MAX_TEMPLATE_SEQUENCE_LEN; ++p) {
+                        tpl.sequence[p] = 0;
+                        tpl.reliability[p] = 0.0;
+                    }
+                    if (i < info.templateCount) {
+                        info.templates[i] = tpl;
+                    }
+                }
+
+                loaded[pageHash] = info;
+            }
+
+            out.swap(loaded);
+            return true;
+        }
 
         void llmdroidResetFuture(LlmdroidAgentOverlay &L) {
             if (!L.gptAgent) {
@@ -395,6 +491,23 @@ namespace fastbotx {
     AbstractAgent::AbstractAgent(const ModelPtr &model)
             : AbstractAgent() {
         this->_model = model;
+        // Avoid virtual call from constructor; initialize guide runtime counters directly.
+        _coveredThisEpisode.clear();
+        _consecutiveFails.clear();
+        _noProgressCount.clear();
+        _lastPosition.clear();
+        _templateRewardCounts.clear();
+        _pageSelectionCounts.clear();
+        _templateSelectionCounts.clear();
+        _guideRecentActionHashes.clear();
+        _hasPendingGuideCheck = false;
+        _pendingGuideActionHash = 0;
+        _pendingGuideTargetPage = 0;
+        _pendingGuideTemplateIndex = -1;
+        _pendingGuidePosition = -1;
+        _preconditionReachedSinceLastGuide = false;
+        _pendingGuideRewardApplied = false;
+        _guideSystemFailureCount = 0;
     }
 
     /**
@@ -516,8 +629,7 @@ namespace fastbotx {
         _newState = node;
 
         // If state blocking detection is enabled, check if stuck in loop
-        if(BLOCK_STATE_TIME_RESTART != -1)
-        {
+#if BLOCK_STATE_TIME_RESTART != -1
             if (equals(_newState, _currentState)) {
                 // Consecutively reached same state, increment block count
                 this->_currentStateBlockTimes++;
@@ -525,7 +637,7 @@ namespace fastbotx {
                 // Reached new state, reset block count
                 this->_currentStateBlockTimes = 0;
             }
-        }
+#endif
     }
 
     /**
@@ -555,6 +667,520 @@ namespace fastbotx {
         _lastAction = _currentAction;
         _currentAction = _newAction;
         _newAction = nullptr;  // Clear new action, wait for next selection
+
+        // [GUIDE] Record executed action hash for template generation (old -> new order).
+        if (_currentAction) {
+            const uint64_t h = static_cast<uint64_t>(_currentAction->hash());
+            if (isValidGuideActionHash(h)) {
+                _guideRecentActionHashes.push_back(h);
+                if (_guideRecentActionHashes.size() > GuideConstants::kRecentActionHistoryCap) {
+                    _guideRecentActionHashes.erase(_guideRecentActionHashes.begin());
+                }
+            }
+            if (_currentAction->getActionType() == ActionType::RESTART) {
+                BLOG("[GUIDE] beginNewEpisode trigger: RESTART action");
+                beginNewEpisode();
+            }
+        }
+    }
+
+    void AbstractAgent::beginNewEpisode() {
+        _coveredThisEpisode.clear();
+        _consecutiveFails.clear();
+        _noProgressCount.clear();
+        _lastPosition.clear();
+        _templateRewardCounts.clear();
+        _pageSelectionCounts.clear();
+        _templateSelectionCounts.clear();
+        _guideRecentActionHashes.clear();
+        _hasPendingGuideCheck = false;
+        _pendingGuideActionHash = 0;
+        _pendingGuideTargetPage = 0;
+        _pendingGuideTemplateIndex = -1;
+        _pendingGuidePosition = -1;
+        _preconditionReachedSinceLastGuide = false;
+        _pendingGuideRewardApplied = false;
+        _guideSystemFailureCount = 0;
+        BLOG("[GUIDE] beginNewEpisode: runtime counters cleared");
+    }
+
+    void AbstractAgent::checkPendingGuideResult() {
+        if (!_hasPendingGuideCheck) {
+            return;
+        }
+
+        BLOG("[GUIDE] pending check: action=%" PRIu64 " page=%" PRIu64 " reached=%d",
+             _pendingGuideActionHash, _pendingGuideTargetPage, _preconditionReachedSinceLastGuide ? 1 : 0);
+
+        auto pageIt = _preconditionPages.find(_pendingGuideTargetPage);
+        if (_preconditionReachedSinceLastGuide) {
+            _consecutiveFails[_pendingGuideTargetPage][_pendingGuideActionHash] = 0;
+            _noProgressCount[_pendingGuideTargetPage] = 0;
+            _guideSystemFailureCount = 0;
+            BLOG("[GUIDE] settle success: reset fail/noProgress for page=%" PRIu64 " action=%" PRIu64,
+                 _pendingGuideTargetPage, _pendingGuideActionHash);
+        } else {
+            if (pageIt != _preconditionPages.end()) {
+                PreconditionInfo &info = pageIt->second;
+                // Action-level decay on matched slots.
+                for (int t = 0; t < info.templateCount; ++t) {
+                    GuidancePathTemplate &tpl = info.templates[t];
+                    clampTemplateLength(&tpl.length);
+                    for (int i = 0; i < tpl.length; ++i) {
+                        if (tpl.sequence[i] == _pendingGuideActionHash && tpl.reliability[i] > 0.0) {
+                            const double oldR = tpl.reliability[i];
+                            tpl.reliability[i] = oldR * 0.5;
+                            BLOG("[GUIDE] punish hit slot: page=%" PRIu64 " tpl=%d pos=%d action=%" PRIu64 " rel %.4f->%.4f",
+                                 _pendingGuideTargetPage, t, i, _pendingGuideActionHash, oldR, tpl.reliability[i]);
+                        }
+                    }
+                }
+                // Page-level global decay.
+                for (int t = 0; t < info.templateCount; ++t) {
+                    GuidancePathTemplate &tpl = info.templates[t];
+                    clampTemplateLength(&tpl.length);
+                    for (int i = 0; i < tpl.length; ++i) {
+                        tpl.reliability[i] *= 0.95;
+                    }
+                }
+            }
+
+            int &fails = _consecutiveFails[_pendingGuideTargetPage][_pendingGuideActionHash];
+            fails += 1;
+            int &noProgress = _noProgressCount[_pendingGuideTargetPage];
+            noProgress += 1;
+            _guideSystemFailureCount += 1;
+            BLOG("[GUIDE] settle fail: page=%" PRIu64 " action=%" PRIu64 " fails=%d noProgress=%d systemFail=%d",
+                 _pendingGuideTargetPage, _pendingGuideActionHash, fails, noProgress, _guideSystemFailureCount);
+
+            if (pageIt != _preconditionPages.end()) {
+                PreconditionInfo &info = pageIt->second;
+                if (noProgress >= GuideConstants::kNoProgressThreshold) {
+                    const double oldScore = info.score;
+                    info.score = std::max(info.score * 0.3, GuideConstants::kMinPageScore);
+                    _coveredThisEpisode.insert(_pendingGuideTargetPage);
+                    BLOG("[GUIDE] page stop-loss: page=%" PRIu64 " score %.4f->%.4f, marked covered",
+                         _pendingGuideTargetPage, oldScore, info.score);
+                }
+                if (fails >= GuideConstants::kFailBlacklistThreshold) {
+                    for (int t = 0; t < info.templateCount; ++t) {
+                        GuidancePathTemplate &tpl = info.templates[t];
+                        clampTemplateLength(&tpl.length);
+                        for (int i = 0; i < tpl.length; ++i) {
+                            if (tpl.sequence[i] == _pendingGuideActionHash) {
+                                tpl.reliability[i] = 0.0;
+                            }
+                        }
+                    }
+                    BLOG("[GUIDE] action blacklisted by fail threshold: page=%" PRIu64 " action=%" PRIu64,
+                         _pendingGuideTargetPage, _pendingGuideActionHash);
+                }
+            }
+        }
+
+        BLOG("[GUIDE] pending cleared: action=%" PRIu64 " page=%" PRIu64,
+             _pendingGuideActionHash, _pendingGuideTargetPage);
+        _hasPendingGuideCheck = false;
+        _pendingGuideActionHash = 0;
+        _pendingGuideTargetPage = 0;
+        _pendingGuideTemplateIndex = -1;
+        _pendingGuidePosition = -1;
+        _preconditionReachedSinceLastGuide = false;
+        _pendingGuideRewardApplied = false;
+    }
+
+    ActionPtr AbstractAgent::trySelectGuideAction() {
+        if (!_newState || _preconditionPages.empty()) {
+            return nullptr;
+        }
+        if (_guideSystemFailureCount >= GuideConstants::kSystemFailStopThreshold) {
+            BLOG("[GUIDE] skip by system stop-loss: systemFail=%d", _guideSystemFailureCount);
+            return nullptr;
+        }
+
+        std::unordered_map<uint64_t, ActionPtr> currentActions;
+        for (const auto &a : _newState->getActions()) {
+            if (!a) continue;
+            const uint64_t h = static_cast<uint64_t>(a->hash());
+            if (!isValidGuideActionHash(h)) continue;
+            currentActions[h] = a;
+        }
+        if (currentActions.empty()) {
+            BLOG("[GUIDE] no valid current action hash on page=%" PRIu64,
+                 static_cast<uint64_t>(_newState->hash()));
+            return nullptr;
+        }
+
+        GuideChoice best;
+        for (auto &kv : _preconditionPages) {
+            const uint64_t pageHash = kv.first;
+            PreconditionInfo &info = kv.second;
+            if (_coveredThisEpisode.count(pageHash) > 0) {
+                BLOG("[GUIDE] candidate page filtered: page=%" PRIu64 " reason=covered", pageHash);
+                continue;
+            }
+            if (info.score < GuideConstants::kMinCandidateScore) {
+                BLOG("[GUIDE] candidate page filtered: page=%" PRIu64 " reason=low-score score=%.4f", pageHash, info.score);
+                continue;
+            }
+            if (info.templateCount <= 0) {
+                BLOG("[GUIDE] candidate page filtered: page=%" PRIu64 " reason=no-template", pageHash);
+                continue;
+            }
+            if (_pageSelectionCounts[pageHash] >= GuideConstants::kMaxPageSelectionPerEpisode) {
+                BLOG("[GUIDE] candidate page filtered: page=%" PRIu64 " reason=page-select-limit cnt=%d", pageHash, _pageSelectionCounts[pageHash]);
+                continue;
+            }
+
+            for (int t = 0; t < info.templateCount; ++t) {
+                if (_templateSelectionCounts[pageHash][t] >= GuideConstants::kMaxTemplateSelectionPerEpisode) {
+                    BLOG("[GUIDE] candidate template filtered: page=%" PRIu64 " tpl=%d reason=template-select-limit cnt=%d",
+                         pageHash, t, _templateSelectionCounts[pageHash][t]);
+                    continue;
+                }
+                GuidancePathTemplate &tpl = info.templates[t];
+                clampTemplateLength(&tpl.length);
+                if (tpl.length <= 0) {
+                    continue;
+                }
+                for (int pos = tpl.length - 1; pos >= 0; --pos) {
+                    const uint64_t actionHash = tpl.sequence[pos];
+                    if (!isValidGuideActionHash(actionHash)) {
+                        continue;
+                    }
+                    const int failCount = _consecutiveFails[pageHash][actionHash];
+                    if (failCount >= GuideConstants::kFailBlacklistThreshold) {
+                        tpl.reliability[pos] = 0.0;
+                        BLOG("[GUIDE] template slot filtered: page=%" PRIu64 " tpl=%d pos=%d action=%" PRIu64 " reason=fail-blacklist",
+                             pageHash, t, pos, actionHash);
+                        continue;
+                    }
+                    auto actIt = currentActions.find(actionHash);
+                    if (actIt == currentActions.end()) {
+                        continue;
+                    }
+                    const double p = (tpl.length == 1) ? 1.0 : (static_cast<double>(pos) / static_cast<double>(tpl.length - 1));
+                    const double r = tpl.reliability[pos];
+                    const double c = info.score / 2.0;
+                    const double score = 0.5 * p + 0.3 * r + 0.2 * c;
+                    BLOG("[GUIDE] template match: page=%" PRIu64 " tpl=%d pos=%d action=%" PRIu64 " P=%.4f R=%.4f C=%.4f S=%.4f",
+                         pageHash, t, pos, actionHash, p, r, c, score);
+                    if (score > best.score) {
+                        best.action = actIt->second;
+                        best.pageHash = pageHash;
+                        best.templateIndex = t;
+                        best.pos = pos;
+                        best.score = score;
+                    }
+                    break; // terminal-first: first executable slot from tail wins this template
+                }
+            }
+        }
+
+        if (!best.action) {
+            BLOG("[GUIDE] no guide action selected this step");
+            return nullptr;
+        }
+
+        const uint64_t actionHash = static_cast<uint64_t>(best.action->hash());
+        _preconditionReachedSinceLastGuide = false;
+        _hasPendingGuideCheck = true;
+        _pendingGuideActionHash = actionHash;
+        _pendingGuideTargetPage = best.pageHash;
+        _pendingGuideTemplateIndex = best.templateIndex;
+        _pendingGuidePosition = best.pos;
+        _pendingGuideRewardApplied = false;
+        _lastPosition[best.pageHash] = best.pos;
+        _pageSelectionCounts[best.pageHash] += 1;
+        _templateSelectionCounts[best.pageHash][best.templateIndex] += 1;
+        BLOG("[GUIDE] selected action: page=%" PRIu64 " tpl=%d pos=%d action=%" PRIu64 " bestScore=%.4f",
+             best.pageHash, best.templateIndex, best.pos, actionHash, best.score);
+        BLOG("[GUIDE] pending set: has=1 action=%" PRIu64 " page=%" PRIu64,
+             _pendingGuideActionHash, _pendingGuideTargetPage);
+        return best.action;
+    }
+
+    void AbstractAgent::addCurrentPageAsPrecondition(const StatePtr &state) {
+        if (!state) {
+            return;
+        }
+        const uint64_t pageHash = static_cast<uint64_t>(state->hash());
+        PreconditionInfo &info = _preconditionPages[pageHash];
+
+        BLOG("[GUIDE] addCurrentPageAsPrecondition: page=%" PRIu64 " pending=%d pendingAction=%" PRIu64 " pendingPage=%" PRIu64,
+             pageHash, _hasPendingGuideCheck ? 1 : 0, _pendingGuideActionHash, _pendingGuideTargetPage);
+
+        // Refresh actionList from current page actions.
+        info.actionList.clear();
+        for (const auto &a : state->getActions()) {
+            if (!a) continue;
+            const uint64_t h = static_cast<uint64_t>(a->hash());
+            if (isValidGuideActionHash(h)) {
+                info.actionList.insert(h);
+            }
+        }
+
+        // Delayed settlement: if a guide action is pending, reaching any precondition page marks success.
+        // Reward the pending template once, then disable this template for the rest of current episode.
+        if (_hasPendingGuideCheck) {
+            _preconditionReachedSinceLastGuide = true;
+            BLOG("[GUIDE] pending settled as success by precondition hit: reachedPage=%" PRIu64 " pendingPage=%" PRIu64,
+                 pageHash, _pendingGuideTargetPage);
+
+            auto pit = _preconditionPages.find(_pendingGuideTargetPage);
+            if (!_pendingGuideRewardApplied && pit != _preconditionPages.end()) {
+                PreconditionInfo &targetInfo = pit->second;
+                const int tIdx = _pendingGuideTemplateIndex;
+                bool rewardApplied = false;
+                if (tIdx >= 0 && tIdx < targetInfo.templateCount) {
+                    if (_templateRewardCounts[_pendingGuideTargetPage][tIdx] < GuideConstants::kMaxTemplateRewardPerEpisode) {
+                        GuidancePathTemplate &tpl = targetInfo.templates[tIdx];
+                        clampTemplateLength(&tpl.length);
+                        for (int i = 0; i < tpl.length; ++i) {
+                            if (tpl.sequence[i] != 0 && tpl.reliability[i] > 0.0) {
+                                const double oldR = tpl.reliability[i];
+                                tpl.reliability[i] = std::min(oldR * 1.2, 1.0);
+                                BLOG("[GUIDE] reward slot: page=%" PRIu64 " tpl=%d pos=%d action=%" PRIu64 " rel %.4f->%.4f",
+                                     _pendingGuideTargetPage, tIdx, i, _pendingGuideActionHash, oldR, tpl.reliability[i]);
+                            }
+                        }
+                        _templateRewardCounts[_pendingGuideTargetPage][tIdx] += 1;
+                        rewardApplied = true;
+                    } else {
+                        BLOG("[GUIDE] reward skipped by template cap: page=%" PRIu64 " tpl=%d",
+                             _pendingGuideTargetPage, tIdx);
+                    }
+                    // This template has already been executed successfully in this episode.
+                    // Lock it for the rest of this episode; reward remains persisted for next rounds.
+                    _templateSelectionCounts[_pendingGuideTargetPage][tIdx] = GuideConstants::kMaxTemplateSelectionPerEpisode;
+                    BLOG("[GUIDE] template locked for this episode: page=%" PRIu64 " tpl=%d",
+                         _pendingGuideTargetPage, tIdx);
+                }
+                if (rewardApplied) {
+                    const double oldScore = targetInfo.score;
+                    targetInfo.score = std::min(oldScore * 1.5, GuideConstants::kMaxPageScore);
+                    BLOG("[GUIDE] reward page score: page=%" PRIu64 " %.4f->%.4f",
+                         _pendingGuideTargetPage, oldScore, targetInfo.score);
+                }
+                _pendingGuideRewardApplied = true;
+            } else if (_pendingGuideRewardApplied) {
+                BLOG("[GUIDE] reward skipped: already applied for current pending guide action");
+            } else {
+                BLOG("[GUIDE] reward skipped: pending target page not found");
+            }
+        }
+
+        // Keep episode behavior consistent with legacy guide agent: once a precondition page is reached,
+        // do not guide to the same page repeatedly within this episode.
+        _coveredThisEpisode.insert(pageHash);
+
+        // Build template from recent action history (old -> new), keep <= MAX_TEMPLATE_SEQUENCE_LEN non-zero hashes.
+        std::array<uint64_t, MAX_TEMPLATE_SEQUENCE_LEN> seq{};
+        int seqLen = 0;
+        const size_t hs = _guideRecentActionHashes.size();
+        const size_t start = (hs > static_cast<size_t>(MAX_TEMPLATE_SEQUENCE_LEN))
+                             ? (hs - static_cast<size_t>(MAX_TEMPLATE_SEQUENCE_LEN))
+                             : 0;
+        for (size_t i = start; i < hs; ++i) {
+            const uint64_t h = _guideRecentActionHashes[i];
+            if (!isValidGuideActionHash(h)) {
+                continue;
+            }
+            if (seqLen < MAX_TEMPLATE_SEQUENCE_LEN) {
+                seq[seqLen++] = h;
+            }
+        }
+
+        if (seqLen <= 0) {
+            BLOG("[GUIDE] template skip: page=%" PRIu64 " reason=empty-sequence", pageHash);
+            return;
+        }
+
+        auto templateEquals = [&](const GuidancePathTemplate &tpl) -> bool {
+            if (tpl.length != seqLen) {
+                return false;
+            }
+            for (int i = 0; i < seqLen; ++i) {
+                if (tpl.sequence[i] != seq[i]) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        for (int t = 0; t < info.templateCount; ++t) {
+            if (templateEquals(info.templates[t])) {
+                BLOG("[GUIDE] template exists: page=%" PRIu64 " tpl=%d len=%d", pageHash, t, seqLen);
+                return;
+            }
+        }
+
+        // FIFO insert at head, max 5 templates.
+        const int maxSlot = MAX_TEMPLATE_SEQUENCE_LEN;
+        const int oldCount = info.templateCount;
+        const int newCount = std::min(oldCount + 1, maxSlot);
+        for (int i = newCount - 1; i >= 1; --i) {
+            info.templates[i] = info.templates[i - 1];
+        }
+        GuidancePathTemplate newTpl;
+        newTpl.length = seqLen;
+        for (int i = 0; i < seqLen; ++i) {
+            newTpl.sequence[i] = seq[i];
+            newTpl.reliability[i] = 1.0;
+        }
+        info.templates[0] = newTpl;
+        info.templateCount = newCount;
+        BLOG("[GUIDE] template inserted: page=%" PRIu64 " len=%d templateCount=%d", pageHash, seqLen, info.templateCount);
+    }
+
+    bool AbstractAgent::savePreconditionPagesToFile(const std::string &filepath) const {
+        if (filepath.empty()) {
+            BLOGE("[GUIDE] save .precond failed: empty path");
+            return false;
+        }
+        flatbuffers::FlatBufferBuilder builder;
+        std::vector<flatbuffers::Offset<fastbotx::PreconditionPage>> pageOffsets;
+
+        size_t templateTotal = 0;
+        for (const auto &kv : _preconditionPages) {
+            const uint64_t pageHash = kv.first;
+            const PreconditionInfo &info = kv.second;
+            const int tcount = std::max(0, std::min(info.templateCount, MAX_TEMPLATE_SEQUENCE_LEN));
+
+            std::vector<flatbuffers::Offset<fastbotx::PreconditionTemplate>> templateOffsets;
+            for (int i = 0; i < tcount; ++i) {
+                GuidancePathTemplate tpl = info.templates[i];
+                clampTemplateLength(&tpl.length);
+
+                auto seq = builder.CreateVector(tpl.sequence.data(), MAX_TEMPLATE_SEQUENCE_LEN);
+                auto rel = builder.CreateVector(tpl.reliability.data(), MAX_TEMPLATE_SEQUENCE_LEN);
+                templateOffsets.emplace_back(fastbotx::CreatePreconditionTemplate(
+                        builder, tpl.length, seq, rel));
+                templateTotal++;
+            }
+
+            auto templatesOffset = builder.CreateVector(templateOffsets);
+            pageOffsets.emplace_back(fastbotx::CreatePreconditionPage(
+                    builder, pageHash, info.score, templatesOffset));
+        }
+
+        auto pagesOffset = builder.CreateVector(pageOffsets);
+        auto root = fastbotx::CreatePreconditionModel(builder, 1, pagesOffset);
+        fastbotx::FinishPreconditionModelBuffer(builder, root);
+
+        std::ofstream out(filepath, std::ios::binary | std::ios::trunc);
+        if (!out.is_open()) {
+            BLOGE("[GUIDE] save .precond failed: cannot open %s", filepath.c_str());
+            return false;
+        }
+        out.write(reinterpret_cast<const char *>(builder.GetBufferPointer()),
+                  static_cast<std::streamsize>(builder.GetSize()));
+        if (out.fail()) {
+            BLOGE("[GUIDE] save .precond failed while writing: %s", filepath.c_str());
+            return false;
+        }
+        BLOG("[GUIDE] save .precond(flatbuffers-strict) ok: path=%s pages=%zu templates=%zu",
+             filepath.c_str(), _preconditionPages.size(), templateTotal);
+        return true;
+    }
+
+    bool AbstractAgent::loadPreconditionPagesFromFile(const std::string &filepath) {
+        _preconditionPages.clear();
+        if (filepath.empty()) {
+            BLOGE("[GUIDE] load .precond failed: empty path");
+            return false;
+        }
+        std::ifstream in(filepath, std::ios::binary | std::ios::in);
+        if (!in.is_open()) {
+            BLOG("[GUIDE] load .precond: file not found (first run): %s", filepath.c_str());
+            return false;
+        }
+
+        in.seekg(0, std::ios::end);
+        const std::streamsize sz = in.tellg();
+        in.seekg(0, std::ios::beg);
+        if (sz <= 0) {
+            BLOGE("[GUIDE] load .precond failed: empty file %s", filepath.c_str());
+            return false;
+        }
+        std::vector<uint8_t> buf(static_cast<size_t>(sz));
+        in.read(reinterpret_cast<char *>(buf.data()), sz);
+        if (in.fail()) {
+            BLOGE("[GUIDE] load .precond failed: read error %s", filepath.c_str());
+            return false;
+        }
+
+        flatbuffers::Verifier verifier(buf.data(), buf.size());
+        if (!fastbotx::VerifyPreconditionModelBuffer(verifier)) {
+            std::unordered_map<uint64_t, PreconditionInfo> legacyPages;
+            if (parseLegacyPreconditionBinaryV2(buf, legacyPages)) {
+                _preconditionPages.swap(legacyPages);
+                BLOG("[GUIDE] load .precond legacy(v2) ok: path=%s pages=%zu", filepath.c_str(), _preconditionPages.size());
+                return true;
+            }
+            BLOGE("[GUIDE] load .precond failed: invalid flatbuffer and legacy parse failed %s", filepath.c_str());
+            return false;
+        }
+        const fastbotx::PreconditionModel *model = fastbotx::GetPreconditionModel(buf.data());
+        if (model == nullptr) {
+            BLOGE("[GUIDE] load .precond failed: null root %s", filepath.c_str());
+            return false;
+        }
+
+        const int version = model->version();
+        if (version != 1) {
+            BLOGE("[GUIDE] load .precond failed: unsupported version=%d path=%s", version, filepath.c_str());
+            return false;
+        }
+
+        auto pages = model->pages();
+        if (pages == nullptr) {
+            BLOGE("[GUIDE] load .precond failed: pages missing path=%s", filepath.c_str());
+            return false;
+        }
+
+        size_t templateTotal = 0;
+        for (size_t e = 0; e < pages->size(); ++e) {
+            auto page = pages->Get(static_cast<flatbuffers::uoffset_t>(e));
+            if (page == nullptr) continue;
+
+            const uint64_t pageHash = page->hashcode();
+            const double score = page->score();
+            auto templates = page->templates();
+
+            PreconditionInfo info;
+            info.score = std::max(GuideConstants::kMinPageScore, std::min(score, GuideConstants::kMaxPageScore));
+            const int templateSize = templates ? static_cast<int>(templates->size()) : 0;
+            info.templateCount = std::min(templateSize, MAX_TEMPLATE_SEQUENCE_LEN);
+
+            for (int i = 0; i < info.templateCount; ++i) {
+                auto templ = templates->Get(i);
+                if (templ == nullptr) continue;
+                GuidancePathTemplate tpl;
+
+                tpl.length = templ->length();
+                clampTemplateLength(&tpl.length);
+
+                auto seq = templ->sequence();
+                auto rel = templ->reliability();
+                for (int j = 0; j < MAX_TEMPLATE_SEQUENCE_LEN; ++j) {
+                    tpl.sequence[j] = (seq && j < static_cast<int>(seq->size())) ? seq->Get(j) : 0;
+                    tpl.reliability[j] = (rel && j < static_cast<int>(rel->size())) ? rel->Get(j) : 0.0;
+                }
+                for (int p = tpl.length; p < MAX_TEMPLATE_SEQUENCE_LEN; ++p) {
+                    tpl.sequence[p] = 0;
+                    tpl.reliability[p] = 0.0;
+                }
+
+                info.templates[i] = tpl;
+                templateTotal++;
+            }
+            _preconditionPages[pageHash] = info;
+        }
+
+        BLOG("[GUIDE] load .precond(flatbuffers-strict) ok: path=%s pages=%zu templates=%zu",
+             filepath.c_str(), _preconditionPages.size(), templateTotal);
+        return true;
     }
 
     /**
