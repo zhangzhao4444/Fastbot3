@@ -183,6 +183,44 @@ public class MonkeySourceApeU2 extends MonkeySourceApeBase implements MonkeyEven
         return server.peekImageQueue();
     }
 
+    public boolean sendCurrentPageAsPrecondition() {
+        Logger.println("[MonkeySourceApeU2] sendCurrentPageAsPrecondition: enter");
+        try {
+            // Always refresh hierarchy to avoid stale cached tree when this endpoint is triggered.
+            Logger.println("[MonkeySourceApeU2] forcing dumpHierarchy() to refresh latest GUI tree");
+            try {
+                this.dumpHierarchy();
+                Logger.println("[MonkeySourceApeU2] dumpHierarchy completed, stringOfGuiTree length="
+                        + (this.stringOfGuiTree == null ? 0 : this.stringOfGuiTree.length()));
+            } catch (Exception ex) {
+                Logger.errorPrintln("[MonkeySourceApeU2] dumpHierarchy failed before sending precondition: " + ex.getMessage());
+            }
+
+            if (this.stringOfGuiTree == null || this.stringOfGuiTree.isEmpty()) {
+                Logger.errorPrintln("[MonkeySourceApeU2] stringOfGuiTree is empty after forced dump, abort sending precondition");
+                return false;
+            }
+
+            Logger.println("[MonkeySourceApeU2] calling native addCurrentPageAsPreconditionSync...");
+            int status = AiClient.addCurrentPageAsPreconditionSyncStatus(this.stringOfGuiTree);
+            if (status != 0) {
+                Logger.errorPrintln("[MonkeySourceApeU2] Native failed to process precondition, status=" + status);
+                return false;
+            }
+
+            Logger.println("[MonkeySourceApeU2] Sent current page as precondition to native");
+            Logger.println("[MonkeySourceApeU2] Precondition XML length: " + this.stringOfGuiTree.length());
+            Logger.println("[MonkeySourceApeU2] Precondition XML start ---");
+            Logger.println(this.stringOfGuiTree);
+            Logger.println("[MonkeySourceApeU2] Precondition XML end ---");
+            return true;
+        } catch (Throwable t) {
+            Logger.errorPrintln("[MonkeySourceApeU2] sendCurrentPageAsPrecondition failed: " + t.getMessage());
+            t.printStackTrace();
+            return false;
+        }
+    }
+
     /**
      * If this activity could be interacted with. Should be in white list or not in blacklist or
      * not specified.

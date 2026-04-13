@@ -1053,9 +1053,17 @@ namespace fastbotx {
      * @brief Select new action (implements AbstractAgent's pure virtual function)
      */
     ActionPtr DoubleSarsaAgent::selectNewAction() {
+        checkPendingGuideResult();
+
         ActionPtr action = nullptr;
         const char *finalSource = "other";
-        
+
+        action = trySelectGuideAction();
+        if (action) {
+            BLOG("[GUIDE] Double SARSA select guide action - %s", action->toString().c_str());
+            return action;
+        }
+
         // Strategy 1: Select unexecuted actions not in reuse model
         action = this->selectUnperformedActionNotInReuseModel();
         if (nullptr != action) {
@@ -1130,6 +1138,14 @@ namespace fastbotx {
         std::string modelFilePath = useStatic
                                     ? (basePath + ".static" + ModelStorageConstants::ModelFileExtension)
                                     : (basePath + ModelStorageConstants::ModelFileExtension);
+        const std::string preconditionPath = useStatic
+                                             ? (basePath + ".static" + ModelStorageConstants::PreconditionFileExtension)
+                                             : (basePath + ModelStorageConstants::PreconditionFileExtension);
+        auto loadPrecond = [&]() {
+            BLOG("[GUIDE] .fbm load done, clear in-memory precondition pages and load .precond");
+            _preconditionPages.clear();
+            loadPreconditionPagesFromFile(preconditionPath);
+        };
 
         // Set model save path
         this->_modelSavePath = modelFilePath;
@@ -1148,6 +1164,7 @@ namespace fastbotx {
         if (!modelFile.is_open()) {
             BLOGE("Double SARSA: Failed to open model file: %s", modelFilePath.c_str());
             clearReuseModelOnLoadFailure();
+            loadPrecond();
             return;
         }
 
@@ -1160,6 +1177,7 @@ namespace fastbotx {
         if (filesize <= 0 || filesize > DoubleSarsaRLConstants::MaxModelFileSize) {
             BLOGE("Double SARSA: Invalid model file size: %zu", filesize);
             clearReuseModelOnLoadFailure();
+            loadPrecond();
             return;
         }
         
@@ -1171,6 +1189,7 @@ namespace fastbotx {
             BLOGE("Double SARSA: Failed to read complete model file: read %lld bytes, expected %zu bytes", 
                   static_cast<long long>(bytesRead), filesize);
             clearReuseModelOnLoadFailure();
+            loadPrecond();
             return;
         }
         
@@ -1179,12 +1198,14 @@ namespace fastbotx {
         if (!VerifyReuseModelBuffer(verifier)) {
             BLOGE("Double SARSA: Invalid or corrupted model buffer");
             clearReuseModelOnLoadFailure();
+            loadPrecond();
             return;
         }
         auto reuseFBModel = GetReuseModel(modelFileData.get());
         if (!reuseFBModel) {
             BLOGE("Double SARSA: GetReuseModel returned null");
             clearReuseModelOnLoadFailure();
+            loadPrecond();
             return;
         }
 
@@ -1200,6 +1221,7 @@ namespace fastbotx {
         auto reusedModelDataPtr = reuseFBModel->model();
         if (!reusedModelDataPtr) {
             BLOG("Double SARSA: model data is null");
+            loadPrecond();
             return;
         }
         
@@ -1230,6 +1252,7 @@ namespace fastbotx {
         BLOG("Double SARSA: loaded model contains %zu actions, Q1 entries=%zu, Q2 entries=%zu", 
              this->_reuseModel.size(), this->_reuseQValue1.size(), this->_reuseQValue2.size());
         BDLOG("Double SARSA: Note - Q-values (Q1 and Q2) are not loaded from file, starting from 0");
+        loadPrecond();
     }
 
     /**
@@ -1354,6 +1377,16 @@ namespace fastbotx {
         BLOG("Double SARSA: Model saved successfully to: %s (reuse entries=%zu, Q1 entries=%zu, Q2 entries=%zu)", 
              outputFilePath.c_str(), this->_reuseModel.size(), this->_reuseQValue1.size(), this->_reuseQValue2.size());
         BDLOG("Double SARSA: Note - Q-values (Q1 and Q2) are not saved to file, only reuse model is persisted");
+
+        std::string preconditionPath = outputFilePath;
+        const std::string ext = ModelStorageConstants::ModelFileExtension;
+        size_t pos = preconditionPath.rfind(ext);
+        if (pos != std::string::npos && pos + ext.size() == preconditionPath.size()) {
+            preconditionPath.replace(pos, ext.size(), ModelStorageConstants::PreconditionFileExtension);
+        } else {
+            preconditionPath += ModelStorageConstants::PreconditionFileExtension;
+        }
+        savePreconditionPagesToFile(preconditionPath);
     }
 
     void DoubleSarsaAgent::saveReuseModelNow() {

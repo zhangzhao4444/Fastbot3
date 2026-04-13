@@ -527,7 +527,15 @@ namespace fastbotx {
     }
 
     ActionPtr SarsaAgent::selectNewAction() {
+        checkPendingGuideResult();
+
         ActionPtr action = nullptr;
+
+        action = trySelectGuideAction();
+        if (action) {
+            BLOG("[GUIDE] Sarsa select guide action: %s", action->toString().c_str());
+            return action;
+        }
 
         if (this->_newState) {
             ensureWidgetPrioritiesForState(this->_newState);
@@ -584,6 +592,14 @@ namespace fastbotx {
         std::string modelFilePath = useStatic
                                     ? (basePath + ".static" + ModelStorageConstants::ModelFileExtension)
                                     : (basePath + ModelStorageConstants::ModelFileExtension);
+        const std::string preconditionPath = useStatic
+                                             ? (basePath + ".static" + ModelStorageConstants::PreconditionFileExtension)
+                                             : (basePath + ModelStorageConstants::PreconditionFileExtension);
+        auto loadPrecond = [&]() {
+            BLOG("[GUIDE] .fbm load done, clear in-memory precondition pages and load .precond");
+            _preconditionPages.clear();
+            loadPreconditionPagesFromFile(preconditionPath);
+        };
 
         this->_modelSavePath = modelFilePath;
         if (!this->_modelSavePath.empty()) {
@@ -598,6 +614,7 @@ namespace fastbotx {
         if (!modelFile.is_open()) {
             BLOGE("SarsaAgent: Failed to open model file: %s", modelFilePath.c_str());
             clearReuseModelOnLoadFailure();
+            loadPrecond();
             return;
         }
 
@@ -608,6 +625,7 @@ namespace fastbotx {
         if (filesize <= 0) {
             BLOGE("SarsaAgent: Invalid model file size: %zu", filesize);
             clearReuseModelOnLoadFailure();
+            loadPrecond();
             return;
         }
 
@@ -617,6 +635,7 @@ namespace fastbotx {
             BLOGE("SarsaAgent: Failed to read complete model file: read %lld bytes, expected %zu bytes",
                   static_cast<long long>(bytesRead), filesize);
             clearReuseModelOnLoadFailure();
+            loadPrecond();
             return;
         }
 
@@ -624,12 +643,14 @@ namespace fastbotx {
         if (!VerifyReuseModelBuffer(verifier)) {
             BLOGE("SarsaAgent: Invalid or corrupted model buffer");
             clearReuseModelOnLoadFailure();
+            loadPrecond();
             return;
         }
         auto reuseFBModel = GetReuseModel(modelFileData.get());
         if (!reuseFBModel) {
             BLOGE("SarsaAgent: GetReuseModel returned null");
             clearReuseModelOnLoadFailure();
+            loadPrecond();
             return;
         }
 
@@ -637,6 +658,7 @@ namespace fastbotx {
         if (!modelDataPtr) {
             BLOG("SarsaAgent: model data is null");
             clearReuseModelOnLoadFailure();
+            loadPrecond();
             return;
         }
 
@@ -669,6 +691,7 @@ namespace fastbotx {
         }
 
         BLOG("SarsaAgent: loaded model contains %zu actions", this->_reuseModel.size());
+        loadPrecond();
     }
 
     void SarsaAgent::saveReuseModel(const std::string &modelFilepath) {
@@ -767,6 +790,16 @@ namespace fastbotx {
         }
 
         BLOG("SarsaAgent: Model saved successfully to: %s (entries=%zu)", finalPath.c_str(), snapshot.size());
+
+        std::string preconditionPath = finalPath;
+        const std::string ext = ModelStorageConstants::ModelFileExtension;
+        size_t pos = preconditionPath.rfind(ext);
+        if (pos != std::string::npos && pos + ext.size() == preconditionPath.size()) {
+            preconditionPath.replace(pos, ext.size(), ModelStorageConstants::PreconditionFileExtension);
+        } else {
+            preconditionPath += ModelStorageConstants::PreconditionFileExtension;
+        }
+        savePreconditionPagesToFile(preconditionPath);
     }
 
     void SarsaAgent::saveReuseModelNow() {

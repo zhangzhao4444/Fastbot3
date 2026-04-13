@@ -16,7 +16,11 @@
 #include "ActionFilter.h"
 #include "Graph.h"
 
+#include <array>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace fastbotx {
 
@@ -60,6 +64,20 @@ namespace fastbotx {
      */
     class AbstractAgent : public GraphListener {
     public:
+        static constexpr int MAX_TEMPLATE_SEQUENCE_LEN = 5;
+
+        struct GuidancePathTemplate {
+            std::array<uint64_t, MAX_TEMPLATE_SEQUENCE_LEN> sequence{};
+            std::array<double, MAX_TEMPLATE_SEQUENCE_LEN> reliability{};
+            int length{0};
+        };
+
+        struct PreconditionInfo {
+            double score{1.0};
+            std::unordered_set<uint64_t> actionList;
+            std::array<GuidancePathTemplate, MAX_TEMPLATE_SEQUENCE_LEN> templates{};
+            int templateCount{0};
+        };
 
         /**
          * @brief Get current state block count
@@ -175,11 +193,28 @@ namespace fastbotx {
          */
         virtual void processState(const std::shared_ptr<ReuseState> &state);
 
+        /** Event-driven hook: report current page as precondition page candidate. */
+        virtual void addCurrentPageAsPrecondition(const StatePtr &state);
+
+        /** Start a new episode and clear guide runtime counters. */
+        virtual void beginNewEpisode();
+
     private:
         /** Lazy LLMDroid MergedStateGraph + GPT worker (max.llm.llmdroid only). */
         void ensureLlmdroidRuntime();
 
         std::unique_ptr<LlmdroidAgentOverlay> _llmdroid;
+
+    protected:
+        /** Delayed settlement of previous guide action; must run at selectNewAction() entry. */
+        void checkPendingGuideResult();
+
+        /** Try selecting one guide action from precondition templates, returns nullptr when no candidate. */
+        ActionPtr trySelectGuideAction();
+
+        /** Build/load/save .precond data (separate from .fbm). */
+        bool loadPreconditionPagesFromFile(const std::string &filepath);
+        bool savePreconditionPagesToFile(const std::string &filepath) const;
 
     protected:
 
@@ -282,6 +317,34 @@ namespace fastbotx {
 
         /// Algorithm type
         AlgorithmType _algorithmType;
+
+        // [GUIDE] Runtime state machine (non-persistent): delayed one-step settlement.
+        bool _hasPendingGuideCheck{false};
+        uint64_t _pendingGuideActionHash{0};
+        uint64_t _pendingGuideTargetPage{0};
+        bool _preconditionReachedSinceLastGuide{false};
+        bool _pendingGuideRewardApplied{false};
+
+        // [GUIDE] Keep matching context for reliability update and logs.
+        int _pendingGuideTemplateIndex{-1};
+        int _pendingGuidePosition{-1};
+
+        // [GUIDE] Persistent precondition pages and templates.
+        std::unordered_map<uint64_t, PreconditionInfo> _preconditionPages;
+
+        // [GUIDE] Runtime episode-level stop-loss / counters.
+        std::unordered_set<uint64_t> _coveredThisEpisode;
+        std::unordered_map<uint64_t, std::unordered_map<uint64_t, int>> _consecutiveFails;
+        std::unordered_map<uint64_t, int> _noProgressCount;
+        std::unordered_map<uint64_t, int> _lastPosition;
+        std::unordered_map<uint64_t, std::array<int, MAX_TEMPLATE_SEQUENCE_LEN>> _templateRewardCounts;
+        std::unordered_map<uint64_t, int> _pageSelectionCounts;
+        std::unordered_map<uint64_t, std::array<int, MAX_TEMPLATE_SEQUENCE_LEN>> _templateSelectionCounts;
+
+        // [GUIDE] Recent executed action hashes (old -> new), for template generation.
+        std::vector<uint64_t> _guideRecentActionHashes;
+
+        int _guideSystemFailureCount{0};
 
     };
 

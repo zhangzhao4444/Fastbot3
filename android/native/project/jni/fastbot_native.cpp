@@ -249,6 +249,84 @@ jobject JNICALL Java_com_bytedance_fastbot_AiClient_getActionFromBufferNativeStr
     return result;
 }
 
+namespace {
+    // Status code contract (kept stable for Java side):
+    // 0 success, 1 bad-args, 2 model-null, 3 empty-xml, 4 parse-failed,
+    // 5 jni-string-failed, 8 native-exception.
+    int processAddCurrentPageAsPrecondition(const std::string &activityString,
+                                            const std::string &xmlString) {
+        if (_fastbot_model == nullptr) {
+            BLOGE("[GUIDE] addCurrentPageAsPrecondition: model not initialized");
+            return 2;
+        }
+        if (xmlString.empty()) {
+            BLOGE("[GUIDE] addCurrentPageAsPrecondition: empty xml");
+            return 3;
+        }
+
+        fastbotx::ElementPtr elem = fastbotx::Element::createFromXml(xmlString);
+        if (!elem) {
+            BLOGE("[GUIDE] addCurrentPageAsPrecondition: parse xml failed activity=%s", activityString.c_str());
+            return 4;
+        }
+
+        try {
+            BLOG("[GUIDE] addCurrentPageAsPrecondition: activity=%s xmlLen=%zu", activityString.c_str(), xmlString.size());
+            _fastbot_model->addCurrentPageAsPrecondition(elem, activityString, "");
+        } catch (const std::exception &e) {
+            BLOGE("[GUIDE] addCurrentPageAsPrecondition: exception=%s", e.what());
+            return 8;
+        } catch (...) {
+            BLOGE("[GUIDE] addCurrentPageAsPrecondition: unknown exception");
+            return 8;
+        }
+        return 0;
+    }
+
+    int addCurrentPageAsPreconditionSyncImpl(JNIEnv *env, jstring activity, jstring xmlDescOfGuiTree) {
+        if (activity == nullptr || xmlDescOfGuiTree == nullptr) {
+            BLOG("[GUIDE] addCurrentPageAsPreconditionSyncNative bad args");
+            return 1;
+        }
+        const char *activityCString = env->GetStringUTFChars(activity, nullptr);
+        const char *xmlDescriptionCString = env->GetStringUTFChars(xmlDescOfGuiTree, nullptr);
+        if (!activityCString || !xmlDescriptionCString) {
+            if (activityCString) env->ReleaseStringUTFChars(activity, activityCString);
+            if (xmlDescriptionCString) env->ReleaseStringUTFChars(xmlDescOfGuiTree, xmlDescriptionCString);
+            return 5;
+        }
+        std::string activityString(activityCString);
+        std::string xmlString(xmlDescriptionCString);
+        env->ReleaseStringUTFChars(activity, activityCString);
+        env->ReleaseStringUTFChars(xmlDescOfGuiTree, xmlDescriptionCString);
+        return processAddCurrentPageAsPrecondition(activityString, xmlString);
+    }
+}
+
+void JNICALL Java_com_bytedance_fastbot_AiClient_addCurrentPageAsPreconditionSyncNative(JNIEnv *env, jobject,
+                                                                                        jstring activity,
+                                                                                        jstring xmlDescOfGuiTree) {
+    const int status = addCurrentPageAsPreconditionSyncImpl(env, activity, xmlDescOfGuiTree);
+    if (status != 0) {
+        BLOGE("[GUIDE] addCurrentPageAsPreconditionSyncNative failed status=%d", status);
+    }
+}
+
+jint JNICALL Java_com_bytedance_fastbot_AiClient_addCurrentPageAsPreconditionSync(JNIEnv *env, jobject,
+                                                                                   jstring xmlDescOfGuiTree) {
+    if (xmlDescOfGuiTree == nullptr) {
+        BLOG("[GUIDE] addCurrentPageAsPreconditionSync(xml) skip: xml null");
+        return 1;
+    }
+    jstring emptyActivity = env->NewStringUTF("");
+    if (emptyActivity == nullptr) {
+        return 5;
+    }
+    int status = addCurrentPageAsPreconditionSyncImpl(env, emptyActivity, xmlDescOfGuiTree);
+    env->DeleteLocalRef(emptyActivity);
+    return status;
+}
+
 // InitAgent: for single device, just addAgent as empty device
 void JNICALL Java_com_bytedance_fastbot_AiClient_initAgentNative(JNIEnv *env, jobject, jint agentType,
                                                                  jstring packageName, jint deviceType) {
@@ -274,6 +352,7 @@ void JNICALL Java_com_bytedance_fastbot_AiClient_initAgentNative(JNIEnv *env, jo
         auto doubleSarsaAgentPtr = std::dynamic_pointer_cast<fastbotx::DoubleSarsaAgent>(agentPointer);
         if (doubleSarsaAgentPtr) {
             doubleSarsaAgentPtr->loadReuseModel(std::string(packageNameCString));
+            doubleSarsaAgentPtr->beginNewEpisode();
         } else {
             BLOGE("Double SARSA: Failed to cast agent to DoubleSarsaAgent");
         }
@@ -281,8 +360,13 @@ void JNICALL Java_com_bytedance_fastbot_AiClient_initAgentNative(JNIEnv *env, jo
         auto sarsaAgentPtr = std::dynamic_pointer_cast<fastbotx::SarsaAgent>(agentPointer);
         if (sarsaAgentPtr) {
             sarsaAgentPtr->loadReuseModel(std::string(packageNameCString));
+            sarsaAgentPtr->beginNewEpisode();
         } else {
             BLOGE("SarsaAgent: Failed to cast agent to SarsaAgent");
+        }
+    } else if (algorithmType == fastbotx::AlgorithmType::Curiosity) {
+        if (agentPointer) {
+            agentPointer->beginNewEpisode();
         }
     }
     if (env)

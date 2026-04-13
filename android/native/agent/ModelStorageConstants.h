@@ -16,6 +16,7 @@ inline constexpr const char *StoragePrefix = "";
 #endif
 inline constexpr const char *ModelFileExtension = ".fbm";
 inline constexpr const char *TempModelFileExtension = ".tmp.fbm";
+inline constexpr const char *PreconditionFileExtension = ".precond";
 /// Max length for activity name when serializing (security: prevent unbounded string).
 inline constexpr std::size_t MaxActivityNameLength = 4096;
 }  // namespace ModelStorageConstants

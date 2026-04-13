@@ -153,6 +153,26 @@ public class AiClient {
         singleton.saveReuseModelNative();
     }
 
+    /**
+     * Legacy guide bridge: xml-only JNI entry that returns status code (0 = success).
+     */
+    public static int addCurrentPageAsPreconditionSyncStatus(String xml) {
+        if (!singleton.loaded) {
+            Logger.println("// Error: Could not load native library!");
+            Logger.println("Please report this bug issue to github");
+            return -1;
+        }
+        return singleton.addCurrentPageAsPreconditionSync(xml);
+    }
+
+    /**
+     * Legacy guide bridge: xml-only JNI entry mapped to boolean success.
+     */
+    public static boolean addCurrentPageAsPreconditionSyncOk(String xml) {
+        int status = addCurrentPageAsPreconditionSyncStatus(xml);
+        return status == 0;
+    }
+
     private boolean loaded = false;
 
     /** Fallback when no LlmScreenshotProvider is set (e.g. tests). */
@@ -1188,6 +1208,7 @@ public class AiClient {
     private native String getOperateJsonNative(String activity, String pageDesc);
     private native void initAgentNative(int algorithmType, String packageName, int flags);
     private native void saveReuseModelNative();
+    private native int addCurrentPageAsPreconditionSync(String xml);
     private native boolean checkPointInShieldNative(String activity, float x, float y);
 
     /**

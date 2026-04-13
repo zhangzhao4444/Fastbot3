@@ -21,8 +21,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-import com.android.commands.monkey.utils.FileUtils;
-
 import fi.iki.elonen.NanoHTTPD;
 
 // import static com.android.commands.monkey.utils.Config.takeScreenshotForEveryStep;
@@ -56,7 +54,7 @@ public class ProxyServer extends NanoHTTPD {
 //    private CoverageData mCoverageData;
     private int mVerbose = 1;
 
-    private HashSet<String> u2ExtMethods = new HashSet<>(
+    private final HashSet<String> u2ExtMethods = new HashSet<>(
             Arrays.asList("click", "setText", "swipe", "drag", "setOrientation", "pressKey")
     );
     // private Operate mOperate;
@@ -78,8 +76,8 @@ public class ProxyServer extends NanoHTTPD {
             Logger.println("take all screenshots.");
             mImageWriter = new ImageWriterQueue();
         } else {
-            Logger.println(String.format("take %d screenshots before failure", preFailureScreenshots));
-            Logger.println(String.format("take %d screenshots after failure", postFailureScreenshots));
+            Logger.println(String.format(Locale.ENGLISH, "take %d screenshots before failure", preFailureScreenshots));
+            Logger.println(String.format(Locale.ENGLISH, "take %d screenshots after failure", postFailureScreenshots));
             mImageWriter = new CacheImageWriterQueue();
             ((CacheImageWriterQueue) mImageWriter).setCacheSize(preFailureScreenshots);
             ((CacheImageWriterQueue) mImageWriter).setPostFailureN(postFailureScreenshots);
@@ -92,6 +90,36 @@ public class ProxyServer extends NanoHTTPD {
         mImageWriter.flush();
         if (mImageWriter instanceof CacheImageWriterQueue){
             ((CacheImageWriterQueue) mImageWriter).resetPostFailureNCounter();
+        }
+    }
+
+    private Response handlePropertyFirstSatisfied() {
+        if (this.eventSource == null) {
+            Logger.errorPrintln("[ProxyServer] eventSource is null, cannot send precondition");
+            return newFixedLengthResponse(
+                    Response.Status.INTERNAL_ERROR,
+                    "text/plain",
+                    "{\"status\":\"error\",\"message\":\"eventSource not available\"}");
+        }
+
+        try {
+            Logger.println("[GUIDE] /propertyFirstSatisfied received");
+            boolean success = this.eventSource.sendCurrentPageAsPrecondition();
+            if (!success) {
+                Logger.errorPrintln("[ProxyServer] sendCurrentPageAsPrecondition reported failure");
+                return newFixedLengthResponse(
+                        Response.Status.INTERNAL_ERROR,
+                        "text/plain",
+                        "{\"status\":\"error\",\"message\":\"native failed\"}");
+            }
+            Logger.println("[ProxyServer] sendCurrentPageAsPrecondition succeeded");
+            return newFixedLengthResponse(Response.Status.OK, "text/plain", "{\"status\":\"ok\"}");
+        } catch (Throwable t) {
+            Logger.errorPrintln("[ProxyServer] sendCurrentPageAsPrecondition failed: " + t.getMessage());
+            return newFixedLengthResponse(
+                    Response.Status.INTERNAL_ERROR,
+                    "text/plain",
+                    "{\"status\":\"error\",\"message\":\"native failed\"}");
         }
     }
 
@@ -196,6 +224,10 @@ public class ProxyServer extends NanoHTTPD {
                 "text/plain",
                 "OK"
             );
+        }
+
+        if (session.getMethod() == Method.GET && uri.equals("/propertyFirstSatisfied")) {
+            return handlePropertyFirstSatisfied();
         }
 
         if (uri.equals("/logScript") && session.getMethod() == Method.POST)
