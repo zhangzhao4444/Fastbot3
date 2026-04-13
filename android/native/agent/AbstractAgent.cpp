@@ -33,6 +33,14 @@ namespace fastbotx {
         constexpr double kMinCandidateScore = 0.3;
         constexpr double kMinPageScore = 0.1;
         constexpr double kMaxPageScore = 2.0;
+        constexpr double kBeforePendingBias = 1.25;
+        constexpr double kAfterPendingBias = 0.75;
+        constexpr double kMinInfluence = 0.15;
+        constexpr double kRewardSpan = 0.25;
+        constexpr double kHitPenaltySpan = 0.65;
+        constexpr double kGlobalPenaltySpan = 0.10;
+        constexpr double kMinHitPenaltyFactor = 0.35;
+        constexpr double kMinGlobalPenaltyFactor = 0.85;
         constexpr int kMaxTemplateRewardPerEpisode = 10;
         constexpr int kMaxTemplateSelectionPerEpisode = 10;
         constexpr int kMaxPageSelectionPerEpisode = 20;
@@ -99,6 +107,41 @@ namespace fastbotx {
             if (*len > AbstractAgent::MAX_TEMPLATE_SEQUENCE_LEN) {
                 *len = AbstractAgent::MAX_TEMPLATE_SEQUENCE_LEN;
             }
+        }
+
+        inline double clamp01(double v) {
+            if (v < 0.0) return 0.0;
+            if (v > 1.0) return 1.0;
+            return v;
+        }
+
+        inline double pendingDistanceInfluence(int pos, int pendingPos, int len) {
+            if (len <= 1) {
+                return 1.0;
+            }
+            if (pos < 0) {
+                pos = 0;
+            }
+            if (pos >= len) {
+                pos = len - 1;
+            }
+            if (pendingPos < 0) {
+                pendingPos = len - 1;
+            }
+            if (pendingPos >= len) {
+                pendingPos = len - 1;
+            }
+            const double distance = std::abs(pos - pendingPos);
+            const double norm = distance / static_cast<double>(len - 1);
+            const double decay = 1.0 - norm;
+            const double dirBias = (pos <= pendingPos)
+                                   ? GuideConstants::kBeforePendingBias
+                                   : GuideConstants::kAfterPendingBias;
+            return clamp01(std::max(GuideConstants::kMinInfluence, decay * dirBias));
+        }
+
+        inline double lerp(double a, double b, double t) {
+            return a + (b - a) * t;
         }
 
         // Backward-compatible parser for legacy custom-binary .precond (PCTL v2)
@@ -729,9 +772,14 @@ namespace fastbotx {
                     for (int i = 0; i < tpl.length; ++i) {
                         if (tpl.sequence[i] == _pendingGuideActionHash && tpl.reliability[i] > 0.0) {
                             const double oldR = tpl.reliability[i];
-                            tpl.reliability[i] = oldR * 0.5;
-                            BLOG("[GUIDE] punish hit slot: page=%" PRIu64 " tpl=%d pos=%d action=%" PRIu64 " rel %.4f->%.4f",
-                                 _pendingGuideTargetPage, t, i, _pendingGuideActionHash, oldR, tpl.reliability[i]);
+                                const double influence = pendingDistanceInfluence(i, _pendingGuidePosition, tpl.length);
+                                const double factor = std::max(
+                                    1.0 - GuideConstants::kHitPenaltySpan * influence,
+                                    GuideConstants::kMinHitPenaltyFactor);
+                                tpl.reliability[i] = oldR * factor;
+                                BLOG("[GUIDE] punish hit slot: page=%" PRIu64 " tpl=%d pos=%d pendingPos=%d action=%" PRIu64 " influence=%.3f factor=%.3f rel %.4f->%.4f",
+                                     _pendingGuideTargetPage, t, i, _pendingGuidePosition, _pendingGuideActionHash,
+                                     influence, factor, oldR, tpl.reliability[i]);
                         }
                     }
                 }
@@ -740,7 +788,11 @@ namespace fastbotx {
                     GuidancePathTemplate &tpl = info.templates[t];
                     clampTemplateLength(&tpl.length);
                     for (int i = 0; i < tpl.length; ++i) {
-                        tpl.reliability[i] *= 0.95;
+                            const double influence = pendingDistanceInfluence(i, _pendingGuidePosition, tpl.length);
+                            const double factor = std::max(
+                                1.0 - GuideConstants::kGlobalPenaltySpan * influence,
+                                GuideConstants::kMinGlobalPenaltyFactor);
+                            tpl.reliability[i] *= factor;
                     }
                 }
             }
@@ -939,9 +991,12 @@ namespace fastbotx {
                         for (int i = 0; i < tpl.length; ++i) {
                             if (tpl.sequence[i] != 0 && tpl.reliability[i] > 0.0) {
                                 const double oldR = tpl.reliability[i];
-                                tpl.reliability[i] = std::min(oldR * 1.2, 1.0);
-                                BLOG("[GUIDE] reward slot: page=%" PRIu64 " tpl=%d pos=%d action=%" PRIu64 " rel %.4f->%.4f",
-                                     _pendingGuideTargetPage, tIdx, i, _pendingGuideActionHash, oldR, tpl.reliability[i]);
+                                const double influence = pendingDistanceInfluence(i, _pendingGuidePosition, tpl.length);
+                                const double factor = 1.0 + GuideConstants::kRewardSpan * influence;
+                                tpl.reliability[i] = std::min(oldR * factor, 1.0);
+                                BLOG("[GUIDE] reward slot: page=%" PRIu64 " tpl=%d pos=%d pendingPos=%d action=%" PRIu64 " influence=%.3f factor=%.3f rel %.4f->%.4f",
+                                     _pendingGuideTargetPage, tIdx, i, _pendingGuidePosition, _pendingGuideActionHash,
+                                     influence, factor, oldR, tpl.reliability[i]);
                             }
                         }
                         _templateRewardCounts[_pendingGuideTargetPage][tIdx] += 1;
