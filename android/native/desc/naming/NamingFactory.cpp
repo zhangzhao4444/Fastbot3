@@ -444,12 +444,16 @@ void clearRebuildLogStage() {
         }
         static std::atomic<uint64_t> g_rebuild_tree_diag{0};
         const uint64_t seq = ++g_rebuild_tree_diag;
+#if defined(FASTBOT_NATIVE_VERBOSE_LOG) && FASTBOT_NATIVE_VERBOSE_LOG
         const bool shouldLog = (seq <= 20 || (seq % 400) == 0);
+#else
+        const bool shouldLog = false;
+#endif
         const char *stage = g_rebuild_log_stage.empty() ? "-" : g_rebuild_log_stage.c_str();
         std::vector<gui_tree::GUITreeNodePtr> allNodesBefore;
         if (shouldLog) {
             collectAllNodes(tree, &allNodesBefore);
-            BLOG("naming rebuild: enter seq=%llu stage=%s namingFp=%s totalNodes=%zu names=%zu groups=%zu xpaths=%zu %s",
+            BDLOG("naming rebuild: enter seq=%llu stage=%s namingFp=%s totalNodes=%zu names=%zu groups=%zu xpaths=%zu %s",
                  static_cast<unsigned long long>(seq), stage, naming->fingerprintString().c_str(), allNodesBefore.size(),
                  tree.getCurrentNames().size(), tree.getCurrentNodeGroups().size(), tree.getCurrentXPaths().size(),
                  summarizeTreeNodesForRebuildLog(tree).c_str());
@@ -533,11 +537,11 @@ void clearRebuildLogStage() {
                     ++staleBefore;
                 }
             }
-            BLOG("naming rebuild: evaluate seq=%llu stage=%s resultNames=%zu resultGroups=%zu groupedNodes=%zu staleBefore=%zu staleSummary=%s",
+            BDLOG("naming rebuild: evaluate seq=%llu stage=%s resultNames=%zu resultGroups=%zu groupedNodes=%zu staleBefore=%zu staleSummary=%s",
                  static_cast<unsigned long long>(seq), stage, r.names.size(), r.node_groups.size(), groupedNodeCount,
                  staleBefore, staleBefore ? staleSummary.str().c_str() : "(none)");
             if (foreign != 0) {
-                BLOG("naming rebuild: foreign nodes seq=%llu stage=%s foreign=%zu foreignSummary=%s",
+                BDLOG("naming rebuild: foreign nodes seq=%llu stage=%s foreign=%zu foreignSummary=%s",
                      static_cast<unsigned long long>(seq), stage, foreign, foreignSummary.str().c_str());
             }
         }
@@ -574,7 +578,7 @@ void clearRebuildLogStage() {
                     ++staleAfter;
                 }
             }
-            BLOG("naming rebuild: exit seq=%llu stage=%s totalNodes=%zu names=%zu groups=%zu xpaths=%zu staleAfter=%zu staleSummary=%s %s",
+            BDLOG("naming rebuild: exit seq=%llu stage=%s totalNodes=%zu names=%zu groups=%zu xpaths=%zu staleAfter=%zu staleSummary=%s %s",
                  static_cast<unsigned long long>(seq), stage, allNodesAfter.size(), tree.getCurrentNames().size(),
                  tree.getCurrentNodeGroups().size(), tree.getCurrentXPaths().size(), staleAfter,
                  staleAfter ? staleSummaryAfter.str().c_str() : "(none)", summarizeTreeNodesForRebuildLog(tree).c_str());

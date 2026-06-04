@@ -845,7 +845,7 @@ namespace {
 
         int slot = action->getVisitedCount() % total;
         if (slot == 0) {
-            BLOG("resolveAt: action=%s hash=%" PRIuPTR " visited=%d concrete=%d slot=%d whichWidget=-1 target=representative",
+            BDLOG("resolveAt: action=%s hash=%" PRIuPTR " visited=%d concrete=%d slot=%d whichWidget=-1 target=representative",
                 action->getId().c_str(),
                 h,
                 action->getVisitedCount(),
@@ -867,7 +867,7 @@ namespace {
         }
 
         const int mergedIndex = slot - 1;
-        BLOG("resolveAt: action=%s hash=%" PRIuPTR " visited=%d concrete=%d slot=%d whichWidget=%d target=merged",
+        BDLOG("resolveAt: action=%s hash=%" PRIuPTR " visited=%d concrete=%d slot=%d whichWidget=%d target=merged",
             action->getId().c_str(),
             h,
             action->getVisitedCount(),
@@ -876,7 +876,6 @@ namespace {
             mergedIndex);
         action->setTarget(targetWidgets->second[static_cast<size_t>(mergedIndex)]);
         action->setWhichWidget(mergedIndex);
-        return action;
         return action;
     }
 

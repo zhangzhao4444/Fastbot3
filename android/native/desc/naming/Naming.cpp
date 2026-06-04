@@ -376,7 +376,11 @@ namespace {
         gui_tree::GUITree &tree, const std::shared_ptr<gui_tree::XPathNodeMapper> &dom) const {
         static std::atomic<uint64_t> g_naming_internal_diag{0};
         const uint64_t diagSeq = ++g_naming_internal_diag;
+#if defined(FASTBOT_NATIVE_VERBOSE_LOG) && FASTBOT_NATIVE_VERBOSE_LOG
         const bool shouldLog = (diagSeq <= 80 || (diagSeq % 400) == 0);
+#else
+        const bool shouldLog = false;
+#endif
         const int treeId = tree.getId();
         {
             std::lock_guard<std::mutex> lk(naming_cache_mu_);
@@ -386,7 +390,7 @@ namespace {
                 if (namingResultBelongsToTree(itCached->second, tree, &foreignCached)) {
                     return itCached->second;
                 }
-                BLOG("naming cache invalidated: foreign nodes in cached result namingFp=%s treeId=%d foreign=%zu",
+                BDLOG("naming cache invalidated: foreign nodes in cached result namingFp=%s treeId=%d foreign=%zu",
                      fingerprint_cached_.c_str(), treeId, foreignCached);
                 tree_to_naming_result_.erase(itCached);
             }
@@ -441,7 +445,7 @@ namespace {
             }
         }
         if (shouldLog) {
-            BLOG("naming internal: matched seq=%llu namingFp=%s ownedNodes=%zu matchedNodes=%zu foreignMatched=%zu foreignSummary=%s",
+            BDLOG("naming internal: matched seq=%llu namingFp=%s ownedNodes=%zu matchedNodes=%zu foreignMatched=%zu foreignSummary=%s",
                  static_cast<unsigned long long>(diagSeq), fingerprint_cached_.c_str(), treeOwnedNodes.size(),
                  node_ref.size(), foreignMatchedNodes,
                  foreignMatchedNodes ? foreignMatchedSummary.str().c_str() : "(none)");
@@ -487,7 +491,7 @@ namespace {
                     ++foreignInNameletMap;
                 }
             }
-            BLOG("naming internal: namelet-map seq=%llu bfsNodes=%zu mapNodes=%zu foreignMapNodes=%zu",
+            BDLOG("naming internal: namelet-map seq=%llu bfsNodes=%zu mapNodes=%zu foreignMapNodes=%zu",
                  static_cast<unsigned long long>(diagSeq), bfs_nodes.size(), node_to_namelets.size(),
                  foreignInNameletMap);
         }
@@ -584,7 +588,7 @@ namespace {
                     ++foreignOut;
                 }
             }
-            BLOG("naming internal: output seq=%llu groups=%zu names=%zu foreignOut=%zu foreignSummary=%s",
+            BDLOG("naming internal: output seq=%llu groups=%zu names=%zu foreignOut=%zu foreignSummary=%s",
                  static_cast<unsigned long long>(diagSeq), out.node_groups.size(), out.names.size(),
                  foreignOut, foreignOut ? foreignOutSummary.str().c_str() : "(none)");
         }

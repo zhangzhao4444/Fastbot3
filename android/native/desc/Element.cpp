@@ -327,13 +327,6 @@ namespace {
     ElementPtr Element::createFromXml(const std::string &xmlContent) {
         tinyxml2::XMLDocument doc;
         const size_t xmlLen = xmlContent.size();
-        std::string prefix = xmlContent.substr(0, std::min<size_t>(120, xmlLen));
-        std::string suffix;
-        if (xmlLen > 120) {
-            suffix = xmlContent.substr(xmlLen - 120);
-        }
-        (void)prefix;
-        (void)suffix;
         
         // Raw domtree XML log: line by line so node hierarchy is visible (from XML indentation)
 #if FASTBOT_LOG_RAW_GUITREE
@@ -361,9 +354,7 @@ namespace {
             }
         }
 #endif
-        if (!FASTBOT_LOG_RAW_GUITREE) {
-            BLOG("guitree size=%zu", xmlContent.size());
-        }
+        BDLOG("guitree size=%zu", xmlLen);
         
         // Parse XML content
         tinyxml2::XMLError errXml = doc.Parse(xmlContent.c_str());

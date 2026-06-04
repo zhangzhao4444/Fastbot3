@@ -582,17 +582,67 @@ void applyApeDynamicActionHashesToReuseState(const StatePtr &state,
     naming::NamerPtr fullNamer = naming::NamerFactory::current().getByMask(fullMask);
     const uintptr_t activityH = fastStringHash(apeKey.activity());
     auto reuseState = std::dynamic_pointer_cast<ReuseState>(state);
+    struct NodeMatchKey {
+        int left{0};
+        int top{0};
+        int right{0};
+        int bottom{0};
+        std::string className;
+        std::string resourceId;
+
+        NodeMatchKey() = default;
+
+        NodeMatchKey(int l, int t, int r, int b, std::string cls, std::string rid)
+            : left(l), top(t), right(r), bottom(b), className(std::move(cls)), resourceId(std::move(rid)) {}
+
+        bool operator==(const NodeMatchKey &o) const {
+            return left == o.left && top == o.top && right == o.right && bottom == o.bottom &&
+                   className == o.className && resourceId == o.resourceId;
+        }
+    };
+    struct NodeMatchKeyHash {
+        size_t operator()(const NodeMatchKey &k) const {
+            constexpr size_t kMix = sizeof(size_t) >= 8
+                ? static_cast<size_t>(0x9e3779b97f4a7c15ULL)
+                : static_cast<size_t>(0x9e3779b9U);
+            size_t h = static_cast<size_t>(k.left);
+            h ^= static_cast<size_t>(k.top) + kMix + (h << 6) + (h >> 2);
+            h ^= static_cast<size_t>(k.right) + kMix + (h << 6) + (h >> 2);
+            h ^= static_cast<size_t>(k.bottom) + kMix + (h << 6) + (h >> 2);
+            h ^= std::hash<std::string>{}(k.className) + kMix + (h << 6) + (h >> 2);
+            h ^= std::hash<std::string>{}(k.resourceId) + kMix + (h << 6) + (h >> 2);
+            return h;
+        }
+    };
+    auto keyForNode = [](const gui_tree::GUITreeNode &n) -> NodeMatchKey {
+        const Rect &b = n.getBounds();
+        return NodeMatchKey(b.left, b.top, b.right, b.bottom, n.getClassName(), n.getResourceId());
+    };
+    auto keyForWidget = [](const WidgetPtr &widget, const Rect &b) -> NodeMatchKey {
+        return NodeMatchKey(b.left, b.top, b.right, b.bottom, widget->getClassname(), widget->getResourceID());
+    };
+    std::unordered_map<NodeMatchKey, gui_tree::GUITreeNode *, NodeMatchKeyHash> nodeIndex;
+    if (reuseState && !nodesPreOrder.empty()) {
+        nodeIndex.reserve(nodesPreOrder.size());
+        for (gui_tree::GUITreeNode *n : nodesPreOrder) {
+            if (!n) {
+                continue;
+            }
+            nodeIndex.emplace(keyForNode(*n), n);
+        }
+    }
     auto nodeForWidget = [&](const WidgetPtr &widget) -> gui_tree::GUITreeNode * {
         if (!reuseState || !widget || nodesPreOrder.empty()) {
             return nullptr;
         }
         // Property match (bounds + class + resource-id) - GUITree pruning breaks any identity
         // that relies on Element-preorder stableId indexing into GUITree preorder.
-        const int gidx = apeFindGuiTreeNodePreorderIndexForWidget(nodesPreOrder, widget);
-        if (gidx < 0) {
+        std::shared_ptr<Rect> wb = widget->getBounds();
+        if (!wb) {
             return nullptr;
         }
-        return nodesPreOrder[static_cast<size_t>(gidx)];
+        auto it = nodeIndex.find(keyForWidget(widget, *wb));
+        return it == nodeIndex.end() ? nullptr : it->second;
     };
     auto stableTargetHashForWidget = [&](const WidgetPtr &widget) -> uintptr_t {
         if (!reuseState || !widget) {
@@ -710,9 +760,9 @@ void applyApeDynamicActionHashesToReuseState(const StatePtr &state,
         state->filterActionsByKeepMask(keepMask);
     }
     if ((targetActions + noTargetActions) > 0) {
-        BLOG("naming action hash mapping: activity=%s targetActions=%zu noTargetActions=%zu mappedXPath=%zu mappedStableId=%zu fallbackConst=%zu",
-             apeKey.activity().c_str(), targetActions, noTargetActions, mappedXPath, mappedStableId,
-             fallbackConst);
+        BDLOG("naming action hash mapping: activity=%s targetActions=%zu noTargetActions=%zu mappedXPath=%zu mappedStableId=%zu fallbackConst=%zu",
+              apeKey.activity().c_str(), targetActions, noTargetActions, mappedXPath, mappedStableId,
+              fallbackConst);
     }
 }
 } // namespace
@@ -836,12 +886,16 @@ bool safeRebuildTree(const fastbotx::naming::NamingPtr &nm, fastbotx::gui_tree::
                      const char *stage = nullptr) {
     static std::atomic<uint64_t> g_rebuild_tree_seq{0};
     const uint64_t seq = ++g_rebuild_tree_seq;
+#if defined(FASTBOT_NATIVE_VERBOSE_LOG) && FASTBOT_NATIVE_VERBOSE_LOG
     const bool shouldLog = (seq <= 20 || (seq % 400) == 0);
+#else
+    const bool shouldLog = false;
+#endif
     const char *stageTag = (stage && *stage) ? stage : "-";
     const fastbotx::gui_tree::GUITreePtr treeAlias(&tree, [](fastbotx::gui_tree::GUITree *) {});
     const std::string beforeSummary = shouldLog ? summarizeGUITreeForLog(treeAlias) : std::string();
     if (shouldLog) {
-        BLOG("naming rebuild: enter seq=%" PRIu64 " stage=%s namingFp=%s treePtr=%p dom=%d %s",
+        BDLOG("naming rebuild: enter seq=%" PRIu64 " stage=%s namingFp=%s treePtr=%p dom=%d %s",
              seq, stageTag, nm ? nm->fingerprintString().c_str() : "(null)", &tree, dom ? 1 : 0,
              beforeSummary.c_str());
     }
@@ -849,7 +903,7 @@ bool safeRebuildTree(const fastbotx::naming::NamingPtr &nm, fastbotx::gui_tree::
     const bool ok = fastbotx::naming::NamingFactory::rebuildTree(nm, tree, dom);
     fastbotx::naming::clearRebuildLogStage();
     if (shouldLog) {
-        BLOG("naming rebuild: exit seq=%" PRIu64 " stage=%s ok=%d treePtr=%p %s",
+        BDLOG("naming rebuild: exit seq=%" PRIu64 " stage=%s ok=%d treePtr=%p %s",
              seq, stageTag, ok ? 1 : 0, &tree, summarizeGUITreeForLog(treeAlias).c_str());
     }
     return ok;
@@ -938,6 +992,11 @@ bool apeStateHashFromXmlWithNaming(const std::string &activity, const std::strin
     }
     static std::atomic<uint64_t> g_xml_hash_build{0};
     const uint64_t seq = ++g_xml_hash_build;
+#if defined(FASTBOT_NATIVE_VERBOSE_LOG) && FASTBOT_NATIVE_VERBOSE_LOG
+    const bool shouldLog = (seq <= 40 || (seq % 400) == 0);
+#else
+    const bool shouldLog = false;
+#endif
     if (cache && cacheKey != 0) {
         auto itC = cache->find(cacheKey);
         if (itC != cache->end()) {
@@ -946,7 +1005,7 @@ bool apeStateHashFromXmlWithNaming(const std::string &activity, const std::strin
         }
     }
     const bool usePreferSnapshot = (preferGuiSnapshot && *preferGuiSnapshot);
-    if (seq <= 40 || (seq % 400) == 0) {
+    if (shouldLog) {
         BDLOG("naming xml hash: entry activity=%s seq=%" PRIu64
               " xmlSig=%" PRIu64 " xmlLen=%zu namingFp=%s preferSnapshot=%d snapPtr=%p snapSummary=%s",
               activity.c_str(), seq, hashStringForLog(xml), xml.size(),
@@ -958,16 +1017,16 @@ bool apeStateHashFromXmlWithNaming(const std::string &activity, const std::strin
     if (!apeGuitreeFromXmlWithNamingRebuilt(activity, xml, naming, &built, preferGuiSnapshot)) {
         return false;
     }
-    if (seq <= 40 || (seq % 400) == 0) {
-        BLOG("naming xml hash: tree after build+rebuild (state_check) activity=%s seq=%" PRIu64
+    if (shouldLog) {
+        BDLOG("naming xml hash: tree after build+rebuild (state_check) activity=%s seq=%" PRIu64
              " source=%s treePtr=%p dom=%d namingFp=%s %s",
              activity.c_str(), seq, usePreferSnapshot ? "prefer_snapshot" : "xml_only", built.tree.get(),
              built.dom ? 1 : 0, naming->fingerprintString().c_str(),
              summarizeGUITreeForLog(built.tree).c_str());
     }
     *outHash = naming::StateKey::hashFromGUITree(*built.tree);
-    if (seq <= 40 || (seq % 400) == 0) {
-        BLOG("naming xml hash: exit activity=%s seq=%" PRIu64 " outHash=%" PRIuPTR,
+    if (shouldLog) {
+        BDLOG("naming xml hash: exit activity=%s seq=%" PRIu64 " outHash=%" PRIuPTR,
              activity.c_str(), seq, static_cast<uintptr_t>(*outHash));
     }
     if (cache && cacheKey != 0) {
@@ -2113,6 +2172,7 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
      * @param state The state to log (nullptr is handled gracefully)
      */
     inline void logStatePerLine(const StatePtr &state) {
+#if defined(FASTBOT_NATIVE_VERBOSE_LOG) && FASTBOT_NATIVE_VERBOSE_LOG
         if (state == nullptr) {
             BDLOGE("State is null, cannot log state information");
             return;
@@ -2149,6 +2209,9 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
         }
         
         BDLOG("}");
+#else
+        (void)state;
+#endif
     }
 
     /**
@@ -2181,7 +2244,7 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
         #define FASTBOT_VERSION __DATE__ " " __TIME__
     #endif
 #endif
-        BLOG("----Fastbot native code verison: 05291617, build version: " FASTBOT_VERSION "----\n");
+        BLOG("----Fastbot native code verison: 06042304, build version: " FASTBOT_VERSION "----\n");
         this->_graph = std::make_shared<Graph>();
         this->_preference = Preference::inst();
         this->_netActionParam.netActionTaskid = 0;
@@ -2428,16 +2491,21 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
         StatePtr state = StateFactory::createState(agent->getAlgorithmType(), activityPtr, element, mask);
         static std::atomic<uint64_t> g_build_state_only{0};
         const uint64_t n = ++g_build_state_only;
-        if (state && (n <= 20 || (n % 400) == 0)) {
+#if defined(FASTBOT_NATIVE_VERBOSE_LOG) && FASTBOT_NATIVE_VERBOSE_LOG
+        const bool shouldLog = state && (n <= 20 || (n % 400) == 0);
+#else
+        const bool shouldLog = false;
+#endif
+        if (shouldLog) {
             // Compute log-only XML signature inside the sampling gate so the per-step path does not
             // hash the entire serialized tree for a line that fires ~1/400 steps.
             const std::string &xmlForLog = element->toXMLCached();
             const uint64_t xmlSigForLog = hashStringForLog(xmlForLog);
-            BLOG("naming state build: buildStateOnly source activity=%s seq=%" PRIu64
+            BDLOG("naming state build: buildStateOnly source activity=%s seq=%" PRIu64
                  " elementPtr=%p xmlSig=%" PRIu64 " xmlLen=%zu %s",
                  activityStr.c_str(), n, element.get(), xmlSigForLog, xmlForLog.size(),
                  summarizeElementForLog(element).c_str());
-            BLOG("naming state build: buildStateOnly activity=%s stateHash=%" PRIuPTR
+            BDLOG("naming state build: buildStateOnly activity=%s stateHash=%" PRIuPTR
                  " widgets=%zu actions=%zu widgetSummary=%s actionSummary=%s",
                  activityStr.c_str(), static_cast<uintptr_t>(state->hash()), state->getWidgetSize(),
                  state->getActions().size(), summarizeStateWidgetsForLog(state).c_str(),
@@ -2583,7 +2651,7 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
             return DeviceOperateWrapper::OperateNop;
         }
 
-        BLOG("selected action %s", action->toString().c_str());
+        BDLOG("selected action %s", action->toString().c_str());
         
         // Convert action to operation object
         OperatePtr opt = action->toOperate();
@@ -2596,7 +2664,7 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
                     // Serialize widget to JSON and attach to operation
                     std::string widget_str = widget->toJson();
                     opt->widget = widget_str;
-                    BLOG("stateAction Widget: %s", widget_str.c_str());
+                    BDLOG("stateAction Widget: %s", widget_str.c_str());
                 }
             }
         }
@@ -8601,9 +8669,14 @@ namespace {
         };
         static std::atomic<uint64_t> g_build_ape_statekey{0};
         const uint64_t seq = ++g_build_ape_statekey;
-        const std::string &xmlForEntryLog = xmlSnapshotRef();
-        const uint64_t xmlSigForEntryLog = hashStringForLog(xmlForEntryLog);
-        if (seq <= 20 || (seq % 400) == 0) {
+#if defined(FASTBOT_NATIVE_VERBOSE_LOG) && FASTBOT_NATIVE_VERBOSE_LOG
+        const bool shouldLog = (seq <= 20 || (seq % 400) == 0);
+#else
+        const bool shouldLog = false;
+#endif
+        if (shouldLog) {
+            const std::string &xmlForEntryLog = xmlSnapshotRef();
+            const uint64_t xmlSigForEntryLog = hashStringForLog(xmlForEntryLog);
             BDLOG("naming statekey: build source activity=%s seq=%" PRIu64
                   " elementPtr=%p statePtr=%p stateHash=%" PRIuPTR
                   " xmlSig=%" PRIu64 " xmlLen=%zu %s",
@@ -8612,7 +8685,7 @@ namespace {
                   xmlSigForEntryLog, xmlForEntryLog.size(), summarizeElementForLog(element).c_str());
         }
         gui_tree::GUITreeBuildResult built = gui_tree::GUITreeFactory::buildFromElement(element, pkg, cls);
-        if (seq <= 20 || (seq % 400) == 0) {
+        if (shouldLog) {
             BDLOG("naming statekey: tree stage=after_buildFromElement activity=%s seq=%" PRIu64
                   " treePtr=%p dom=%d %s",
                   activity.c_str(), seq, built.tree.get(), built.dom ? 1 : 0,
@@ -8631,7 +8704,7 @@ namespace {
 #else
             built = buildGuitreeFromCachedXmlPreferElement(xmlSnapshotRef(), pkg, cls);
 #endif
-            if (seq <= 20 || (seq % 400) == 0) {
+            if (shouldLog) {
                 BDLOG("naming statekey: tree stage=after_fallback_build activity=%s seq=%" PRIu64
                       " treePtr=%p dom=%d %s",
                       activity.c_str(), seq, built.tree.get(), built.dom ? 1 : 0,
@@ -8656,7 +8729,7 @@ namespace {
             if (!naming) {
                 return fail(ApeStateKeyBuildFailReason::NoNaming);
             }
-            if (seq <= 20 || (seq % 400) == 0) {
+            if (shouldLog) {
                 BDLOG("naming statekey: tree stage=after_getNamingFixedPoint activity=%s seq=%" PRIu64
                       " treePtr=%p namingFp=%s %s",
                       activity.c_str(), seq, built.tree.get(), naming->fingerprintString().c_str(),
@@ -8684,7 +8757,7 @@ namespace {
                         }
                     }
                 }
-                if (seq <= 20 || (seq % 400) == 0) {
+                if (shouldLog) {
                     BDLOG("naming statekey: tree stage=after_refine_rebuild activity=%s seq=%" PRIu64
                           " treePtr=%p namingFp=%s beforeFp=%s %s",
                           activity.c_str(), seq, built.tree.get(), naming->fingerprintString().c_str(),
@@ -8775,7 +8848,7 @@ namespace {
             if (!safeRebuildTree(naming, *built.tree, built.dom)) {
                 return fail(ApeStateKeyBuildFailReason::RebuildTreeFailed);
             }
-            if (seq <= 20 || (seq % 400) == 0) {
+            if (shouldLog) {
                 BDLOG("naming statekey: tree stage=after_safeRebuildTree activity=%s seq=%" PRIu64
                       " treePtr=%p namingFp=%s %s",
                       activity.c_str(), seq, built.tree.get(), naming->fingerprintString().c_str(),

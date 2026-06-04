@@ -11,6 +11,7 @@
 #include "DoubleSarsaAgent.h"
 #include "SarsaAgent.h"
 #include "utils.hpp"
+#include "PerfMonitor.h"
 #include "../llm/LlmJavaHttp.h"
 #include "../thirdpart/json/json.hpp"
 #include <random>
@@ -252,6 +253,7 @@ jobject JNICALL Java_com_bytedance_fastbot_AiClient_getActionFromBufferNativeStr
 // InitAgent: for single device, just addAgent as empty device
 void JNICALL Java_com_bytedance_fastbot_AiClient_initAgentNative(JNIEnv *env, jobject, jint agentType,
                                                                  jstring packageName, jint deviceType) {
+    fastbotx::startPerfMonitor();
     initCodeCoverageJvm(env);
     if (nullptr == _fastbot_model) {
         _fastbot_model = fastbotx::Model::create();
