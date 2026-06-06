@@ -883,7 +883,7 @@ namespace gui_tree {
 
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML && DYNAMIC_STATE_ABSTRACTION_ENABLED
         /** State tree history: capped deque of immutable GUITree clones per concrete state hash. */
-        static constexpr size_t kMaxApeGuiTreeSnapshotsPerState = 64;
+        static constexpr size_t kMaxApeGuiTreeSnapshotsPerState = 32;
         std::unordered_map<uintptr_t, std::deque<gui_tree::GUITreePtr>> _apeGuiTreeSnapshotsByStateHash;
         void apeRememberGuiTreeSnapshot(uintptr_t stateHash, const gui_tree::GUITree &tree);
         gui_tree::GUITreePtr apeLatestGuiTreeSnapshot(uintptr_t stateHash) const;
