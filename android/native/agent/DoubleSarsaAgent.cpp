@@ -813,10 +813,11 @@ namespace fastbotx {
             return nullptr;
         }
         
-        // Use binary search to select action
+        // randomInt(0, totalWeight) -> [0, totalWeight - 1]; upper_bound picks the
+        // first cumulative weight strictly greater than randI (one slot per unit).
         int randI = randomInt(0, totalWeight);
-        auto it = std::lower_bound(cumulativeWeights.begin(), 
-                                  cumulativeWeights.end(), randI);
+        auto it = std::upper_bound(cumulativeWeights.begin(),
+                                   cumulativeWeights.end(), randI);
         size_t index = std::distance(cumulativeWeights.begin(), it);
         
         if (index < actionsNotInModel.size()) {
