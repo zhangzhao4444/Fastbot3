@@ -31,6 +31,7 @@ import android.content.pm.IPackageManager;
 import android.content.pm.PackageManager;
 import android.content.pm.PermissionInfo;
 import android.content.pm.ResolveInfo;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IPowerManager;
@@ -59,9 +60,19 @@ public final class APIAdapter {
     /** Caller tag passed to freezeDisplayRotation/thawDisplayRotation on API 33+. */
     public static final String ROTATION_CALLER = "com.bytedance.fastbot";
 
+    /** Mirrors InputManager.INJECT_INPUT_EVENT_MODE_WAIT_FOR_RESULT without linking InputManager. */
+    public static final int INJECT_INPUT_EVENT_MODE_WAIT_FOR_RESULT = 2;
+
     /** Hidden class for reading system properties (e.g. ro.serialno). */
     private static final String SYSTEM_PROPERTIES_CLASS = "android.os.SystemProperties";
     private static final String PROP_SERIAL = "ro.serialno";
+    private static final String PROP_SDK_MINOR = "ro.build.version.sdk_minor";
+
+    private static final int SDK_INT_FULL_MULTIPLIER = 100000;
+    private static final int API_36_1_FULL = 36 * SDK_INT_FULL_MULTIPLIER + 1;
+
+    private static final String INPUT_MANAGER_CLASS = "android.hardware.input.InputManager";
+    private static final String INPUT_MANAGER_GLOBAL_CLASS = "android.hardware.input.InputManagerGlobal";
 
     /** Hidden class: main thread for the app process; provides system context (API 1+). */
     private static final String ACTIVITY_THREAD_CLASS = "android.app.ActivityThread";
@@ -483,11 +494,12 @@ public final class APIAdapter {
         }
     }
 
-    // ----- InputManager: injectInputEvent (API 16+) -----
-    // Hidden API: InputManager.getInstance().injectInputEvent(InputEvent, int mode). Supported Android 5–16.
+    // ----- InputManager / InputManagerGlobal: injectInputEvent (API 16+) -----
 
     /**
-     * Injects an input event via InputManager. Compatible with Android 5–16 (hidden API since API 16).
+     * Injects an input event through the platform's available input-manager singleton.
+     * Android 36.1+ prefers InputManagerGlobal because InputManager.getInstance() was removed.
+     * Older releases prefer InputManager, with the other implementation used as a compatibility fallback.
      * Caller should set display id on the event when needed (e.g. APIAdapter.applyDisplayIdToInputEvent).
      *
      * @param event the event to inject (KeyEvent, MotionEvent, etc.)
@@ -496,19 +508,99 @@ public final class APIAdapter {
      */
     public static boolean injectInputEvent(InputEvent event, int mode) {
         if (event == null) return false;
-        try {
-            Class<?> imClass = Class.forName("android.hardware.input.InputManager");
-            Method getInstance = getMethod(imClass, "getInstance", new Class<?>[0]);
-            if (getInstance == null) return false;
-            Object im = getInstance.invoke(null);
-            if (im == null) return false;
-            Method inject = getMethod(imClass, "injectInputEvent", new Class<?>[]{InputEvent.class, int.class});
-            if (inject == null) return false;
-            Object result = inject.invoke(im, event, mode);
-            return !(result instanceof Boolean) || Boolean.TRUE.equals(result);
-        } catch (Exception e) {
-            Logger.warningPrintln("APIAdapter: injectInputEvent failed: " + e.getMessage());
+        InputEventInjector injector = InputEventInjectorHolder.INSTANCE;
+        if (injector == null) {
             return false;
+        }
+        try {
+            Object result = injector.method.invoke(injector.receiver, event, mode);
+            return !(result instanceof Boolean) || Boolean.TRUE.equals(result);
+        } catch (Throwable t) {
+            Logger.warningPrintln("APIAdapter: injectInputEvent via " + injector.className
+                    + " failed: " + t);
+            return false;
+        }
+    }
+
+    private static final class InputEventInjector {
+        final String className;
+        final Object receiver;
+        final Method method;
+
+        InputEventInjector(String className, Object receiver, Method method) {
+            this.className = className;
+            this.receiver = receiver;
+            this.method = method;
+        }
+    }
+
+    private static final class InputEventInjectorHolder {
+        static final InputEventInjector INSTANCE = resolveInputEventInjector();
+    }
+
+    private static InputEventInjector resolveInputEventInjector() {
+        int sdkIntFull = getSdkIntFull();
+        int sdkMinor = getIntSystemProperty(PROP_SDK_MINOR, 0);
+        boolean preferGlobal = isAtLeastApi36_1(sdkIntFull, sdkMinor);
+        String first = preferGlobal ? INPUT_MANAGER_GLOBAL_CLASS : INPUT_MANAGER_CLASS;
+        String fallback = preferGlobal ? INPUT_MANAGER_CLASS : INPUT_MANAGER_GLOBAL_CLASS;
+
+        InputEventInjector injector = resolveInputEventInjector(first);
+        if (injector == null) {
+            injector = resolveInputEventInjector(fallback);
+        }
+        if (injector == null) {
+            Logger.warningPrintln("APIAdapter: no compatible input event injector found; tried "
+                    + first + " and " + fallback);
+        }
+        return injector;
+    }
+
+    private static InputEventInjector resolveInputEventInjector(String className) {
+        try {
+            Class<?> managerClass = Class.forName(className);
+            Method getInstance = getMethod(managerClass, "getInstance", new Class<?>[0]);
+            Method inject = getMethod(managerClass, "injectInputEvent",
+                    new Class<?>[]{InputEvent.class, int.class});
+            if (getInstance == null || inject == null) {
+                Logger.warningPrintln("APIAdapter: " + className
+                        + " missing getInstance() or injectInputEvent(InputEvent, int)");
+                return null;
+            }
+            Object receiver = getInstance.invoke(null);
+            return receiver == null ? null : new InputEventInjector(className, receiver, inject);
+        } catch (Throwable t) {
+            Logger.warningPrintln("APIAdapter: cannot use " + className + ": " + t);
+            return null;
+        }
+    }
+
+    private static boolean isAtLeastApi36_1(int sdkIntFull, int sdkMinor) {
+        if (Build.VERSION.SDK_INT > 36) {
+            return true;
+        }
+        if (Build.VERSION.SDK_INT < 36) {
+            return false;
+        }
+        return sdkIntFull >= API_36_1_FULL || sdkMinor >= 1;
+    }
+
+    private static int getSdkIntFull() {
+        try {
+            Field sdkIntFull = Build.VERSION.class.getField("SDK_INT_FULL");
+            return sdkIntFull.getInt(null);
+        } catch (Throwable ignored) {
+            return -1;
+        }
+    }
+
+    private static int getIntSystemProperty(String key, int defaultValue) {
+        try {
+            Class<?> properties = Class.forName(SYSTEM_PROPERTIES_CLASS);
+            Method getInt = getMethod(properties, "getInt", new Class<?>[]{String.class, int.class});
+            return getInt == null ? defaultValue : (Integer) getInt.invoke(null, key, defaultValue);
+        } catch (Throwable ignored) {
+            return defaultValue;
         }
     }
 
