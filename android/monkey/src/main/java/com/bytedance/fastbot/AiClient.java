@@ -90,6 +90,17 @@ public class AiClient {
         sLlmDumpDirectory = taskOutputDir;
     }
 
+    /** Task output directory for native state XML snapshots (`{dir}/{package}/state_*.xml`). */
+    private static final String DEFAULT_XML_SNAPSHOT_OUTPUT_ROOT = "/sdcard/my-fastbot-logs";
+
+    public static void setXmlSnapshotOutputDirectory(File taskOutputDir) {
+        if (taskOutputDir == null) {
+            singleton.setXmlSnapshotOutputDirectoryNative(DEFAULT_XML_SNAPSHOT_OUTPUT_ROOT);
+            return;
+        }
+        singleton.setXmlSnapshotOutputDirectoryNative(taskOutputDir.getAbsolutePath());
+    }
+
     /**
      * Single worker for OpenAI-compatible LLM HTTP. Build + POST run here; the JNI-attached thread
      * blocks on {@link Future#get} with a deadline derived from {@code max.llm.timeoutMs} (Phase 2, MIGRATION_LLMDROID_B2.md).
@@ -1187,6 +1198,7 @@ public class AiClient {
 
     private native String getOperateJsonNative(String activity, String pageDesc);
     private native void initAgentNative(int algorithmType, String packageName, int flags);
+    private native void setXmlSnapshotOutputDirectoryNative(String outputDirectory);
     private native void saveReuseModelNative();
     private native boolean checkPointInShieldNative(String activity, float x, float y);
 

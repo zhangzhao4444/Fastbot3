@@ -316,10 +316,8 @@ static fastbotx::gui_tree::GUITreeBuildResult buildGuitreePreferApeSnapshotAndDo
 }
 
 /**
- * Strict source-tree mode for ND refine:
- * - If transition source snapshot exists, use that tree body directly (clone + DOM bridge),
- *   and DO NOT rebuild tree body from cached XML first.
- * - Only when snapshot is absent, fall back to XML rebuild.
+ * Legacy transition snapshot mode (non-ND paths may still prefer an in-memory tree body).
+ * ND action/state refine builds from disk-backed `sourceXml` via buildGuitreeFromCachedXmlPreferElement.
  */
 static fastbotx::gui_tree::GUITreeBuildResult buildGuitreeFromTransitionSourcePreferSnapshot(
     const std::string &xml, const std::string &pkg, const std::string &cls,
@@ -751,12 +749,17 @@ size_t apeGraphActivityStateCountLikeJavaActivityNode(const fastbotx::GraphPtr &
 #include "../thirdpart/json/json.hpp"
 #include "../llm/HttpLlmClient.h"
 #include <algorithm>
+#include <cerrno>
+#include <cctype>
+#include <cstdio>
 #include <ctime>
 #include <inttypes.h>
 #include <iostream>
 #include <map>
 #include <fstream>
 #include <sstream>
+#include <sys/stat.h>
+#include <sys/types.h>
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
 #include <unordered_map>
 #include <unordered_set>
@@ -882,47 +885,6 @@ bool apeGuitreeFromXmlWithNamingRebuilt(const std::string &activity, const std::
     }
     *outBuilt = std::move(built);
     return true;
-}
-
-/**
- * When branch SourceTransition did not copy sourceGuiSnapshot, recover the source GUITree from the
- * ring-buffer `TreeTransitionEntry` for the same `transitionSeq`.
- */
-static fastbotx::gui_tree::GUITreePtr apeLookupApeSourceGuiTreeByTransitionSeq(
-    uint64_t transitionSeq, const std::vector<fastbotx::TreeTransitionEntry> &treeLog) {
-    for (const fastbotx::TreeTransitionEntry &te : treeLog) {
-        if (te.valid && te.transitionSeq == transitionSeq && te.apeSourceGuiTree) {
-            return te.apeSourceGuiTree;
-        }
-    }
-    return nullptr;
-}
-
-/** Prefer `SourceTransition.sourceGuiSnapshot`; else `TreeTransitionEntry.apeSourceGuiTree` from the tree log row. */
-static void apePreferSnapPtrFromSourceTransition(
-    const fastbotx::NondetTreeTransitionBranchPair::SourceTransition &st,
-    const std::vector<fastbotx::TreeTransitionEntry> &treeLog,
-    fastbotx::gui_tree::GUITreePtr *outFallbackStorage,
-    const fastbotx::gui_tree::GUITreePtr **outPreferSnapPtr) {
-    if (outPreferSnapPtr) {
-        *outPreferSnapPtr = nullptr;
-    }
-    if (outFallbackStorage) {
-        outFallbackStorage->reset();
-    }
-    if (!outPreferSnapPtr) {
-        return;
-    }
-    if (st.sourceGuiSnapshot) {
-        *outPreferSnapPtr = &st.sourceGuiSnapshot;
-        return;
-    }
-    fastbotx::gui_tree::GUITreePtr fromLog =
-        apeLookupApeSourceGuiTreeByTransitionSeq(st.transitionSeq, treeLog);
-    if (fromLog && outFallbackStorage) {
-        *outFallbackStorage = std::move(fromLog);
-        *outPreferSnapPtr = outFallbackStorage;
-    }
 }
 
 /** @brief Computes abstract state-key hash from XML under `naming`, optionally reusing a GUI-tree snapshot and cache. */
@@ -1572,18 +1534,13 @@ bool isSharedAction(
     naming::StateKey::splitActivityPackageClass(activity, &pkg, &cls);
     for (size_t i = 0; i < branchTransitions.size(); ++i) {
         const auto &tt = branchTransitions[i];
-        if (!tt.sourceGuiSnapshot) {
-            BDLOG("naming refine: shared-check fail reason=cannot_align_missing_snapshot activity=%s branchIdx=%zu seq=%llu",
-                  activity.c_str(), i, static_cast<unsigned long long>(tt.transitionSeq));
-            continue;
-        }
         if (tt.sourceXml.empty()) {
             BDLOG("naming refine: shared-check fail reason=transition_source_xml_missing activity=%s branchIdx=%zu seq=%llu",
                   activity.c_str(), i, static_cast<unsigned long long>(tt.transitionSeq));
             continue;
         }
         gui_tree::GUITreeBuildResult built =
-            buildGuitreeFromTransitionSourcePreferSnapshot(tt.sourceXml, pkg, cls, tt.sourceGuiSnapshot);
+            buildGuitreeFromCachedXmlPreferElement(tt.sourceXml, pkg, cls);
         if (!built.tree || !built.dom) {
             BDLOG("naming refine: shared-check fail reason=build_failed activity=%s branchIdx=%zu seq=%llu",
                   activity.c_str(), i, static_cast<unsigned long long>(tt.transitionSeq));
@@ -1673,18 +1630,8 @@ bool apeCheckActionRefinementLikeJava(const std::string &activity, const naming:
                       activity.c_str(), static_cast<unsigned long long>(tt.transitionSeq));
                 return false;
             }
-#if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML
-            if (!tt.sourceGuiSnapshot) {
-                BDLOG("naming refine: action-check fail reason=cannot_align_missing_snapshot activity=%s branch=%s idx=%zu seq=%llu",
-                      activity.c_str(), branchTag, branchIndex,
-                      static_cast<unsigned long long>(tt.transitionSeq));
-                return false;
-            }
             gui_tree::GUITreeBuildResult built =
-                buildGuitreeFromTransitionSourcePreferSnapshot(tt.sourceXml, pkg, cls, tt.sourceGuiSnapshot);
-#else
-            gui_tree::GUITreeBuildResult built = buildGuitreeFromCachedXmlPreferElement(tt.sourceXml, pkg, cls);
-#endif
+                buildGuitreeFromCachedXmlPreferElement(tt.sourceXml, pkg, cls);
             if (!built.tree || !built.dom) {
                 BDLOG("naming refine: action-check fail reason=source_tree_build_failed activity=%s branch=%s idx=%zu seq=%llu "
                       "srcStateHash=%zu targetStateHash=%zu stableIds=%s",
@@ -1823,8 +1770,7 @@ bool apeCheckActionRefinementLikeJava(const std::string &activity, const naming:
     std::unordered_set<uintptr_t> states;
     for (const auto &tt : tts1) {
         uintptr_t h = 0;
-        if (!apeStateHashFromXmlWithNaming(activity, tt.sourceXml, newNaming, &h, 0, nullptr,
-                                           &tt.sourceGuiSnapshot)) {
+        if (!apeStateHashFromXmlWithNaming(activity, tt.sourceXml, newNaming, &h, 0, nullptr, nullptr)) {
             return false;
         }
         states.insert(h);
@@ -1835,8 +1781,7 @@ bool apeCheckActionRefinementLikeJava(const std::string &activity, const naming:
     }
     for (const auto &tt : tts2) {
         uintptr_t h = 0;
-        if (!apeStateHashFromXmlWithNaming(activity, tt.sourceXml, newNaming, &h, 0, nullptr,
-                                           &tt.sourceGuiSnapshot)) {
+        if (!apeStateHashFromXmlWithNaming(activity, tt.sourceXml, newNaming, &h, 0, nullptr, nullptr)) {
             return false;
         }
         states.insert(h);
@@ -1850,16 +1795,14 @@ bool apeCheckActionRefinementLikeJava(const std::string &activity, const naming:
         std::unordered_set<uintptr_t> h2;
         for (const auto &tt : tts1) {
             uintptr_t h = 0;
-            if (!apeStateHashFromXmlWithNaming(activity, tt.sourceXml, newNaming, &h, 0, nullptr,
-                                                &tt.sourceGuiSnapshot)) {
+            if (!apeStateHashFromXmlWithNaming(activity, tt.sourceXml, newNaming, &h, 0, nullptr, nullptr)) {
                 return false;
             }
             h1.insert(h);
         }
         for (const auto &tt : tts2) {
             uintptr_t h = 0;
-            if (!apeStateHashFromXmlWithNaming(activity, tt.sourceXml, newNaming, &h, 0, nullptr,
-                                                &tt.sourceGuiSnapshot)) {
+            if (!apeStateHashFromXmlWithNaming(activity, tt.sourceXml, newNaming, &h, 0, nullptr, nullptr)) {
                 return false;
             }
             h2.insert(h);
@@ -2160,7 +2103,7 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
         #define FASTBOT_VERSION __DATE__ " " __TIME__
     #endif
 #endif
-        BLOG("----Fastbot native code verison: 06061230, build version: " FASTBOT_VERSION "----\n");
+        BLOG("----Fastbot native code verison: 06151612, build version: " FASTBOT_VERSION "----\n");
         this->_graph = std::make_shared<Graph>();
         this->_preference = Preference::inst();
         this->_netActionParam.netActionTaskid = 0;
@@ -2726,13 +2669,13 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
             if (element && _preference && !_preference->useStaticReuseAbstraction()) {
                 const uintptr_t sh = state->hash();
                 const std::string actKeyCanonical = naming::StateKey::canonicalActivityString(activity);
-                _apeStateXmlByStateHash[sh] = getXml();
+                storeStateXmlSnapshot(sh, activity, getXml());
                 if (element) {
                     _apeStateElementByStateHash[sh] = element;
                 }
                 apeMiniHistoryTouchState(actKeyCanonical, sh);
-                constexpr size_t kMaxApeXmlCache = 2048;
-                if (_apeStateXmlByStateHash.size() > kMaxApeXmlCache) {
+                constexpr size_t kMaxXmlSnapshotCache = 2048;
+                if (_stateXmlByStateHash.size() > kMaxXmlSnapshotCache) {
                     // Q8 (local rebuild): protect mini-history referenced XML from cache eviction.
                     std::unordered_set<uintptr_t> protectedHashes;
                     protectedHashes.reserve(128);
@@ -2755,21 +2698,21 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
                             }
                         }
                     }
-                    while (_apeStateXmlByStateHash.size() > kMaxApeXmlCache) {
-                        auto itEvict = _apeStateXmlByStateHash.begin();
+                    while (_stateXmlByStateHash.size() > kMaxXmlSnapshotCache) {
+                        auto itEvict = _stateXmlByStateHash.begin();
                         constexpr size_t kMaxProbe = 32;
                         size_t probe = 0;
-                        while (itEvict != _apeStateXmlByStateHash.end() &&
+                        while (itEvict != _stateXmlByStateHash.end() &&
                                protectedHashes.count(itEvict->first) != 0 &&
                                probe < kMaxProbe) {
                             ++itEvict;
                             ++probe;
                         }
-                        if (itEvict == _apeStateXmlByStateHash.end()) {
-                            itEvict = _apeStateXmlByStateHash.begin();
+                        if (itEvict == _stateXmlByStateHash.end()) {
+                            itEvict = _stateXmlByStateHash.begin();
                         }
                         _apeStateElementByStateHash.erase(itEvict->first);
-                        _apeStateXmlByStateHash.erase(itEvict);
+                        eraseStateXmlSnapshot(itEvict->first);
                     }
                 }
             }
@@ -3085,9 +3028,8 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
 
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML && DYNAMIC_STATE_ABSTRACTION_ENABLED
         const auto rs = std::dynamic_pointer_cast<ReuseState>(state);
-        const auto itXml = _apeStateXmlByStateHash.find(state->hash());
-        if (rs && itXml != _apeStateXmlByStateHash.end() && !itXml->second.empty()) {
-            const std::string &screenXml = itXml->second;
+        std::string screenXml;
+        if (rs && loadStateXmlSnapshot(state->hash(), &screenXml)) {
             naming::NamerLattice lat(naming::NamerFactory::current());
             std::set<std::string> blk;
             for (const auto &p : _apeNamingCoarseningBlacklist) {
@@ -3124,22 +3066,7 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
                     }
                     return false;
                 }
-                size_t guitreesForState = 0;
-                auto itSn = _apeGuiTreeSnapshotsByStateHash.find(state->hash());
-                if (itSn != _apeGuiTreeSnapshotsByStateHash.end()) {
-                    guitreesForState = itSn->second.size();
-                }
-                if (guitreesForState == 0) {
-                    size_t n = 0;
-                    for (const auto &te : _apeTransitionLog) {
-                        if (te.valid && te.sourceStateHash == state->hash()) {
-                            ++n;
-                        }
-                    }
-                    if (n > 0) {
-                        guitreesForState = n;
-                    }
-                }
+                size_t guitreesForState = apeGuitreeGateCountForState(state->hash());
                 if (static_cast<int>(guitreesForState) > apeMaxGUITreesPerState) {
                     if (!activitySizeGateLogged) {
                         const naming::NamingPtr cur = mgr.getNaming(actKey);
@@ -3652,8 +3579,8 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
             e.sourceActivity = naming::StateKey::canonicalActivityString(
                 (actPtr && actPtr.get()) ? *actPtr : "");
         }
-        auto itSrcXmlSnapshot = _apeStateXmlByStateHash.find(e.sourceStateHash);
-        if (itSrcXmlSnapshot != _apeStateXmlByStateHash.end()) {
+        auto itSrcXmlSnapshot = _stateXmlByStateHash.find(e.sourceStateHash);
+        if (itSrcXmlSnapshot != _stateXmlByStateHash.end()) {
             e.sourceXmlSnapshot = itSrcXmlSnapshot->second;
         }
         e.actionType = act->getActionType();
@@ -3706,11 +3633,8 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
         ApeTransitionEntry &aSlot = _apeTransitionLog[_apeTransitionLogWriteIndex];
         aSlot = std::move(e);
         apePairAggAdd(aSlot);
-        const std::string *srcXmlSnapshot = nullptr;
-        auto itSrcXml = _apeStateXmlByStateHash.find(aSlot.sourceStateHash);
-        if (itSrcXml != _apeStateXmlByStateHash.end() && !itSrcXml->second.empty()) {
-            srcXmlSnapshot = &itSrcXml->second;
-        }
+        const XmlSnapshotRef *srcXmlSnapshot =
+            aSlot.sourceXmlSnapshot.empty() ? nullptr : &aSlot.sourceXmlSnapshot;
         apeEvidencePoolAdd(pairKey, aSlot, srcXmlSnapshot);
         TreeTransitionEntry treeSlot;
         treeSlot.transitionSeq = aSlot.transitionSeq;
@@ -3720,37 +3644,41 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
         treeSlot.actionType = aSlot.actionType;
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML && DYNAMIC_STATE_ABSTRACTION_ENABLED
         gui_tree::GUITreePtr snapSrcLive = apeLatestGuiTreeSnapshot(src->hash());
-        bool snapFallbackRebuilt = false;
-        if (!snapFallbackRebuilt && !snapSrcLive) {
-            // Lifecycle fallback: some transitions are recorded before buildApeRlStateKey has
-            // published the source snapshot (fresh launch, recovery, coarsen-invalidated cache).
-            // Without a snapshot, resolvedNodeStableIds stays empty (Plan B legacy path returns
-            // empty), apeSourceGuiTree stays null, and downstream top-equivalence / target-name
-            // resolvers degenerate. Rebuild from cached source XML and publish it so every later
-            // call site (this one and future transitions) sees a valid object.
-            auto itSrcXmlFallback = _apeStateXmlByStateHash.find(src->hash());
-            if (itSrcXmlFallback != _apeStateXmlByStateHash.end() &&
-                !itSrcXmlFallback->second.empty()) {
+        gui_tree::GUITreePtr snapForStableIds = snapSrcLive;
+        bool snapXmlBuildOk = false;
+        bool snapPublishedToRing = false;
+        if (!snapForStableIds) {
+            // Disk-primary: live snapshot may be evicted after XML persist. Rebuild from cached
+            // source XML for GUITree-preorder stable ids; use the built tree directly (do not
+            // require apeRememberGuiTreeSnapshot, which no-ops when a disk path already exists).
+            std::string srcXmlFallback;
+            if (loadStateXmlSnapshot(src->hash(), &srcXmlFallback)) {
                 std::string pkgFb;
                 std::string clsFb;
                 naming::StateKey::splitActivityPackageClass(aSlot.sourceActivity, &pkgFb, &clsFb);
                 gui_tree::GUITreeBuildResult builtFb =
-                    buildGuitreeFromCachedXmlPreferElement(itSrcXmlFallback->second, pkgFb, clsFb);
+                    buildGuitreeFromCachedXmlPreferElement(srcXmlFallback, pkgFb, clsFb);
                 if (builtFb.tree) {
+                    snapXmlBuildOk = true;
+                    snapForStableIds = builtFb.tree;
                     apeRememberGuiTreeSnapshot(src->hash(), *builtFb.tree);
-                    snapSrcLive = apeLatestGuiTreeSnapshot(src->hash());
-                    snapFallbackRebuilt = (snapSrcLive != nullptr);
-                    BDLOG("naming: transition record snap_fallback_rebuilt seq=%llu activity=%s "
-                          "srcState=%lu rebuilt=%d xmlLen=%zu",
+                    snapPublishedToRing = (apeLatestGuiTreeSnapshot(src->hash()) != nullptr);
+                    BDLOG("naming: transition record snap_fallback_from_xml seq=%llu activity=%s "
+                          "srcState=%lu buildOk=1 snapPublished=%d xmlLen=%zu",
                           (unsigned long long)aSlot.transitionSeq, aSlot.sourceActivity.c_str(),
-                          (unsigned long)src->hash(), snapFallbackRebuilt ? 1 : 0,
-                          itSrcXmlFallback->second.size());
+                          (unsigned long)src->hash(), snapPublishedToRing ? 1 : 0,
+                          srcXmlFallback.size());
+                } else {
+                    BDLOG("naming: transition record snap_fallback_from_xml seq=%llu activity=%s "
+                          "srcState=%lu buildOk=0 xmlLen=%zu",
+                          (unsigned long long)aSlot.transitionSeq, aSlot.sourceActivity.c_str(),
+                          (unsigned long)src->hash(), srcXmlFallback.size());
                 }
             }
         }
 
-        treeSlot.resolvedNodeStableIds = snapSrcLive
-            ? apeCollectResolvedNodeStableIds(src, act, snapSrcLive)
+        treeSlot.resolvedNodeStableIds = snapForStableIds
+            ? apeCollectResolvedNodeStableIds(src, act, snapForStableIds)
             : apeCollectResolvedNodeStableIds(src, act);
 #else
         treeSlot.resolvedNodeStableIds = apeCollectResolvedNodeStableIds(src, act);
@@ -3762,22 +3690,14 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
         treeSlot.targetFullPathHash = aSlot.targetFullPathHash;
         treeSlot.sourceActivity = aSlot.sourceActivity;
         treeSlot.valid = true;
-#if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML && DYNAMIC_STATE_ABSTRACTION_ENABLED
-        if (snapSrcLive) {
-            treeSlot.apeSourceGuiTree = gui_tree::GUITree::cloneDeep(*snapSrcLive);
-        }
-        if (gui_tree::GUITreePtr snapTgt = apeLatestGuiTreeSnapshot(tgt->hash())) {
-            treeSlot.apeTargetGuiTree = gui_tree::GUITree::cloneDeep(*snapTgt);
-        }
-#endif
         if (treeSlot.resolvedNodeStableIds.empty()) {
             BDLOG("naming: transition record resolvedNodes_empty seq=%llu activity=%s "
-                  "hasLiveSnap=%d fallbackRebuilt=%d actionType=%d",
+                  "hasLiveSnap=%d xmlBuildOk=%d snapPublished=%d actionType=%d",
                   (unsigned long long)aSlot.transitionSeq, aSlot.sourceActivity.c_str(),
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML && DYNAMIC_STATE_ABSTRACTION_ENABLED
-                  snapSrcLive ? 1 : 0, snapFallbackRebuilt ? 1 : 0,
+                  snapSrcLive ? 1 : 0, snapXmlBuildOk ? 1 : 0, snapPublishedToRing ? 1 : 0,
 #else
-                  0, 0,
+                  0, 0, 0,
 #endif
                   static_cast<int>(aSlot.actionType));
         }
@@ -4012,7 +3932,7 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
 
     /** @brief Appends transition evidence for a pair key into the bounded evidence pool. */
     void Model::apeEvidencePoolAdd(const ApePairKey &pairKey, const ApeTransitionEntry &e,
-                                   const std::string *sourceXmlSnapshot) {
+                                   const XmlSnapshotRef *sourceXmlSnapshot) {
         if (!e.valid || pairKey.sourceKeyHash == 0 || pairKey.actionHash == 0) {
             return;
         }
@@ -4023,8 +3943,8 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
         if (sourceXmlSnapshot && !sourceXmlSnapshot->empty()) {
             s.sourceXml = *sourceXmlSnapshot;
         } else {
-            auto itXml = _apeStateXmlByStateHash.find(e.sourceStateHash);
-            if (itXml != _apeStateXmlByStateHash.end() && !itXml->second.empty()) {
+            auto itXml = _stateXmlByStateHash.find(e.sourceStateHash);
+            if (itXml != _stateXmlByStateHash.end() && !itXml->second.empty()) {
                 s.sourceXml = itXml->second;
                 BDLOG("naming evidence: fallback_source_xml activity=%s srcState=%zu seq=%llu pair=(%zu,%zu)",
                       e.sourceActivity.c_str(), e.sourceStateHash,
@@ -4045,7 +3965,10 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
             epoch = ++_apeEvidenceEpoch;
         }
         s.sourceTransitionSeq = e.transitionSeq;
-        s.sourceTreeHash = s.sourceXml.empty() ? 0 : fastStringHash(s.sourceXml);
+        std::string sourceXmlForHash;
+        s.sourceTreeHash = loadXmlSnapshot(s.sourceXml, &sourceXmlForHash)
+                               ? fastStringHash(sourceXmlForHash)
+                               : 0;
 
         auto it = _apeEvidencePools.find(pairKey);
         if (it == _apeEvidencePools.end()) {
@@ -4168,7 +4091,7 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
         }
         slot = e;
         apePairAggAdd(slot);
-        const std::string *slotSrcXmlSnapshot = slot.sourceXmlSnapshot.empty()
+        const XmlSnapshotRef *slotSrcXmlSnapshot = slot.sourceXmlSnapshot.empty()
             ? nullptr
             : &slot.sourceXmlSnapshot;
         apeEvidencePoolAdd(ApePairKey{slot.sourceKeyHash, slot.actionHash}, slot,
@@ -4293,11 +4216,11 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
             if (xmlByOldStateHash.find(sh) != xmlByOldStateHash.end()) {
                 return;
             }
-            auto itX = _apeStateXmlByStateHash.find(sh);
-            if (itX == _apeStateXmlByStateHash.end() || itX->second.empty()) {
+            std::string xml;
+            if (!loadStateXmlSnapshot(sh, &xml)) {
                 return;
             }
-            xmlByOldStateHash.emplace(sh, itX->second);
+            xmlByOldStateHash.emplace(sh, std::move(xml));
         };
         std::vector<TreeTransitionEntry> transitionsToReplay;
         transitionsToReplay.reserve(128);
@@ -4394,7 +4317,7 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
             _ape_state_keys_by_hash.erase(sh);
             _apeGuiTreeNamingBlacklist.erase(sh);
             _apeStateElementByStateHash.erase(sh);
-            _apeStateXmlByStateHash.erase(sh);
+            eraseStateXmlSnapshot(sh);
         }
         for (auto &slot : _apeTransitionLog) {
             if (!slot.valid) {
@@ -4431,7 +4354,7 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
             if (ps.haveApeKey) {
                 recordApeStateKey(canonical, ps.apeKey);
             }
-            _apeStateXmlByStateHash[canonical->hash()] = ps.xml;
+            storeStateXmlSnapshot(canonical->hash(), activityKeyCanonical, ps.xml);
             if (ps.elemSnapshot) {
                 _apeStateElementByStateHash[canonical->hash()] = ps.elemSnapshot;
             }
@@ -4524,9 +4447,14 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
             edge.sourceStateHash = srcState->hash();
             edge.targetStateHash = tgtState->hash();
             edge.transitionSeq = t.transitionSeq;
-            auto itSrcXml = xmlByOldStateHash.find(t.sourceStateHash);
-            if (itSrcXml != xmlByOldStateHash.end()) {
-                edge.sourceXmlSnapshot = itSrcXml->second;
+            auto itSrcRef = _stateXmlByStateHash.find(srcState->hash());
+            if (itSrcRef != _stateXmlByStateHash.end() && !itSrcRef->second.empty()) {
+                edge.sourceXmlSnapshot = itSrcRef->second;
+            } else {
+                auto itSrcXml = xmlByOldStateHash.find(t.sourceStateHash);
+                if (itSrcXml != xmlByOldStateHash.end()) {
+                    edge.sourceXmlSnapshot = inlineXmlSnapshotForFallback(itSrcXml->second);
+                }
             }
             edge.actionType = matchedAction->getActionType();
             edge.hasTargetBounds = t.hasTargetBounds;
@@ -4600,10 +4528,372 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
     }
 
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML && DYNAMIC_STATE_ABSTRACTION_ENABLED
+    namespace {
+        std::string sanitizePathSegment(const std::string &raw) {
+            std::string out;
+            out.reserve(raw.empty() ? 7 : raw.size());
+            for (unsigned char ch : raw) {
+                if (std::isalnum(ch) || ch == '.' || ch == '_' || ch == '-') {
+                    out.push_back(static_cast<char>(ch));
+                } else {
+                    out.push_back('_');
+                }
+            }
+            return out.empty() ? std::string("unknown") : out;
+        }
+
+        bool ensureDirExists(const std::string &path) {
+            if (path.empty()) {
+                return false;
+            }
+            if (::mkdir(path.c_str(), 0775) == 0) {
+                return true;
+            }
+            return errno == EEXIST;
+        }
+
+        std::string snapshotPackageName(const std::string &targetPackage, const std::string &activity) {
+            if (!targetPackage.empty()) {
+                return targetPackage;
+            }
+            std::string pkg;
+            std::string cls;
+            naming::StateKey::splitActivityPackageClass(activity, &pkg, &cls);
+            return pkg.empty() ? activity : pkg;
+        }
+
+        std::string xmlSnapshotRootDirFor(const std::string &outputDir, const std::string &targetPackage,
+                                          const std::string &activity) {
+            const std::string safePkg = sanitizePathSegment(snapshotPackageName(targetPackage, activity));
+            std::string root = outputDir;
+            if (root.empty()) {
+                root = "/sdcard/my-fastbot-logs";
+            }
+            while (!root.empty() && root.back() == '/') {
+                root.pop_back();
+            }
+            return root + "/" + safePkg;
+        }
+    } // namespace
+
+    std::string Model::apeXmlSnapshotRootDir(const std::string &activity) const {
+        return xmlSnapshotRootDirFor(_xmlSnapshotOutputDirectory, getPackageName(), activity);
+    }
+
+    XmlSnapshotRef Model::inlineXmlSnapshotForFallback(const std::string &xml) const {
+        XmlSnapshotRef ref;
+        ref.inlineXml = xml;
+        ref.byteSize = xml.size();
+        ref.contentHash = hashStringForLog(xml);
+        ref.snapshotSeq = _apeTransitionSeq;
+        return ref;
+    }
+
+    bool Model::storeStandaloneXmlSnapshot(const std::string &activity, const std::string &tag,
+                                              const std::string &xml, XmlSnapshotRef *outRef) {
+        if (!outRef || xml.empty()) {
+            return false;
+        }
+        const std::string safeTag = sanitizePathSegment(tag.empty() ? std::string("snapshot") : tag);
+        const std::string rootDir = apeXmlSnapshotRootDir(activity);
+        const uint64_t xmlHash = hashStringForLog(xml);
+
+        XmlSnapshotRef ref;
+        ref.contentHash = xmlHash;
+        ref.byteSize = xml.size();
+        ref.snapshotSeq = _apeTransitionSeq;
+
+        if (ensureDirExists(rootDir)) {
+            std::ostringstream name;
+            name << rootDir << "/" << safeTag << "_xml_"
+                 << static_cast<unsigned long long>(xmlHash) << ".xml";
+            const std::string path = name.str();
+            const std::string tmpPath = path + ".tmp";
+            std::ofstream ofs(tmpPath.c_str(), std::ios::out | std::ios::binary | std::ios::trunc);
+            if (ofs) {
+                ofs.write(xml.data(), static_cast<std::streamsize>(xml.size()));
+                ofs.close();
+                if (!ofs.fail() && std::rename(tmpPath.c_str(), path.c_str()) == 0) {
+                    ref.path = path;
+                } else {
+                    std::remove(tmpPath.c_str());
+                }
+            }
+        }
+
+        if (ref.path.empty()) {
+            ref.inlineXml = xml;
+        } else {
+            const size_t kMaxHotCacheBytes = 8u * 1024u * 1024u;
+            XmlHotCacheEntry &entry = _xmlHotCache[ref.path];
+            if (entry.xml.empty()) {
+                _xmlHotCacheBytes += xml.size();
+            } else {
+                _xmlHotCacheBytes -= entry.byteSize;
+                _xmlHotCacheBytes += xml.size();
+            }
+            entry.xml = xml;
+            entry.byteSize = xml.size();
+            entry.lastTouch = ++_xmlHotCacheClock;
+            while (_xmlHotCacheBytes > kMaxHotCacheBytes && !_xmlHotCache.empty()) {
+                auto oldest = _xmlHotCache.begin();
+                for (auto it = _xmlHotCache.begin(); it != _xmlHotCache.end(); ++it) {
+                    if (it->second.lastTouch < oldest->second.lastTouch) {
+                        oldest = it;
+                    }
+                }
+                _xmlHotCacheBytes -= oldest->second.byteSize;
+                _xmlHotCache.erase(oldest);
+            }
+        }
+        *outRef = ref;
+        return !ref.empty();
+    }
+
+    bool Model::storeStateXmlSnapshot(uintptr_t stateHash, const std::string &activity,
+                                         const std::string &xml, XmlSnapshotRef *outRef) {
+        if (stateHash == 0 || xml.empty()) {
+            return false;
+        }
+
+        const std::string rootDir = apeXmlSnapshotRootDir(activity);
+        const uint64_t xmlHash = hashStringForLog(xml);
+
+        auto itExisting = _stateXmlByStateHash.find(stateHash);
+        if (itExisting != _stateXmlByStateHash.end() && !itExisting->second.empty() &&
+            itExisting->second.contentHash == xmlHash && itExisting->second.byteSize == xml.size()) {
+            if (outRef) {
+                *outRef = itExisting->second;
+            }
+            apeNoteDistinctXmlVariant(stateHash, xmlHash);
+            if (!itExisting->second.path.empty()) {
+                apeEvictGuiTreeSnapshotsForState(stateHash);
+            }
+            if (!itExisting->second.path.empty() &&
+                _xmlHotCache.find(itExisting->second.path) == _xmlHotCache.end()) {
+                const size_t kMaxHotCacheBytes = 8u * 1024u * 1024u;
+                XmlHotCacheEntry &entry = _xmlHotCache[itExisting->second.path];
+                entry.xml = xml;
+                entry.byteSize = xml.size();
+                entry.lastTouch = ++_xmlHotCacheClock;
+                _xmlHotCacheBytes += entry.byteSize;
+                while (_xmlHotCacheBytes > kMaxHotCacheBytes && !_xmlHotCache.empty()) {
+                    auto oldest = _xmlHotCache.begin();
+                    for (auto it = _xmlHotCache.begin(); it != _xmlHotCache.end(); ++it) {
+                        if (it->second.lastTouch < oldest->second.lastTouch) {
+                            oldest = it;
+                        }
+                    }
+                    _xmlHotCacheBytes -= oldest->second.byteSize;
+                    _xmlHotCache.erase(oldest);
+                }
+            }
+            return true;
+        }
+
+        XmlSnapshotRef ref;
+        ref.contentHash = xmlHash;
+        ref.byteSize = xml.size();
+        ref.snapshotSeq = _apeTransitionSeq;
+
+        if (ensureDirExists(rootDir)) {
+            std::ostringstream name;
+            name << rootDir << "/tree_" << static_cast<unsigned long long>(stateHash)
+                 << "_" << static_cast<unsigned long long>(xmlHash) << ".xml";
+            const std::string path = name.str();
+            const std::string tmpPath = path + ".tmp";
+
+            std::ofstream ofs(tmpPath.c_str(), std::ios::out | std::ios::binary | std::ios::trunc);
+            if (ofs) {
+                ofs.write(xml.data(), static_cast<std::streamsize>(xml.size()));
+                ofs.close();
+                if (!ofs.fail() && std::rename(tmpPath.c_str(), path.c_str()) == 0) {
+                    ref.path = path;
+                } else {
+                    std::remove(tmpPath.c_str());
+                }
+            }
+        }
+
+        if (ref.path.empty()) {
+            ref.inlineXml = xml;
+            static std::atomic<uint64_t> g_xml_store_fallback{0};
+            const uint64_t n = ++g_xml_store_fallback;
+            if (n <= 8 || (n % 200) == 0) {
+                BDLOG("naming xml-store: fallback memory activity=%s stateHash=%lu xmlLen=%zu",
+                      activity.c_str(), static_cast<unsigned long>(stateHash), xml.size());
+            }
+        } else {
+            static std::atomic<uint64_t> g_xml_store_ok{0};
+            const uint64_t n = ++g_xml_store_ok;
+            if (n <= 8 || (n % 500) == 0) {
+                BDLOG("naming xml-store: saved activity=%s stateHash=%lu xmlLen=%zu path=%s",
+                      activity.c_str(), static_cast<unsigned long>(stateHash), xml.size(), ref.path.c_str());
+            }
+        }
+
+        _stateXmlByStateHash[stateHash] = ref;
+        apeNoteDistinctXmlVariant(stateHash, xmlHash);
+        if (!ref.path.empty()) {
+            apeEvictGuiTreeSnapshotsForState(stateHash);
+        }
+        if (outRef) {
+            *outRef = ref;
+        }
+        if (!ref.path.empty()) {
+            const size_t kMaxHotCacheBytes = 8u * 1024u * 1024u;
+            XmlHotCacheEntry &entry = _xmlHotCache[ref.path];
+            if (entry.xml.empty()) {
+                _xmlHotCacheBytes += xml.size();
+            } else {
+                _xmlHotCacheBytes -= entry.byteSize;
+                _xmlHotCacheBytes += xml.size();
+            }
+            entry.xml = xml;
+            entry.byteSize = xml.size();
+            entry.lastTouch = ++_xmlHotCacheClock;
+            while (_xmlHotCacheBytes > kMaxHotCacheBytes && !_xmlHotCache.empty()) {
+                auto oldest = _xmlHotCache.begin();
+                for (auto it = _xmlHotCache.begin(); it != _xmlHotCache.end(); ++it) {
+                    if (it->second.lastTouch < oldest->second.lastTouch) {
+                        oldest = it;
+                    }
+                }
+                _xmlHotCacheBytes -= oldest->second.byteSize;
+                _xmlHotCache.erase(oldest);
+            }
+        }
+        return true;
+    }
+
+    bool Model::loadXmlSnapshot(const XmlSnapshotRef &ref, std::string *outXml) const {
+        if (!outXml || ref.empty()) {
+            return false;
+        }
+        if (!ref.inlineXml.empty()) {
+            *outXml = ref.inlineXml;
+            return true;
+        }
+        if (ref.path.empty()) {
+            return false;
+        }
+        auto itCache = _xmlHotCache.find(ref.path);
+        if (itCache != _xmlHotCache.end()) {
+            itCache->second.lastTouch = ++_xmlHotCacheClock;
+            *outXml = itCache->second.xml;
+            return !outXml->empty();
+        }
+
+        std::ifstream ifs(ref.path.c_str(), std::ios::in | std::ios::binary);
+        if (!ifs) {
+            static std::atomic<uint64_t> g_xml_load_fail{0};
+            const uint64_t n = ++g_xml_load_fail;
+            if (n <= 8 || (n % 200) == 0) {
+                BDLOG("naming xml-store: load_fail path=%s", ref.path.c_str());
+            }
+            return false;
+        }
+        std::ostringstream buffer;
+        buffer << ifs.rdbuf();
+        std::string xml = buffer.str();
+        if (xml.empty() && ref.byteSize != 0) {
+            return false;
+        }
+
+        const size_t kMaxHotCacheBytes = 8u * 1024u * 1024u;
+        XmlHotCacheEntry &entry = _xmlHotCache[ref.path];
+        entry.xml = xml;
+        entry.byteSize = xml.size();
+        entry.lastTouch = ++_xmlHotCacheClock;
+        _xmlHotCacheBytes += entry.byteSize;
+        while (_xmlHotCacheBytes > kMaxHotCacheBytes && !_xmlHotCache.empty()) {
+            auto oldest = _xmlHotCache.begin();
+            for (auto it = _xmlHotCache.begin(); it != _xmlHotCache.end(); ++it) {
+                if (it->second.lastTouch < oldest->second.lastTouch) {
+                    oldest = it;
+                }
+            }
+            _xmlHotCacheBytes -= oldest->second.byteSize;
+            _xmlHotCache.erase(oldest);
+        }
+        *outXml = std::move(xml);
+        return !outXml->empty();
+    }
+
+    bool Model::loadStateXmlSnapshot(uintptr_t stateHash, std::string *outXml) const {
+        auto it = _stateXmlByStateHash.find(stateHash);
+        if (it == _stateXmlByStateHash.end()) {
+            return false;
+        }
+        return loadXmlSnapshot(it->second, outXml);
+    }
+
+    void Model::eraseStateXmlSnapshot(uintptr_t stateHash) {
+        auto it = _stateXmlByStateHash.find(stateHash);
+        if (it != _stateXmlByStateHash.end() && !it->second.path.empty()) {
+            auto itCache = _xmlHotCache.find(it->second.path);
+            if (itCache != _xmlHotCache.end()) {
+                _xmlHotCacheBytes -= itCache->second.byteSize;
+                _xmlHotCache.erase(itCache);
+            }
+        }
+        _stateXmlByStateHash.erase(stateHash);
+        _distinctXmlVariantsByStateHash.erase(stateHash);
+    }
+
+    void Model::apeNoteDistinctXmlVariant(uintptr_t stateHash, uint64_t contentHash) {
+        if (stateHash == 0 || contentHash == 0) {
+            return;
+        }
+        _distinctXmlVariantsByStateHash[stateHash].insert(contentHash);
+    }
+
+#if DYNAMIC_STATE_ABSTRACTION_ENABLED
+    void Model::apeEvictGuiTreeSnapshotsForState(uintptr_t stateHash) {
+        if (stateHash == 0) {
+            return;
+        }
+        auto itSnap = _apeGuiTreeSnapshotsByStateHash.find(stateHash);
+        if (itSnap == _apeGuiTreeSnapshotsByStateHash.end()) {
+            return;
+        }
+        if (_apeStateNamingManager) {
+            for (const auto &snap : itSnap->second) {
+                if (snap) {
+                    _apeStateNamingManager->releaseTreeCache(*snap);
+                }
+            }
+        }
+        _apeGuiTreeSnapshotsByStateHash.erase(itSnap);
+    }
+
+    size_t Model::apeGuitreeGateCountForState(uintptr_t stateHash) const {
+        if (stateHash == 0) {
+            return 0;
+        }
+        auto itVariants = _distinctXmlVariantsByStateHash.find(stateHash);
+        if (itVariants != _distinctXmlVariantsByStateHash.end() && !itVariants->second.empty()) {
+            return itVariants->second.size();
+        }
+        auto itSn = _apeGuiTreeSnapshotsByStateHash.find(stateHash);
+        if (itSn != _apeGuiTreeSnapshotsByStateHash.end()) {
+            return itSn->second.size();
+        }
+        return 0;
+    }
+#endif
+
     /** @brief Caches the latest GUI tree snapshot for a state hash (debugging / refinement). */
     void Model::apeRememberGuiTreeSnapshot(uintptr_t stateHash, const gui_tree::GUITree &tree) {
+        if (stateHash == 0) {
+            return;
+        }
+        auto itXml = _stateXmlByStateHash.find(stateHash);
+        if (itXml != _stateXmlByStateHash.end() && !itXml->second.path.empty()) {
+            return;
+        }
         gui_tree::GUITreePtr copy = gui_tree::GUITree::cloneDeep(tree);
-        if (!copy || stateHash == 0) {
+        if (!copy) {
             return;
         }
 
@@ -4627,12 +4917,13 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
     }
 
     /** @brief Looks up a cached GUI tree whose serialized XML equals the given string. */
-    gui_tree::GUITreePtr Model::apeGuiTreeSnapshotForExactCachedXml(const std::string &xml) const {
+    gui_tree::GUITreePtr Model::guiTreeSnapshotForExactCachedXml(const std::string &xml) const {
         if (xml.empty()) {
             return nullptr;
         }
-        for (const auto &kv : _apeStateXmlByStateHash) {
-            if (kv.second == xml) {
+        for (const auto &kv : _stateXmlByStateHash) {
+            std::string storedXml;
+            if (loadXmlSnapshot(kv.second, &storedXml) && storedXml == xml) {
                 return apeLatestGuiTreeSnapshot(kv.first);
             }
         }
@@ -4704,7 +4995,7 @@ namespace {
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML
             if (!shouldKeepXml(sh)) {
                 _apeStateElementByStateHash.erase(sh);
-                _apeStateXmlByStateHash.erase(sh);
+                eraseStateXmlSnapshot(sh);
             }
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
             auto itSnap = _apeGuiTreeSnapshotsByStateHash.find(sh);
@@ -4822,8 +5113,8 @@ namespace {
                 naming::NamingPtr cur = mgr.getNaming(actKey);
                 return cur ? cur : naming::NamingFactory::defaultRootNaming();
             }
-            auto itXml = _apeStateXmlByStateHash.find(stateHash);
-            if (itXml == _apeStateXmlByStateHash.end() || itXml->second.empty()) {
+            std::string stateXml;
+            if (!loadStateXmlSnapshot(stateHash, &stateXml)) {
                 naming::NamingPtr cur = mgr.getNaming(actKey);
                 return cur ? cur : naming::NamingFactory::defaultRootNaming();
             }
@@ -4832,9 +5123,9 @@ namespace {
             naming::StateKey::splitActivityPackageClass(activity, &pkg, &cls);
             gui_tree::GUITreeBuildResult built;
             if (gui_tree::GUITreePtr snap = apeLatestGuiTreeSnapshot(stateHash)) {
-                built = buildGuitreePreferApeSnapshotAndDomXml(itXml->second, pkg, cls, snap);
+                built = buildGuitreePreferApeSnapshotAndDomXml(stateXml, pkg, cls, snap);
             } else {
-                built = buildGuitreeFromCachedXmlPreferElement(itXml->second, pkg, cls);
+                built = buildGuitreeFromCachedXmlPreferElement(stateXml, pkg, cls);
             }
             if (!built.tree) {
                 naming::NamingPtr cur = mgr.getNaming(actKey);
@@ -4945,16 +5236,16 @@ namespace {
                 }
 #endif
                 for (uintptr_t sh : pred.stateHashes) {
-                    auto itXml = _apeStateXmlByStateHash.find(sh);
-                    if (itXml == _apeStateXmlByStateHash.end() || itXml->second.empty()) {
+                    std::string stateXml;
+                    if (!loadStateXmlSnapshot(sh, &stateXml)) {
                         continue;
                     }
                     gui_tree::GUITreeBuildResult built;
 #if defined(DYNAMIC_STATE_ABSTRACTION_ENABLED) && DYNAMIC_STATE_ABSTRACTION_ENABLED
-                    built = buildGuitreeFromSnapshotObjectOrCachedXml(itXml->second, pkg, cls, 
+                    built = buildGuitreeFromSnapshotObjectOrCachedXml(stateXml, pkg, cls,
                         apeLatestGuiTreeSnapshot(sh));
 #else
-                    built = buildGuitreeFromCachedXmlPreferElement(itXml->second, pkg, cls);
+                    built = buildGuitreeFromCachedXmlPreferElement(stateXml, pkg, cls);
 #endif
                     if (!built.tree || !built.dom) {
                         continue;
@@ -4979,21 +5270,25 @@ namespace {
         if (itSd != _apeSourceDivergentPredicates.end() && !itSd->second.empty()) {
             for (const ApeSourceDivergentPredicate &pred : itSd->second) {
                 const bool hasTrees = static_cast<bool>(pred.sourceTreeA) && static_cast<bool>(pred.sourceTreeB);
-                if (!hasTrees && (pred.xmlA.empty() || pred.xmlB.empty())) {
+                std::string xmlA;
+                std::string xmlB;
+                const bool haveXmlA = loadXmlSnapshot(pred.xmlA, &xmlA);
+                const bool haveXmlB = loadXmlSnapshot(pred.xmlB, &xmlB);
+                if (!hasTrees && (!haveXmlA || !haveXmlB)) {
                     continue;
                 }
                 gui_tree::GUITreeBuildResult builtA;
                 gui_tree::GUITreeBuildResult builtB;
 #if defined(DYNAMIC_STATE_ABSTRACTION_ENABLED) && DYNAMIC_STATE_ABSTRACTION_ENABLED
                 builtA = buildGuitreeFromSnapshotObjectOrCachedXml(
-                    pred.xmlA, pkg, cls, 
-                    pred.sourceTreeA ? pred.sourceTreeA : apeGuiTreeSnapshotForExactCachedXml(pred.xmlA));
+                    xmlA, pkg, cls,
+                    pred.sourceTreeA ? pred.sourceTreeA : guiTreeSnapshotForExactCachedXml(xmlA));
                 builtB = buildGuitreeFromSnapshotObjectOrCachedXml(
-                    pred.xmlB, pkg, cls, 
-                    pred.sourceTreeB ? pred.sourceTreeB : apeGuiTreeSnapshotForExactCachedXml(pred.xmlB));
+                    xmlB, pkg, cls,
+                    pred.sourceTreeB ? pred.sourceTreeB : guiTreeSnapshotForExactCachedXml(xmlB));
 #else
-                builtA = buildGuitreeFromCachedXmlPreferElement(pred.xmlA, pkg, cls);
-                builtB = buildGuitreeFromCachedXmlPreferElement(pred.xmlB, pkg, cls);
+                builtA = buildGuitreeFromCachedXmlPreferElement(xmlA, pkg, cls);
+                builtB = buildGuitreeFromCachedXmlPreferElement(xmlB, pkg, cls);
 #endif
                 if (!builtA.tree || !builtA.dom || !builtB.tree || !builtB.dom) {
                     return false;
@@ -5017,16 +5312,18 @@ namespace {
         auto it = _apeActionRefinementPredicates.find(actKey);
         if (it != _apeActionRefinementPredicates.end() && !it->second.empty()) {
             for (const ApeActionDivergentPredicate &pred : it->second) {
-                if ((!pred.sourceTree && pred.sourceXml.empty()) || pred.partitionsStableIds.empty()) {
+                std::string sourceXml;
+                const bool haveSourceXml = loadXmlSnapshot(pred.sourceXml, &sourceXml);
+                if ((!pred.sourceTree && !haveSourceXml) || pred.partitionsStableIds.empty()) {
                     continue;
                 }
                 gui_tree::GUITreeBuildResult built;
 #if defined(DYNAMIC_STATE_ABSTRACTION_ENABLED) && DYNAMIC_STATE_ABSTRACTION_ENABLED
                 built = buildGuitreeFromSnapshotObjectOrCachedXml(
-                    pred.sourceXml, pkg, cls,
+                    sourceXml, pkg, cls,
                     pred.sourceTree ? pred.sourceTree : apeLatestGuiTreeSnapshot(pred.sourceStateHash));
 #else
-                built = buildGuitreeFromCachedXmlPreferElement(pred.sourceXml, pkg, cls);
+                built = buildGuitreeFromCachedXmlPreferElement(sourceXml, pkg, cls);
 #endif
                 if (!built.tree || !built.dom) {
                     continue;
@@ -5159,7 +5456,12 @@ namespace {
         }
         ApeActionDivergentPredicate pred;
         pred.sourceStateHash = sourceStateHash;
-        pred.sourceXml = sourceXml;
+        auto itSourceRef = _stateXmlByStateHash.find(sourceStateHash);
+        if (itSourceRef != _stateXmlByStateHash.end() && !itSourceRef->second.empty()) {
+            pred.sourceXml = itSourceRef->second;
+        } else if (!storeStateXmlSnapshot(sourceStateHash, activity, sourceXml, &pred.sourceXml)) {
+            pred.sourceXml = inlineXmlSnapshotForFallback(sourceXml);
+        }
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML && DYNAMIC_STATE_ABSTRACTION_ENABLED
         pred.sourceTree = apeLatestGuiTreeSnapshot(sourceStateHash);
 #endif
@@ -5225,15 +5527,16 @@ namespace {
             return naming;
         };
         for (const auto &pred : it->second) {
-            if (pred.sourceXml.empty() || pred.partitionsStableIds.empty()) {
+            std::string sourceXml;
+            if (!loadXmlSnapshot(pred.sourceXml, &sourceXml) || pred.partitionsStableIds.empty()) {
                 continue;
             }
             gui_tree::GUITreeBuildResult built;
 #if defined(DYNAMIC_STATE_ABSTRACTION_ENABLED) && DYNAMIC_STATE_ABSTRACTION_ENABLED
             built = buildGuitreeFromSnapshotObjectOrCachedXml(
-                pred.sourceXml, pkg, cls, apeLatestGuiTreeSnapshot(pred.sourceStateHash));
+                sourceXml, pkg, cls, apeLatestGuiTreeSnapshot(pred.sourceStateHash));
 #else
-            built = buildGuitreeFromCachedXmlPreferElement(pred.sourceXml, pkg, cls);
+            built = buildGuitreeFromCachedXmlPreferElement(sourceXml, pkg, cls);
 #endif
             if (!built.tree || !built.dom) {
                 continue;
@@ -5308,20 +5611,20 @@ namespace {
             uniqueStates.reserve(pred.stateHashes.size());
             bool valid = true;
             for (uintptr_t sh : pred.stateHashes) {
-                auto itXml = _apeStateXmlByStateHash.find(sh);
-                if (itXml == _apeStateXmlByStateHash.end() || itXml->second.empty()) {
+                std::string stateXml;
+                if (!loadStateXmlSnapshot(sh, &stateXml)) {
                     continue;
                 }
                 uintptr_t h = 0;
 #if defined(DYNAMIC_STATE_ABSTRACTION_ENABLED) && DYNAMIC_STATE_ABSTRACTION_ENABLED
                 gui_tree::GUITreePtr snapFew = apeLatestGuiTreeSnapshot(sh);
                 const gui_tree::GUITreePtr *snapFewPtr = snapFew ? &snapFew : nullptr;
-                if (!apeStateHashFromXmlWithNaming(activity, itXml->second, naming, &h, 0, nullptr, snapFewPtr) ||
+                if (!apeStateHashFromXmlWithNaming(activity, stateXml, naming, &h, 0, nullptr, snapFewPtr) ||
                     h == 0) {
                     continue;
                 }
 #else
-                if (!apeStateHashFromXmlWithNaming(activity, itXml->second, naming, &h) || h == 0) {
+                if (!apeStateHashFromXmlWithNaming(activity, stateXml, naming, &h) || h == 0) {
                     continue;
                 }
 #endif
@@ -5347,12 +5650,16 @@ namespace {
         }
         const std::string actKey = naming::StateKey::canonicalActivityString(activity);
         ApeSourceDivergentPredicate pred;
-        pred.xmlA = xmlA;
-        pred.xmlB = xmlB;
+        if (!storeStandaloneXmlSnapshot(activity, "source_divergent_a", xmlA, &pred.xmlA)) {
+            pred.xmlA = inlineXmlSnapshotForFallback(xmlA);
+        }
+        if (!storeStandaloneXmlSnapshot(activity, "source_divergent_b", xmlB, &pred.xmlB)) {
+            pred.xmlB = inlineXmlSnapshotForFallback(xmlB);
+        }
         pred.sharedSourceStateHash = sharedSourceStateHash;
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
-        pred.sourceTreeA = apeGuiTreeSnapshotForExactCachedXml(xmlA);
-        pred.sourceTreeB = apeGuiTreeSnapshotForExactCachedXml(xmlB);
+        pred.sourceTreeA = guiTreeSnapshotForExactCachedXml(xmlA);
+        pred.sourceTreeB = guiTreeSnapshotForExactCachedXml(xmlB);
         if (!pred.sourceTreeA && sharedSourceStateHash != 0) {
             pred.sourceTreeA = apeLatestGuiTreeSnapshot(sharedSourceStateHash);
         }
@@ -5386,25 +5693,27 @@ namespace {
         std::vector<ApeSourceDivergentPredicate> kept;
         kept.reserve(it->second.size());
         for (const auto &pred : it->second) {
-            if (pred.xmlA.empty() || pred.xmlB.empty()) {
+            std::string xmlA;
+            std::string xmlB;
+            if (!loadXmlSnapshot(pred.xmlA, &xmlA) || !loadXmlSnapshot(pred.xmlB, &xmlB)) {
                 continue;
             }
             uintptr_t ha = 0;
             uintptr_t hb = 0;
 #if defined(DYNAMIC_STATE_ABSTRACTION_ENABLED) && DYNAMIC_STATE_ABSTRACTION_ENABLED
-            gui_tree::GUITreePtr snapA = apeGuiTreeSnapshotForExactCachedXml(pred.xmlA);
-            gui_tree::GUITreePtr snapB = apeGuiTreeSnapshotForExactCachedXml(pred.xmlB);
+            gui_tree::GUITreePtr snapA = guiTreeSnapshotForExactCachedXml(xmlA);
+            gui_tree::GUITreePtr snapB = guiTreeSnapshotForExactCachedXml(xmlB);
             const gui_tree::GUITreePtr *snapAPtr = snapA ? &snapA : nullptr;
             const gui_tree::GUITreePtr *snapBPtr = snapB ? &snapB : nullptr;
-            if (!apeStateHashFromXmlWithNaming(activity, pred.xmlA, naming, &ha, 0, nullptr, snapAPtr) ||
+            if (!apeStateHashFromXmlWithNaming(activity, xmlA, naming, &ha, 0, nullptr, snapAPtr) ||
                 ha == 0 ||
-                !apeStateHashFromXmlWithNaming(activity, pred.xmlB, naming, &hb, 0, nullptr, snapBPtr) ||
+                !apeStateHashFromXmlWithNaming(activity, xmlB, naming, &hb, 0, nullptr, snapBPtr) ||
                 hb == 0) {
                 continue;
             }
 #else
-            if (!apeStateHashFromXmlWithNaming(activity, pred.xmlA, naming, &ha) || ha == 0 ||
-                !apeStateHashFromXmlWithNaming(activity, pred.xmlB, naming, &hb) || hb == 0) {
+            if (!apeStateHashFromXmlWithNaming(activity, xmlA, naming, &ha) || ha == 0 ||
+                !apeStateHashFromXmlWithNaming(activity, xmlB, naming, &hb) || hb == 0) {
                 continue;
             }
 #endif
@@ -5480,11 +5789,11 @@ namespace {
             built = gui_tree::GUITreeFactory::buildFromElement(itEl->second, pkg, cls);
         }
         if (!built.tree || !built.dom) {
-            auto itXml = _apeStateXmlByStateHash.find(stateHash);
-            if (itXml == _apeStateXmlByStateHash.end() || itXml->second.empty()) {
+            std::string stateXml;
+            if (!loadStateXmlSnapshot(stateHash, &stateXml)) {
                 return false;
             }
-            built = buildGuitreePreferApeSnapshotAndDomXml(itXml->second, pkg, cls, 
+            built = buildGuitreePreferApeSnapshotAndDomXml(stateXml, pkg, cls,
                 apeLatestGuiTreeSnapshot(stateHash));
         }
         if (!built.tree || !built.dom) {
@@ -5695,9 +6004,9 @@ namespace {
         const int apeMaxStatesPerActivity =
             _preference ? _preference->getApeMaxStatesPerActivity() : 10;
         const int apeMaxGuitreesPerState = _preference ? _preference->getApeMaxGuitreesPerState() : 20;
-        // Design intent: cap distinct states per activity and GUI trees per logical state.
-        // Reference NamingFactory.refine historically used an.getStates().size() for the
-        // second check; Fastbot uses rep-state guitrees (see log: maxGuitreesPerState).
+        // Design intent: cap distinct states per activity and distinct GUI XML variants per rep-state.
+        // Gate counts contentHash variants tracked at storeStateXmlSnapshot time (disk-backed);
+        // falls back to in-memory GUITree deque only when XML was not persisted externally.
         if (static_cast<int>(graphStatesInActivity) > apeMaxStatesPerActivity) {
             BDLOG("naming: skip refine activity=%s reason=maxStatesPerActivity graphStates=%zu max=%d",
                   activity.c_str(), graphStatesInActivity, apeMaxStatesPerActivity);
@@ -5708,8 +6017,7 @@ namespace {
             }
             return false;
         }
-        // Second gate: GUI trees on the representative ND source state (NamingFactory.refine:
-        // state.getGUITrees().size() > maxGUITreesPerState), not activity-wide graph state count.
+        // Second gate: distinct GUI XML variants on the representative ND source state.
         uintptr_t repStateHash = 0;
         if (dominantSourceKeyHash != 0 && _graph) {
             for (const StatePtr &sp : _graph->getStates()) {
@@ -5731,29 +6039,10 @@ namespace {
                 break;
             }
         }
-        size_t guitreesInRepState = 0;
-        if (repStateHash != 0) {
-#if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML && DYNAMIC_STATE_ABSTRACTION_ENABLED
-            auto itSn = _apeGuiTreeSnapshotsByStateHash.find(repStateHash);
-            if (itSn != _apeGuiTreeSnapshotsByStateHash.end()) {
-                guitreesInRepState = itSn->second.size();
-            }
-#endif
-            if (guitreesInRepState == 0) {
-                size_t n = 0;
-                for (const auto &te : _apeTransitionLog) {
-                    if (te.valid && te.sourceStateHash == repStateHash) {
-                        ++n;
-                    }
-                }
-                if (n > 0) {
-                    guitreesInRepState = n;
-                }
-            }
-        }
+        const size_t guitreesInRepState = apeGuitreeGateCountForState(repStateHash);
         if (static_cast<int>(guitreesInRepState) > apeMaxGuitreesPerState) {
             BDLOG("naming: skip refine activity=%s reason=maxGuitreesPerState guitreesInRepState=%zu max=%d "
-                  "(state.getGUITrees().size(); NamingFactory.refine)",
+                  "(distinctXmlVariants; disk-backed gate)",
                   activity.c_str(), guitreesInRepState, apeMaxGuitreesPerState);
             if (outFailReason) {
                 *outFailReason = ApeRefineFailReason::MaxGuitreesPerState;
@@ -5835,8 +6124,8 @@ namespace {
                 }
                 // Prefer one with cached XML (replay requires XML).
                 for (uintptr_t sh : it->second) {
-                    auto itXml = _apeStateXmlByStateHash.find(sh);
-                    if (itXml != _apeStateXmlByStateHash.end() && !itXml->second.empty()) {
+                    auto itXml = _stateXmlByStateHash.find(sh);
+                    if (itXml != _stateXmlByStateHash.end() && !itXml->second.empty()) {
                         return sh;
                     }
                 }
@@ -5844,10 +6133,7 @@ namespace {
             };
             replaySrcStateHash = findRepresentativeStateHashForKey(dominantSourceKeyHash);
             if (replaySrcStateHash != 0) {
-                auto itS = _apeStateXmlByStateHash.find(replaySrcStateHash);
-                if (itS != _apeStateXmlByStateHash.end() && !itS->second.empty()) {
-                    replaySrcXml = itS->second;
-                }
+                (void)loadStateXmlSnapshot(replaySrcStateHash, &replaySrcXml);
             }
             replayTgtStateHashes.reserve(dominantTargetKeyHashes.size());
             for (uintptr_t th : dominantTargetKeyHashes) {
@@ -5855,8 +6141,8 @@ namespace {
                 if (tsh == 0) {
                     continue;
                 }
-                auto itT = _apeStateXmlByStateHash.find(tsh);
-                if (itT != _apeStateXmlByStateHash.end() && !itT->second.empty()) {
+                std::string targetXmlProbe;
+                if (loadStateXmlSnapshot(tsh, &targetXmlProbe)) {
                     replayTgtStateHashes.push_back(tsh);
                 }
             }
@@ -5883,14 +6169,14 @@ namespace {
                     return elementKeyHash;
                 }
                 for (uintptr_t sh : itBucket->second) {
-                    auto itXml = _apeStateXmlByStateHash.find(sh);
-                    if (itXml == _apeStateXmlByStateHash.end() || itXml->second.empty()) {
+                    std::string stateXml;
+                    if (!loadStateXmlSnapshot(sh, &stateXml)) {
                         continue;
                     }
                     uintptr_t xmH = 0;
                     gui_tree::GUITreePtr snapRm = this->apeLatestGuiTreeSnapshot(sh);
                     const gui_tree::GUITreePtr *snapPtr = snapRm ? &snapRm : nullptr;
-                    if (apeStateHashFromXmlWithNaming(activity, itXml->second, cur, &xmH, 0, nullptr,
+                    if (apeStateHashFromXmlWithNaming(activity, stateXml, cur, &xmH, 0, nullptr,
                                                       snapPtr) &&
                         xmH != 0) {
                         return xmH;
@@ -5947,8 +6233,8 @@ namespace {
         std::vector<CandidateEval> accepted;
         accepted.reserve(32);
         bool filledViaAcceptedCandidates = false;
-        std::string apeRefineNdBranchAXml;
-        std::string apeRefineNdBranchBXml;
+        std::string refineNdBranchAXml;
+        std::string refineNdBranchBXml;
         uintptr_t apeRefineNdSharedSrcStateHash = 0;
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML && DYNAMIC_STATE_ABSTRACTION_ENABLED
         std::vector<std::string> branchAXml;
@@ -5978,6 +6264,9 @@ namespace {
                         }
                     }
                     return false;
+                },
+                [this](const ApeTransitionEntry &entry, std::string *outXml) {
+                    return this->loadXmlSnapshot(entry.sourceXmlSnapshot, outXml);
                 },
                 nstSeq);
             BDLOG("naming refine: branch_input_stats activity=%s srcKey=%zu act=%zu logN=%zu ordered=%zu "
@@ -6011,18 +6300,6 @@ namespace {
                       static_cast<unsigned long long>(bp.firstSeenSeq), bp.branchATransitions.size(),
                       bp.branchBTransitions.size(), apeTransitionListDebugSummary(bp.branchATransitions).c_str(),
                       apeTransitionListDebugSummary(bp.branchBTransitions).c_str());
-                for (const auto &st : bp.branchATransitions) {
-                    if (st.sourceGuiSnapshot &&
-                        predicateAffectedSeen.insert(st.sourceGuiSnapshot.get()).second) {
-                        predicateAffectedSourceTrees.push_back(st.sourceGuiSnapshot);
-                    }
-                }
-                for (const auto &st : bp.branchBTransitions) {
-                    if (st.sourceGuiSnapshot &&
-                        predicateAffectedSeen.insert(st.sourceGuiSnapshot.get()).second) {
-                        predicateAffectedSourceTrees.push_back(st.sourceGuiSnapshot);
-                    }
-                }
             }
         }
         bool haveXmlBranches = false;
@@ -6042,18 +6319,6 @@ namespace {
             }
             const std::string &xmlA = branchAXml.back();
             const std::string &xmlB = branchBXml.back();
-            gui_tree::GUITreePtr snapFallbackXmlA;
-            gui_tree::GUITreePtr snapFallbackXmlB;
-            const gui_tree::GUITreePtr *snapXmlA = nullptr;
-            const gui_tree::GUITreePtr *snapXmlB = nullptr;
-            if (!branchATransitions.empty()) {
-                apePreferSnapPtrFromSourceTransition(branchATransitions.back(), _apeTreeTransitionLog,
-                                                     &snapFallbackXmlA, &snapXmlA);
-            }
-            if (!branchBTransitions.empty()) {
-                apePreferSnapPtrFromSourceTransition(branchBTransitions.back(), _apeTreeTransitionLog,
-                                                     &snapFallbackXmlB, &snapXmlB);
-            }
             ActivityStateActionPtr edgeAct;
             for (const auto &action : nondetSrcState->getActions()) {
                 auto asa = std::dynamic_pointer_cast<ActivityStateAction>(action);
@@ -6092,37 +6357,15 @@ namespace {
             const Rect selectedTeBounds = transCtx.selectedTargetBounds;
             std::string targetXPathName;
             naming::NamerPtr targetNameNamer;
-            const auto missingSnapshotA =
-                std::any_of(branchATransitions.begin(), branchATransitions.end(),
-                            [this](const NondetTreeTransitionBranchPair::SourceTransition &st) {
-                                return !st.sourceGuiSnapshot &&
-                                       !apeLookupApeSourceGuiTreeByTransitionSeq(st.transitionSeq,
-                                                                                 _apeTreeTransitionLog);
-                            });
-            const auto missingSnapshotB =
-                std::any_of(branchBTransitions.begin(), branchBTransitions.end(),
-                            [this](const NondetTreeTransitionBranchPair::SourceTransition &st) {
-                                return !st.sourceGuiSnapshot &&
-                                       !apeLookupApeSourceGuiTreeByTransitionSeq(st.transitionSeq,
-                                                                                 _apeTreeTransitionLog);
-                            });
-            if (missingSnapshotA || missingSnapshotB) {
-                BDLOG("naming: skip action refinement activity=%s reason=cannot_align_missing_snapshot "
-                      "srcKey=%lu act=%lu missingA=%d missingB=%d",
-                      activity.c_str(), (unsigned long)dominantSourceKeyHash,
-                      (unsigned long)dominantActionHash, missingSnapshotA ? 1 : 0,
-                      missingSnapshotB ? 1 : 0);
-                return;
-            }
             static const std::vector<int> kEmptyResolvedIds;
             const std::vector<int> &resolvedIdsA =
                 branchATransitions.empty() ? kEmptyResolvedIds : branchATransitions.back().resolvedNodeStableIds;
             const std::vector<int> &resolvedIdsB =
                 branchBTransitions.empty() ? kEmptyResolvedIds : branchBTransitions.back().resolvedNodeStableIds;
             if (!apeResolveTargetXPathNameLikeJava(activity, cur, xmlA, resolvedIdsA, &targetXPathName,
-                                                   &targetNameNamer, snapXmlA) &&
+                                                   &targetNameNamer, nullptr) &&
                 !apeResolveTargetXPathNameLikeJava(activity, cur, xmlB, resolvedIdsB, &targetXPathName,
-                                                   &targetNameNamer, snapXmlB)) {
+                                                   &targetNameNamer, nullptr)) {
                 BDLOG("naming: skip action refinement activity=%s reason=target_name_unresolved "
                       "srcKey=%lu act=%lu",
                       activity.c_str(), (unsigned long)dominantSourceKeyHash, (unsigned long)dominantActionHash);
@@ -6150,7 +6393,7 @@ namespace {
             size_t pIdx = 0;
             std::string wxp;
             if (!apeResolveParentNameletAndWidgetXPath(activity, cur, targetXPathName, targetNameNamer,
-                                                       xmlA, xmlB, &pIdx, &wxp, snapXmlA, snapXmlB)) {
+                                                       xmlA, xmlB, &pIdx, &wxp, nullptr, nullptr)) {
                 BDLOG("naming: skip action refinement activity=%s reason=resolve_parent_namelet_failed "
                       "srcKey=%lu act=%lu",
                       activity.c_str(), (unsigned long)dominantSourceKeyHash, (unsigned long)dominantActionHash);
@@ -6371,18 +6614,6 @@ namespace {
                       (unsigned long)dominantSourceKeyHash, (unsigned long)dominantActionHash);
                 return;
             }
-            gui_tree::GUITreePtr snapFallbackBackA;
-            gui_tree::GUITreePtr snapFallbackBackB;
-            const gui_tree::GUITreePtr *snapBackA = nullptr;
-            const gui_tree::GUITreePtr *snapBackB = nullptr;
-            if (!branchATransitions.empty()) {
-                apePreferSnapPtrFromSourceTransition(branchATransitions.back(), _apeTreeTransitionLog,
-                                                     &snapFallbackBackA, &snapBackA);
-            }
-            if (!branchBTransitions.empty()) {
-                apePreferSnapPtrFromSourceTransition(branchBTransitions.back(), _apeTreeTransitionLog,
-                                                     &snapFallbackBackB, &snapBackB);
-            }
             uintptr_t topH1 = 0;
             uintptr_t topH2 = 0;
             bool topHashReady = false;
@@ -6390,8 +6621,8 @@ namespace {
             {
                 naming::NamingPtr top = createTopNaming();
                 if (top) {
-                    topEquiv = isStateEquivalent(activity, branchAXml.back(), branchBXml.back(), top, snapBackA,
-                                               snapBackB, &topH1, &topH2, &topHashReady);
+                    topEquiv = isStateEquivalent(activity, branchAXml.back(), branchBXml.back(), top, nullptr,
+                                               nullptr, &topH1, &topH2, &topHashReady);
                 }
             }
             if (topEquiv) {
@@ -6400,7 +6631,7 @@ namespace {
                       "activity=%s srcKey=%lu act=%lu",
                       activity.c_str(), (unsigned long)dominantSourceKeyHash,
                       (unsigned long)dominantActionHash);
-                if (isIsomorphic(activity, branchAXml.back(), branchBXml.back(), snapBackA, snapBackB)) {
+                if (isIsomorphic(activity, branchAXml.back(), branchBXml.back(), nullptr, nullptr)) {
                     BDLOG("naming: two GUI trees are top naming equivalent and isomorphic "
                           "(NamingFactory.stateRefinement) activity=%s srcKey=%lu act=%lu",
                           activity.c_str(), (unsigned long)dominantSourceKeyHash,
@@ -6413,34 +6644,17 @@ namespace {
                 // Diagnostic: distinguish true top state-key equality from degenerate same-input
                 // (identical XML / same snapshot object) when logs still show topEquiv.
                 const bool xmlsIdentical = branchAXml.back() == branchBXml.back();
-                const void *snapAPtr = snapBackA ? static_cast<const void *>(snapBackA->get()) : nullptr;
-                const void *snapBPtr = snapBackB ? static_cast<const void *>(snapBackB->get()) : nullptr;
                 BDLOG("naming: top_naming_equivalent details activity=%s srcKey=%lu act=%lu "
                       "topHashReady=%d topH1=%zu topH2=%zu xmlALen=%zu xmlBLen=%zu "
-                      "xmlsIdentical=%d snapSameObj=%d snapA=%p snapB=%p",
+                      "xmlsIdentical=%d",
                       activity.c_str(), (unsigned long)dominantSourceKeyHash,
                       (unsigned long)dominantActionHash, topHashReady ? 1 : 0,
                       topH1, topH2, branchAXml.back().size(), branchBXml.back().size(),
-                      xmlsIdentical ? 1 : 0,
-                      (snapAPtr && snapAPtr == snapBPtr) ? 1 : 0, snapAPtr, snapBPtr);
+                      xmlsIdentical ? 1 : 0);
                 return;
             }
             const std::string &xmlA = branchAXml.back();
             const std::string &xmlB = branchBXml.back();
-            std::vector<gui_tree::GUITreePtr> stateRefineSnaps1;
-            std::vector<gui_tree::GUITreePtr> stateRefineSnaps2;
-            stateRefineSnaps1.reserve(branchATransitions.size());
-            for (const auto &st : branchATransitions) {
-                stateRefineSnaps1.push_back(st.sourceGuiSnapshot);
-            }
-            stateRefineSnaps2.reserve(branchBTransitions.size());
-            for (const auto &st : branchBTransitions) {
-                stateRefineSnaps2.push_back(st.sourceGuiSnapshot);
-            }
-            const std::vector<gui_tree::GUITreePtr> *stateSnaps1Ptr =
-                (stateRefineSnaps1.size() == branchAXml.size()) ? &stateRefineSnaps1 : nullptr;
-            const std::vector<gui_tree::GUITreePtr> *stateSnaps2Ptr =
-                (stateRefineSnaps2.size() == branchBXml.size()) ? &stateRefineSnaps2 : nullptr;
             const NondetActionRefineTransitionContext stateTransCtx =
                 buildNondetActionRefineTransitionContext(branchATransitions, branchBTransitions,
                                                          _apeTreeTransitionLog);
@@ -6499,8 +6713,8 @@ namespace {
                             size_t p1 = 0;
                             size_t p2 = 0;
                             if (!apeCheckStateRefinementLikeJava(activity, child, refined, branchAXml, branchBXml,
-                                                                 &upperRepl, &p1, &p2, stateSnaps1Ptr,
-                                                                 stateSnaps2Ptr)) {
+                                                                 &upperRepl, &p1, &p2, nullptr,
+                                                                 nullptr)) {
                                 ++dropReplaceByStateCheck;
                                 continue;
                             }
@@ -6569,17 +6783,17 @@ namespace {
                 const std::vector<int> candidateStableIds =
                     apeResolveStableIdsForTargetWidgetLikeJava(nondetSrcState, tw);
                 if (!apeResolveTargetXPathNameLikeJava(activity, cur, xmlA, candidateStableIds,
-                                                       &candidateTargetXPathName, &candidateTargetNamer, snapBackA) ||
+                                                       &candidateTargetXPathName, &candidateTargetNamer, nullptr) ||
                     !apeResolveTargetXPathNameLikeJava(activity, cur, xmlB, candidateStableIds,
-                                                       &candidateTargetXPathName, &candidateTargetNamer, snapBackB)) {
+                                                       &candidateTargetXPathName, &candidateTargetNamer, nullptr)) {
                     ++dropResolveParent;
                     continue;
                 }
                 size_t pIdx = 0;
                 std::string wxp;
                 if (!apeResolveParentNameletAndWidgetXPath(activity, cur, candidateTargetXPathName,
-                                                           candidateTargetNamer, xmlA, xmlB, &pIdx, &wxp, snapBackA,
-                                                           snapBackB)) {
+                                                           candidateTargetNamer, xmlA, xmlB, &pIdx, &wxp, nullptr,
+                                                           nullptr)) {
                     ++dropResolveParent;
                     continue;
                 }
@@ -6625,8 +6839,8 @@ namespace {
                     size_t p1 = 0;
                     size_t p2 = 0;
                     if (!apeCheckStateRefinementLikeJava(activity, child, refined, branchAXml, branchBXml,
-                                                         &upperBounds, &p1, &p2, stateSnaps1Ptr,
-                                                         stateSnaps2Ptr)) {
+                                                         &upperBounds, &p1, &p2, nullptr,
+                                                         nullptr)) {
                         ++dropExtendByStateCheck;
                         extendDimDroppedMask |= curRefinedDimMask;
                         continue;
@@ -6734,8 +6948,8 @@ namespace {
             }
             if (!accepted.empty()) {
                 if (!branchAXml.empty() && !branchBXml.empty()) {
-                    apeRefineNdBranchAXml = branchAXml.back();
-                    apeRefineNdBranchBXml = branchBXml.back();
+                    refineNdBranchAXml = branchAXml.back();
+                    refineNdBranchBXml = branchBXml.back();
                     apeRefineNdSharedSrcStateHash = brSharedSrcStateHash;
                 }
                 break;
@@ -7022,8 +7236,8 @@ namespace {
             }
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML
             if (picked.registerApeSourceDivergentPredicate &&
-                !apeRefineNdBranchAXml.empty() && !apeRefineNdBranchBXml.empty()) {
-                addApeSourceDivergentPredicate(activity, apeRefineNdBranchAXml, apeRefineNdBranchBXml,
+                !refineNdBranchAXml.empty() && !refineNdBranchBXml.empty()) {
+                addApeSourceDivergentPredicate(activity, refineNdBranchAXml, refineNdBranchBXml,
                                                apeRefineNdSharedSrcStateHash);
             }
 #endif
@@ -7139,11 +7353,11 @@ namespace {
         if (ctx.triggerSourceKeyHash != 0) {
             uintptr_t triggerParentKeyHash = 0;
             if (refineSiblingReplace && curPar && nondetSrcState) {
-                auto itSrcXml = _apeStateXmlByStateHash.find(nondetSrcState->hash());
-                if (itSrcXml != _apeStateXmlByStateHash.end() && !itSrcXml->second.empty()) {
+                std::string srcXml;
+                if (loadStateXmlSnapshot(nondetSrcState->hash(), &srcXml)) {
                     gui_tree::GUITreePtr trigSnap = this->apeLatestGuiTreeSnapshot(nondetSrcState->hash());
                     const gui_tree::GUITreePtr *trigSnapPtr = trigSnap ? &trigSnap : nullptr;
-                    (void)apeStateHashFromXmlWithNaming(activity, itSrcXml->second, curPar, &triggerParentKeyHash,
+                    (void)apeStateHashFromXmlWithNaming(activity, srcXml, curPar, &triggerParentKeyHash,
                                                         0, nullptr, trigSnapPtr);
                 }
             }
@@ -7159,10 +7373,10 @@ namespace {
                 }
                 return oldKeyHash == ctx.triggerSourceKeyHash;
             };
-            for (const auto &kv : _apeStateXmlByStateHash) {
+            for (const auto &kv : _stateXmlByStateHash) {
                 const uintptr_t sh = kv.first;
-                const std::string &xml = kv.second;
-                if (xml.empty()) {
+                std::string xml;
+                if (!loadXmlSnapshot(kv.second, &xml)) {
                     continue;
                 }
                 auto itBucket = _ape_state_keys_by_hash.find(sh);
@@ -7330,7 +7544,7 @@ namespace {
             if (haveApeKey) {
                 recordApeStateKey(canonical, apeKey);
             }
-            _apeStateXmlByStateHash[canonical->hash()] = xml;
+            storeStateXmlSnapshot(canonical->hash(), rawActivity, xml);
             if (elem) {
                 _apeStateElementByStateHash[canonical->hash()] = elem;
             }
@@ -7341,13 +7555,13 @@ namespace {
         std::unordered_set<uintptr_t> satisfiedKeys;
         std::vector<uintptr_t> stateHashesToRebuild;
         stateHashesToRebuild.reserve(16);
-        for (const auto &kv : _apeStateXmlByStateHash) {
+        for (const auto &kv : _stateXmlByStateHash) {
             if (satisfiedKeys.size() >= keyHashSet.size()) {
                 break;
             }
             const uintptr_t stateHash = kv.first;
-            const std::string &xml = kv.second;
-            if (xml.empty()) {
+            std::string xml;
+            if (!loadXmlSnapshot(kv.second, &xml)) {
                 continue;
             }
             naming::StateKey storedKey = naming::StateKey::fromParts("", nullptr, {});
@@ -7382,11 +7596,11 @@ namespace {
             }
         }
         for (uintptr_t sh : stateHashesToRebuild) {
-            auto it = _apeStateXmlByStateHash.find(sh);
-            if (it == _apeStateXmlByStateHash.end() || it->second.empty()) {
+            std::string xml;
+            if (!loadStateXmlSnapshot(sh, &xml)) {
                 continue;
             }
-            rebuildOneXml(it->second);
+            rebuildOneXml(xml);
         }
 #endif
     }
@@ -7612,14 +7826,15 @@ namespace {
         // XML-space hashes consistently, even when slot.sourceKeyHash is still Element-space.
         std::unordered_map<uintptr_t, uintptr_t> fromNamingKeyHashCache;
         if (hasFocus) {
-            for (const auto &kv : _apeStateXmlByStateHash) {
-                if (kv.second.empty()) {
+            for (const auto &kv : _stateXmlByStateHash) {
+                std::string stateXml;
+                if (!loadXmlSnapshot(kv.second, &stateXml)) {
                     continue;
                 }
                 uintptr_t h = 0;
                 gui_tree::GUITreePtr snap = apeLatestGuiTreeSnapshot(kv.first);
                 const gui_tree::GUITreePtr *fnSnapPtr = snap ? &snap : nullptr;
-                if (apeStateHashFromXmlWithNaming(rawActivity, kv.second, fromNaming, &h, 0, nullptr, fnSnapPtr) && h != 0) {
+                if (apeStateHashFromXmlWithNaming(rawActivity, stateXml, fromNaming, &h, 0, nullptr, fnSnapPtr) && h != 0) {
                     fromNamingKeyHashCache.emplace(kv.first, h);
                 }
             }
@@ -7639,7 +7854,7 @@ namespace {
                 const uintptr_t srcXml = xmlKeyForState(slot.sourceStateHash, slot.sourceKeyHash);
                 const bool inFocus = (focusOldKeyHashes->count(srcXml) != 0);
                 if (!inFocus) {
-                    const std::string *slotSrcXmlSnapshot = slot.sourceXmlSnapshot.empty()
+                    const XmlSnapshotRef *slotSrcXmlSnapshot = slot.sourceXmlSnapshot.empty()
                                                                 ? nullptr
                                                                 : &slot.sourceXmlSnapshot;
                     apeEvidencePoolAdd(ApePairKey{slot.sourceKeyHash, slot.actionHash}, slot,
@@ -7652,22 +7867,22 @@ namespace {
             apePairAggRemove(slot);
             const uintptr_t oldSrcStateHash = slot.sourceStateHash;
             const uintptr_t oldTgtStateHash = slot.targetStateHash;
-            auto itSx = _apeStateXmlByStateHash.find(oldSrcStateHash);
-            auto itTx = _apeStateXmlByStateHash.find(oldTgtStateHash);
-            if (itSx == _apeStateXmlByStateHash.end() || itTx == _apeStateXmlByStateHash.end() ||
-                itSx->second.empty() || itTx->second.empty()) {
+            std::string oldSrcXml;
+            std::string oldTgtXml;
+            if (!loadStateXmlSnapshot(oldSrcStateHash, &oldSrcXml) ||
+                !loadStateXmlSnapshot(oldTgtStateHash, &oldTgtXml)) {
                 slot.valid = false;
                 continue;
             }
             uintptr_t newSrcKeyHash = 0;
             uintptr_t newTgtKeyHash = 0;
-            if (!getStateKeyHashUnderToNaming(oldSrcStateHash, itSx->second, &newSrcKeyHash) ||
-                !getStateKeyHashUnderToNaming(oldTgtStateHash, itTx->second, &newTgtKeyHash)) {
+            if (!getStateKeyHashUnderToNaming(oldSrcStateHash, oldSrcXml, &newSrcKeyHash) ||
+                !getStateKeyHashUnderToNaming(oldTgtStateHash, oldTgtXml, &newTgtKeyHash)) {
                 slot.valid = false;
                 continue;
             }
             uintptr_t newActionHash = 0;
-            if (!computeActionHash(oldSrcStateHash, itSx->second, slot, &newActionHash)) {
+            if (!computeActionHash(oldSrcStateHash, oldSrcXml, slot, &newActionHash)) {
                 slot.valid = false;
                 continue;
             }
@@ -7682,7 +7897,7 @@ namespace {
             slot.targetStateKey = naming::StateKey::fromParts("", nullptr, {});
             {
                 RemapTreeCacheEntry *entry = nullptr;
-                if (getTreeEntry(oldSrcStateHash, itSx->second, &entry) && entry && entry->built.tree) {
+                if (getTreeEntry(oldSrcStateHash, oldSrcXml, &entry) && entry && entry->built.tree) {
                     if (!entry->hasStateKey) {
                         entry->stateKey = naming::StateKey::fromGUITree(*entry->built.tree);
                         entry->hasStateKey = true;
@@ -7693,7 +7908,7 @@ namespace {
             }
             {
                 RemapTreeCacheEntry *entry = nullptr;
-                if (getTreeEntry(oldTgtStateHash, itTx->second, &entry) && entry && entry->built.tree) {
+                if (getTreeEntry(oldTgtStateHash, oldTgtXml, &entry) && entry && entry->built.tree) {
                     if (!entry->hasStateKey) {
                         entry->stateKey = naming::StateKey::fromGUITree(*entry->built.tree);
                         entry->hasStateKey = true;
@@ -7713,7 +7928,7 @@ namespace {
             // Re-add into aggregation under the new key space.
             apePairAggAdd(slot);
             if (slot.valid) {
-                const std::string *slotSrcXmlSnapshot = slot.sourceXmlSnapshot.empty()
+                const XmlSnapshotRef *slotSrcXmlSnapshot = slot.sourceXmlSnapshot.empty()
                                                             ? nullptr
                                                             : &slot.sourceXmlSnapshot;
                 apeEvidencePoolAdd(ApePairKey{slot.sourceKeyHash, slot.actionHash}, slot,
@@ -7874,14 +8089,13 @@ namespace {
                     const bool haveStoredApeKey = tryGetApeStateKeyHash(ghBa, &storedKeyH, actKey);
                     const uintptr_t khBa = haveStoredApeKey ? storedKeyH : ghBa;
 
-                    auto itXml = _apeStateXmlByStateHash.find(ghBa);
-                    const bool haveXml = (itXml != _apeStateXmlByStateHash.end() && !itXml->second.empty());
-                    if (!haveXml) {
+                    std::string stateXml;
+                    if (!loadStateXmlSnapshot(ghBa, &stateXml)) {
                         return;
                     }
                     uintptr_t tgtKeyHash = 0;
                     uintptr_t oldH = 0;
-                    apeStateKeyPairFromXmlCoarsenPath(activity, itXml->second, tn,
+                    apeStateKeyPairFromXmlCoarsenPath(activity, stateXml, tn,
                                                       &tgtKeyHash, targetParentNaming, &oldH);
 
                     const bool affectedBa = (oldH == triggerSource);
@@ -8000,17 +8214,17 @@ namespace {
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML && DYNAMIC_STATE_ABSTRACTION_ENABLED
             if (!rebuiltViaHistory && !filteredAffectedStateHashes.empty()) {
                 for (uintptr_t sh : affectedStateHashsForPrune) {
-                    auto itXml = _apeStateXmlByStateHash.find(sh);
-                    if (itXml == _apeStateXmlByStateHash.end() || itXml->second.empty()) {
+                    std::string stateXml;
+                    if (!loadStateXmlSnapshot(sh, &stateXml)) {
                         continue;
                     }
                     uintptr_t oldH = 0;
                     uintptr_t newH = 0;
                     gui_tree::GUITreePtr rbSnap = this->apeLatestGuiTreeSnapshot(sh);
                     const gui_tree::GUITreePtr *rbSnapPtr = rbSnap ? &rbSnap : nullptr;
-                    if (!apeStateHashFromXmlWithNaming(activity, itXml->second, rollbackFrom, &oldH, 0, nullptr,
+                    if (!apeStateHashFromXmlWithNaming(activity, stateXml, rollbackFrom, &oldH, 0, nullptr,
                                                        rbSnapPtr) ||
-                        !apeStateHashFromXmlWithNaming(activity, itXml->second, rollbackTo, &newH, 0, nullptr,
+                        !apeStateHashFromXmlWithNaming(activity, stateXml, rollbackTo, &newH, 0, nullptr,
                                                        rbSnapPtr)) {
                         continue;
                     }
@@ -8452,10 +8666,10 @@ namespace {
                     focusOldKeyHashes.empty() ? nullptr : &focusOldKeyHashes);
                 std::unordered_set<uintptr_t> affectedTrees;
                 if (focusOldKeyHashXml != 0 && beforeNaming) {
-                    for (const auto &kv : _apeStateXmlByStateHash) {
+                    for (const auto &kv : _stateXmlByStateHash) {
                         const uintptr_t sh = kv.first;
-                        const std::string &xml = kv.second;
-                        if (xml.empty()) {
+                        std::string xml;
+                        if (!loadXmlSnapshot(kv.second, &xml)) {
                             continue;
                         }
                         naming::StateKey storedKey = naming::StateKey::fromParts("", nullptr, {});

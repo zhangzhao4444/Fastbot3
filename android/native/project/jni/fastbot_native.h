@@ -20,6 +20,10 @@ Java_com_bytedance_fastbot_AiClient_getOperateJsonNative(JNIEnv *env, jobject, j
 JNIEXPORT void JNICALL
 Java_com_bytedance_fastbot_AiClient_initAgentNative(JNIEnv *env, jobject, jint, jstring, jint);
 
+/** Root for state XML snapshots: `{outputDirectory}/{package}/` (see Model::apeXmlSnapshotRootDir). */
+JNIEXPORT void JNICALL
+Java_com_bytedance_fastbot_AiClient_setXmlSnapshotOutputDirectoryNative(JNIEnv *env, jobject, jstring outputDirectory);
+
 // loadResMapping
 JNIEXPORT void JNICALL
 Java_com_bytedance_fastbot_AiClient_loadResMappingNative(JNIEnv *env, jobject, jstring);

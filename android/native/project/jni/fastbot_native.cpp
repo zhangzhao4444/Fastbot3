@@ -291,6 +291,23 @@ void JNICALL Java_com_bytedance_fastbot_AiClient_initAgentNative(JNIEnv *env, jo
         env->ReleaseStringUTFChars(packageName, packageNameCString);
 }
 
+void JNICALL Java_com_bytedance_fastbot_AiClient_setXmlSnapshotOutputDirectoryNative(JNIEnv *env, jobject,
+                                                                                     jstring outputDirectory) {
+    if (nullptr == _fastbot_model) {
+        _fastbot_model = fastbotx::Model::create();
+    }
+    std::string dir;
+    if (env && outputDirectory) {
+        const char *dirCString = env->GetStringUTFChars(outputDirectory, nullptr);
+        if (dirCString) {
+            dir = std::string(dirCString);
+            env->ReleaseStringUTFChars(outputDirectory, dirCString);
+        }
+    }
+    _fastbot_model->setXmlSnapshotOutputDirectory(dir);
+    BLOG("xml snapshot output directory: %s", dir.empty() ? "/sdcard/my-fastbot-logs (default)" : dir.c_str());
+}
+
 // loadResMapping
 void JNICALL
 Java_com_bytedance_fastbot_AiClient_loadResMappingNative(JNIEnv *env, jobject, jstring resMappingFilepath) {

@@ -42,6 +42,21 @@ namespace gui_tree {
 }
 
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
+    /// Disk-backed XML snapshot reference. Normally `path` points under
+    /// `{--output-directory}/{target package}/` or `/sdcard/my-fastbot-logs/<target package>/`.
+    /// `inlineXml` is only used as a correctness fallback when external storage cannot be written.
+    struct XmlSnapshotRef {
+        std::string path;
+        std::string inlineXml;
+        uint64_t contentHash{0};
+        size_t byteSize{0};
+        uint64_t snapshotSeq{0};
+
+        bool empty() const {
+            return path.empty() && inlineXml.empty();
+        }
+    };
+
     /// Naming transition log keyed by StateKey::hash().
     struct ApeTransitionEntry {
         uint64_t transitionSeq{0};
@@ -56,7 +71,7 @@ namespace gui_tree {
         /// State hashes (Graph/RL identity) for transition replay/remap when Naming changes.
         uintptr_t sourceStateHash{0};
         uintptr_t targetStateHash{0};
-        std::string sourceXmlSnapshot;
+        XmlSnapshotRef sourceXmlSnapshot;
         /// Action signature for replay/remap. actionHash itself may change after Naming updates.
         ActionType actionType{ActionType::NOP};
         bool hasTargetBounds{false};
@@ -95,7 +110,7 @@ namespace gui_tree {
 
     struct ApeActionDivergentPredicate {
         uintptr_t sourceStateHash{0};
-        std::string sourceXml;
+        XmlSnapshotRef sourceXml;
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML
         gui_tree::GUITreePtr sourceTree{};
 #endif
@@ -115,8 +130,8 @@ namespace gui_tree {
     /// (st1.getSource() == st2.getSource()); used for predicate affected-scoping like
     /// AssertActionDivergent.
     struct ApeSourceDivergentPredicate {
-        std::string xmlA;
-        std::string xmlB;
+        XmlSnapshotRef xmlA;
+        XmlSnapshotRef xmlB;
         uintptr_t sharedSourceStateHash{0};
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML
         gui_tree::GUITreePtr sourceTreeA{};
@@ -236,7 +251,7 @@ namespace gui_tree {
         uintptr_t sourceStateHash{0};
         uintptr_t sourceTreeHash{0};
         uint64_t sourceTransitionSeq{0};
-        std::string sourceXml;
+        XmlSnapshotRef sourceXml;
         uintptr_t targetStateHash{0};
         uintptr_t targetKeyHash{0};
         ActionType actionType{ActionType::NOP};
@@ -434,6 +449,14 @@ namespace gui_tree {
          * @return Const reference to the package name string
          */
         const std::string &getPackageName() const { return this->_netActionParam.packageName; }
+
+#if DYNAMIC_STATE_ABSTRACTION_ENABLED
+        /** Root from `--output-directory` (default `/sdcard/my-fastbot-logs`); XML under `{dir}/{package}/`. */
+        void setXmlSnapshotOutputDirectory(const std::string &outputDirectory) {
+            _xmlSnapshotOutputDirectory = outputDirectory;
+        }
+        const std::string &getXmlSnapshotOutputDirectory() const { return _xmlSnapshotOutputDirectory; }
+#endif
 
         /**
          * @brief Get the network action task ID
@@ -849,7 +872,7 @@ namespace gui_tree {
         void apePairAggAdd(const ApeTransitionEntry &e);
 
         void apeEvidencePoolAdd(const ApePairKey &pairKey, const ApeTransitionEntry &e,
-                                const std::string *sourceXmlSnapshot = nullptr);
+                                const XmlSnapshotRef *sourceXmlSnapshot = nullptr);
         void apeEvidencePoolClockEvict();
 
         std::unordered_map<ApePairKey, ApeEvidencePool, ApePairKeyHash> _apeEvidencePools;
@@ -888,7 +911,11 @@ namespace gui_tree {
         void apeRememberGuiTreeSnapshot(uintptr_t stateHash, const gui_tree::GUITree &tree);
         gui_tree::GUITreePtr apeLatestGuiTreeSnapshot(uintptr_t stateHash) const;
         /** Prefer snapshot whose cached XML equals `xml` (transition-tree consistency). */
-        gui_tree::GUITreePtr apeGuiTreeSnapshotForExactCachedXml(const std::string &xml) const;
+        gui_tree::GUITreePtr guiTreeSnapshotForExactCachedXml(const std::string &xml) const;
+        /** Drop in-memory GUITree clones once XML is disk-backed. */
+        void apeEvictGuiTreeSnapshotsForState(uintptr_t stateHash);
+        /** Refine gate: distinct XML content hashes seen for `stateHash`, else in-memory snapshot count. */
+        size_t apeGuitreeGateCountForState(uintptr_t stateHash) const;
 #endif
 
         struct ApeMiniHistoryTransition {
@@ -956,10 +983,33 @@ namespace gui_tree {
         void assertApeSingleThreaded() const;
 #endif
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML
-        /// Recent page XML per state hash for transition-level refine candidate replay (checkActionRefinement-style).
-        std::unordered_map<uintptr_t, std::string> _apeStateXmlByStateHash;
+        struct XmlHotCacheEntry {
+            std::string xml;
+            size_t byteSize{0};
+            uint64_t lastTouch{0};
+        };
+
+        /// Disk-backed page XML per state hash for transition-level refine candidate replay.
+        std::unordered_map<uintptr_t, XmlSnapshotRef> _stateXmlByStateHash;
+        /// Distinct GUI page bodies (contentHash) observed per concrete state hash.
+        std::unordered_map<uintptr_t, std::unordered_set<uint64_t>> _distinctXmlVariantsByStateHash;
+        void apeNoteDistinctXmlVariant(uintptr_t stateHash, uint64_t contentHash);
+        bool storeStateXmlSnapshot(uintptr_t stateHash, const std::string &activity,
+                                      const std::string &xml, XmlSnapshotRef *outRef = nullptr);
+        bool storeStandaloneXmlSnapshot(const std::string &activity, const std::string &tag,
+                                           const std::string &xml, XmlSnapshotRef *outRef);
+        bool loadStateXmlSnapshot(uintptr_t stateHash, std::string *outXml) const;
+        bool loadXmlSnapshot(const XmlSnapshotRef &ref, std::string *outXml) const;
+        void eraseStateXmlSnapshot(uintptr_t stateHash);
+        XmlSnapshotRef inlineXmlSnapshotForFallback(const std::string &xml) const;
+        std::string apeXmlSnapshotRootDir(const std::string &activity) const;
+        /// Small process-local hot cache; cold XML lives on disk under apeXmlSnapshotRootDir.
+        mutable std::unordered_map<std::string, XmlHotCacheEntry> _xmlHotCache;
+        mutable size_t _xmlHotCacheBytes{0};
+        mutable uint64_t _xmlHotCacheClock{0};
         /// Same keys when the live Element snapshot exists - avoids tinyxml re-parse; matches buildFromElement semantics.
         std::unordered_map<uintptr_t, ElementPtr> _apeStateElementByStateHash;
+        std::string _xmlSnapshotOutputDirectory;
         /** Resolve widget XPath + parent Namelet under @p cur for cached XML of @p stateHash (Java resolveCurrentNamelet). */
         bool resolveApeWidgetExprAndParentNamelet(uintptr_t stateHash, const std::string &activityForSplit,
                                                   const naming::NamingPtr &cur, const WidgetPtr &targetWidget,

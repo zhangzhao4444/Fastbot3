@@ -59,6 +59,7 @@ void collectOrderedNondetBranchSourceSamples(
     const std::unordered_set<uintptr_t> &targetKeyHashes,
     const TreeTransitionIndex &treeBySeq,
     const std::function<bool(uintptr_t)> &acceptSourceStateHash,
+    const TransitionXmlLoader &sourceXmlLoader,
     std::vector<NondetBranchSourceSample> *outOrdered,
     NondetBranchInputStats *outStats) {
     if (!outOrdered) {
@@ -91,7 +92,8 @@ void collectOrderedNondetBranchSourceSamples(
             }
             continue;
         }
-        if (te.sourceXmlSnapshot.empty()) {
+        std::string sourceXml;
+        if (!sourceXmlLoader || !sourceXmlLoader(te, &sourceXml) || sourceXml.empty()) {
             if (outStats) {
                 ++outStats->filteredBySnapshot;
             }
@@ -111,20 +113,9 @@ void collectOrderedNondetBranchSourceSamples(
             continue;
         }
         ++seq;
-#if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML
-        gui_tree::GUITreePtr guiSnap;
-        if (itTree->second) {
-            // Optional clone carried on the matching `TreeTransitionEntry` row for this sequence.
-            guiSnap = itTree->second->apeSourceGuiTree;
-        }
         outOrdered->push_back(NondetBranchSourceSample{
-            seq, te.transitionSeq, te.sourceXmlSnapshot, te.sourceStateHash, te.targetKeyHash,
-            te.targetStateHash, itTree->second->resolvedNodeStableIds, std::move(guiSnap)});
-#else
-        outOrdered->push_back(NondetBranchSourceSample{
-            seq, te.transitionSeq, te.sourceXmlSnapshot, te.sourceStateHash, te.targetKeyHash,
+            seq, te.transitionSeq, std::move(sourceXml), te.sourceStateHash, te.targetKeyHash,
             te.targetStateHash, itTree->second->resolvedNodeStableIds});
-#endif
     }
     if (outStats) {
         outStats->orderedCount = outOrdered->size();
@@ -198,8 +189,7 @@ void buildNondetTreeTransitionBranchPairsFromOrderedSamples(
             bp.branchA.push_back(sx.xml);
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML
             bp.branchATransitions.push_back(NondetTreeTransitionBranchPair::SourceTransition{
-                sx.transitionSeq, sx.sourceStateHash, sx.targetStateHash, sx.xml, sx.resolvedNodeStableIds,
-                sx.sourceGuiSnapshot});
+                sx.transitionSeq, sx.sourceStateHash, sx.targetStateHash, sx.xml, sx.resolvedNodeStableIds});
 #else
             bp.branchATransitions.push_back(NondetTreeTransitionBranchPair::SourceTransition{
                 sx.transitionSeq, sx.sourceStateHash, sx.targetStateHash, sx.xml, sx.resolvedNodeStableIds});
@@ -215,8 +205,7 @@ void buildNondetTreeTransitionBranchPairsFromOrderedSamples(
             bp.branchB.push_back(sx.xml);
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML
             bp.branchBTransitions.push_back(NondetTreeTransitionBranchPair::SourceTransition{
-                sx.transitionSeq, sx.sourceStateHash, sx.targetStateHash, sx.xml, sx.resolvedNodeStableIds,
-                sx.sourceGuiSnapshot});
+                sx.transitionSeq, sx.sourceStateHash, sx.targetStateHash, sx.xml, sx.resolvedNodeStableIds});
 #else
             bp.branchBTransitions.push_back(NondetTreeTransitionBranchPair::SourceTransition{
                 sx.transitionSeq, sx.sourceStateHash, sx.targetStateHash, sx.xml, sx.resolvedNodeStableIds});
@@ -264,6 +253,7 @@ NondetBranchCollectionResult collectNondetBranchPairsForRefine(
     uintptr_t actionHash,
     const std::unordered_set<uintptr_t> &targetKeyHashes,
     const std::function<bool(uintptr_t)> &acceptSourceStateHash,
+    const TransitionXmlLoader &sourceXmlLoader,
     uint64_t nstTransitionSeq) {
     NondetBranchCollectionResult result;
     TreeTransitionIndex treeBySeq;
@@ -272,7 +262,7 @@ NondetBranchCollectionResult collectNondetBranchPairsForRefine(
     std::vector<NondetBranchSourceSample> ordered;
     collectOrderedNondetBranchSourceSamples(
         transitionLog, transitionLogWriteIndex, sourceActivity, sourceKeyHash, actionHash,
-        targetKeyHashes, treeBySeq, acceptSourceStateHash, &ordered, &result.inputStats);
+        targetKeyHashes, treeBySeq, acceptSourceStateHash, sourceXmlLoader, &ordered, &result.inputStats);
     result.orderedCount = ordered.size();
 
     NondetBranchBuildResult build = buildNondetBranchPairs(ordered, nstTransitionSeq);

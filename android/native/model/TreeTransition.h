@@ -42,10 +42,6 @@ struct TreeTransitionEntry {
     uintptr_t targetFullPathHash{0};
     std::string sourceActivity;
     bool valid{false};
-#if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML
-    gui_tree::GUITreePtr apeSourceGuiTree{}; ///< Deep-cloned source page tree when logging (historical field name).
-    gui_tree::GUITreePtr apeTargetGuiTree{}; ///< Deep-cloned target page tree when logging (historical field name).
-#endif
 };
 
 /** Two-way comparison material for nondeterministic refinement: XML strings and optional GUI snapshots per branch. */
@@ -56,9 +52,6 @@ struct NondetTreeTransitionBranchPair {
         uintptr_t targetStateHash{0};
         std::string sourceXml;
         std::vector<int> resolvedNodeStableIds;
-#if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML
-        gui_tree::GUITreePtr sourceGuiSnapshot{};
-#endif
     };
 
     uintptr_t sourceStateHash{0};
@@ -84,9 +77,6 @@ struct NondetBranchSourceSample {
     uintptr_t targetKeyHash{0};
     uintptr_t targetStateHash{0};
     std::vector<int> resolvedNodeStableIds;
-#if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML
-    gui_tree::GUITreePtr sourceGuiSnapshot{};
-#endif
 };
 
 /** Counters explaining how many ring-buffer entries were skipped while collecting branch samples. */
@@ -110,6 +100,8 @@ struct NondetBranchCollectionResult {
     bool nstSeqFound{false};
     std::vector<NondetTreeTransitionBranchPair> branchPairs;
 };
+
+using TransitionXmlLoader = std::function<bool(const ApeTransitionEntry &, std::string *)>;
 
 /** Bounds picked from `TreeTransitionEntry` rows when refining an action predicate. */
 struct NondetActionRefineTransitionContext {
@@ -142,6 +134,7 @@ void collectOrderedNondetBranchSourceSamples(
     const std::unordered_set<uintptr_t> &targetKeyHashes,
     const TreeTransitionIndex &treeBySeq,
     const std::function<bool(uintptr_t)> &acceptSourceStateHash,
+    const TransitionXmlLoader &sourceXmlLoader,
     std::vector<NondetBranchSourceSample> *outOrdered,
     NondetBranchInputStats *outStats);
 
@@ -165,6 +158,7 @@ NondetBranchCollectionResult collectNondetBranchPairsForRefine(
     uintptr_t actionHash,
     const std::unordered_set<uintptr_t> &targetKeyHashes,
     const std::function<bool(uintptr_t)> &acceptSourceStateHash,
+    const TransitionXmlLoader &sourceXmlLoader,
     uint64_t nstTransitionSeq);
 
 /** Derives source state hash and first available target bounds from branch transition lists. */

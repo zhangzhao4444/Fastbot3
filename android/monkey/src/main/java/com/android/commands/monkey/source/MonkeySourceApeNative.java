@@ -154,6 +154,7 @@ public class MonkeySourceApeNative extends MonkeySourceApeBase implements Monkey
                                  File outputDirectory) {
         super(random, MainApps, throttle, randomizeThrottle, outputDirectory);
         AiClient.setLlmDumpDirectory(getOutputDir());
+        AiClient.setXmlSnapshotOutputDirectory(getOutputDir());
         mImageWriters = new ImageWriterQueue[imageWriterCount];
         for (int i = 0; i < imageWriterCount; i++) {
             mImageWriters[i] = new ImageWriterQueue();
