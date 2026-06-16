@@ -833,6 +833,24 @@ namespace {
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML && DYNAMIC_STATE_ABSTRACTION_ENABLED
 namespace {
 using ApeHashCache = std::unordered_map<uintptr_t, uintptr_t>;
+
+fastbotx::naming::StateNamingManager *s_apeNamingCacheReleaseMgr = nullptr;
+
+void setApeNamingCacheReleaseMgr(fastbotx::naming::StateNamingManager *mgr) {
+    s_apeNamingCacheReleaseMgr = mgr;
+}
+
+void armGuitreeNamingCacheReleaseOnLastRef(fastbotx::gui_tree::GUITreePtr &holder,
+                                           fastbotx::naming::StateNamingManager *mgr) {
+    if (!mgr || !holder) {
+        return;
+    }
+    const fastbotx::gui_tree::GUITreePtr owner = holder;
+    holder = fastbotx::gui_tree::GUITreePtr(owner.get(), [mgr, owner](fastbotx::gui_tree::GUITree *) {
+        mgr->releaseTreeCache(*owner);
+    });
+}
+
 /** @brief Wraps NamingFactory::rebuildTree with optional stage-tagged logging for diagnostics. */
 bool safeRebuildTree(const fastbotx::naming::NamingPtr &nm, fastbotx::gui_tree::GUITree &tree,
                      const std::shared_ptr<fastbotx::gui_tree::XPathNodeMapper> &dom,
@@ -858,6 +876,22 @@ bool safeRebuildTree(const fastbotx::naming::NamingPtr &nm, fastbotx::gui_tree::
     return ok;
 }
 
+/** Rebuilds under `nm` and arms Naming cache release when the built tree's last ref is dropped. */
+bool safeRebuildTempTree(const fastbotx::naming::NamingPtr &nm,
+                         fastbotx::gui_tree::GUITreeBuildResult &built,
+                         const char *stage = nullptr) {
+    if (!built.tree || !built.dom) {
+        return false;
+    }
+    if (!safeRebuildTree(nm, *built.tree, built.dom, stage)) {
+        return false;
+    }
+    if (s_apeNamingCacheReleaseMgr) {
+        armGuitreeNamingCacheReleaseOnLastRef(built.tree, s_apeNamingCacheReleaseMgr);
+    }
+    return true;
+}
+
 /**
  * Build GUITree from XML (or prefer a transition snapshot), then NamingFactory::rebuildTree for `naming`.
  * Shared by hash paths, isStateEquivalent / isTopNamingEquivalent (full StateKey equality, reference parity).
@@ -880,7 +914,7 @@ bool apeGuitreeFromXmlWithNamingRebuilt(const std::string &activity, const std::
     if (!built.tree || !built.dom) {
         return false;
     }
-    if (!safeRebuildTree(naming, *built.tree, built.dom, "state_check")) {
+    if (!safeRebuildTempTree(naming, built, "state_check")) {
         return false;
     }
     *outBuilt = std::move(built);
@@ -1366,7 +1400,7 @@ bool apeResolveParentNameletAndWidgetXPath(const std::string &activity, const na
         if (!built.tree || !built.dom) {
             return false;
         }
-        if (!safeRebuildTree(cur, *built.tree, built.dom, "target_resolve")) {
+        if (!safeRebuildTempTree(cur, built, "target_resolve")) {
             return false;
         }
         std::vector<gui_tree::GUITreeNode *> po;
@@ -1444,7 +1478,7 @@ bool apeResolveTargetXPathNameLikeJava(const std::string &activity, const naming
         BDLOG("naming refine: target-name resolve build_failed activity=%s", activity.c_str());
         return false;
     }
-    if (!safeRebuildTree(cur, *built.tree, built.dom, "target_resolve")) {
+    if (!safeRebuildTempTree(cur, built, "target_resolve")) {
         BDLOG("naming refine: target-name resolve rebuild_failed activity=%s", activity.c_str());
         return false;
     }
@@ -1546,7 +1580,7 @@ bool isSharedAction(
                   activity.c_str(), i, static_cast<unsigned long long>(tt.transitionSeq));
             continue;
         }
-        if (!safeRebuildTree(cur, *built.tree, built.dom, "shared_check")) {
+        if (!safeRebuildTempTree(cur, built, "shared_check")) {
             BDLOG("naming refine: shared-check fail reason=rebuild_failed activity=%s branchIdx=%zu seq=%llu",
                   activity.c_str(), i, static_cast<unsigned long long>(tt.transitionSeq));
             continue;
@@ -1641,7 +1675,7 @@ bool apeCheckActionRefinementLikeJava(const std::string &activity, const naming:
                       apeJoinStableIds(tt.resolvedNodeStableIds).c_str());
                 return false;
             }
-            if (!safeRebuildTree(newNaming, *built.tree, built.dom, "action_check")) {
+            if (!safeRebuildTempTree(newNaming, built, "action_check")) {
                 BDLOG("naming refine: action-check fail reason=source_tree_rebuild_failed activity=%s branch=%s idx=%zu seq=%llu "
                       "srcStateHash=%zu targetStateHash=%zu stableIds=%s",
                       activity.c_str(), branchTag, branchIndex,
@@ -1941,7 +1975,7 @@ bool apeCheckOverAbstractedActionRefinementLikeJava(const std::string &activity,
     if (!built.tree || !built.dom) {
         return false;
     }
-    if (!safeRebuildTree(newNaming, *built.tree, built.dom, "action_check")) {
+    if (!safeRebuildTempTree(newNaming, built, "action_check")) {
         return false;
     }
     const naming::StateKey sk = naming::StateKey::fromGUITree(*built.tree);
@@ -2103,7 +2137,7 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
         #define FASTBOT_VERSION __DATE__ " " __TIME__
     #endif
 #endif
-        BLOG("----Fastbot native code verison: 06151612, build version: " FASTBOT_VERSION "----\n");
+        BLOG("----Fastbot native code verison: 06160744, build version: " FASTBOT_VERSION "----\n");
         this->_graph = std::make_shared<Graph>();
         this->_preference = Preference::inst();
         this->_netActionParam.netActionTaskid = 0;
@@ -2122,6 +2156,7 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
         }
         this->_llmTaskAgent = std::make_shared<LLMTaskAgent>(this->_preference, client);
         this->_apeStateNamingManager = std::make_shared<naming::StateNamingManager>(nullptr);
+        setApeNamingCacheReleaseMgr(this->_apeStateNamingManager.get());
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
         this->_apeTransitionLog.resize(MaxTransitionLogSize);
         this->_apeTreeTransitionLog.resize(MaxTransitionLogSize);
@@ -2670,9 +2705,6 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
                 const uintptr_t sh = state->hash();
                 const std::string actKeyCanonical = naming::StateKey::canonicalActivityString(activity);
                 storeStateXmlSnapshot(sh, activity, getXml());
-                if (element) {
-                    _apeStateElementByStateHash[sh] = element;
-                }
                 apeMiniHistoryTouchState(actKeyCanonical, sh);
                 constexpr size_t kMaxXmlSnapshotCache = 2048;
                 if (_stateXmlByStateHash.size() > kMaxXmlSnapshotCache) {
@@ -2711,7 +2743,6 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
                         if (itEvict == _stateXmlByStateHash.end()) {
                             itEvict = _stateXmlByStateHash.begin();
                         }
-                        _apeStateElementByStateHash.erase(itEvict->first);
                         eraseStateXmlSnapshot(itEvict->first);
                     }
                 }
@@ -3158,7 +3189,7 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
                 if (!builtProbe.tree || !builtProbe.dom) {
                     return false;
                 }
-                if (!safeRebuildTree(cur, *builtProbe.tree, builtProbe.dom, "action_check")) {
+                if (!safeRebuildTempTree(cur, builtProbe, "action_check")) {
                     return false;
                 }
 
@@ -3232,7 +3263,7 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
                                 ? buildGuitreePreferApeSnapshotAndDomXml(screenXml, pkg, cls, *apeVisitSnapPtr)
                                 : buildGuitreeFromCachedXmlPreferElement(screenXml, pkg, cls);
                         if (bPred.tree && bPred.dom &&
-                            safeRebuildTree(child, *bPred.tree, bPred.dom)) {
+                            safeRebuildTempTree(child, bPred)) {
                             std::vector<gui_tree::GUITreeNode *> poPred;
                             collectGUITreeNodesPreOrder(bPred.tree->getRootNode(), &poPred);
                             overAbsStableIds.reserve(mergedConcretes.size());
@@ -4253,7 +4284,6 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
         struct PreparedRebuildState {
             uintptr_t oldStateHash{0};
             std::string xml;
-            ElementPtr elemSnapshot;
             StatePtr built;
             bool haveApeKey{false};
             naming::StateKey apeKey = naming::StateKey::fromParts("", nullptr, {});
@@ -4277,7 +4307,6 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
             PreparedRebuildState ps;
             ps.oldStateHash = oldStateHash;
             ps.xml = xml;
-            ps.elemSnapshot = elem;
             ps.built = built;
             ps.apeKey = naming::StateKey::fromParts(activityKeyCanonical, nullptr, {});
             ps.haveApeKey = buildApeStateKeyFromElementTree(
@@ -4312,11 +4341,11 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
             }
         }
         _graph->removeStatesByHash(toRemove);
+        pruneApeGraphStateKeyDedupForStateHashes(toRemove);
         // Graph apeNaming index: already cleared in Graph::removeStatesByHash per removed StatePtr.
         for (uintptr_t sh : toRemove) {
             _ape_state_keys_by_hash.erase(sh);
             _apeGuiTreeNamingBlacklist.erase(sh);
-            _apeStateElementByStateHash.erase(sh);
             eraseStateXmlSnapshot(sh);
         }
         for (auto &slot : _apeTransitionLog) {
@@ -4355,9 +4384,6 @@ void fireGraphVisitStateTransitionIfModelAction(const GraphPtr &graph,
                 recordApeStateKey(canonical, ps.apeKey);
             }
             storeStateXmlSnapshot(canonical->hash(), activityKeyCanonical, ps.xml);
-            if (ps.elemSnapshot) {
-                _apeStateElementByStateHash[canonical->hash()] = ps.elemSnapshot;
-            }
             newHist.touchState(canonical->hash());
             rebuiltStateByOldHash[ps.oldStateHash] = canonical;
         }
@@ -4938,6 +4964,27 @@ namespace {
 }
 
     /** @brief Prunes abstract states in a set of hashes using the shared pruning policy. */
+    void Model::pruneApeGraphStateKeyDedupForStateHashes(
+        const std::unordered_set<uintptr_t> &staleStateHashes) {
+        if (staleStateHashes.empty()) {
+            return;
+        }
+        for (auto it = _ape_graph_state_by_key.begin(); it != _ape_graph_state_by_key.end();) {
+            auto &bucket = it->second;
+            bucket.erase(std::remove_if(bucket.begin(), bucket.end(),
+                                        [&](const ApeGraphStateKeyDedupEntry &entry) {
+                                            return entry.state &&
+                                                   staleStateHashes.count(entry.state->hash()) != 0;
+                                        }),
+                           bucket.end());
+            if (bucket.empty()) {
+                it = _ape_graph_state_by_key.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     void Model::pruneApeStatesByStateHashesCommon(const std::string &activityKeyCanonical,
                                                   std::unordered_set<uintptr_t> &staleStateHashes,
                                                   const char *reasonTag) {
@@ -4960,6 +5007,7 @@ namespace {
 
         const size_t removedFromGraph = _graph->removeStatesByHash(staleStateHashes);
         (void)removedFromGraph;
+        pruneApeGraphStateKeyDedupForStateHashes(staleStateHashes);
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML
         // Q8 (local rebuild): keep cached XML for states referenced by the per-activity mini-history,
         // even if the corresponding Graph states are pruned, so that later local rebuild can
@@ -4994,7 +5042,6 @@ namespace {
             _ape_state_keys_by_hash.erase(sh);
 #if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML
             if (!shouldKeepXml(sh)) {
-                _apeStateElementByStateHash.erase(sh);
                 eraseStateXmlSnapshot(sh);
             }
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
@@ -5220,7 +5267,7 @@ namespace {
                             continue;
                         }
                         const naming::NamingPtr nEval = namingForApePredicateEval(built.tree);
-                        if (!safeRebuildTree(nEval, *built.tree, built.dom)) {
+                        if (!safeRebuildTempTree(nEval, built)) {
                             continue;
                         }
                         const uintptr_t h = naming::StateKey::hashFromGUITree(*built.tree);
@@ -5251,7 +5298,7 @@ namespace {
                         continue;
                     }
                     const naming::NamingPtr nEval = namingForApePredicateEval(built.tree);
-                    if (!safeRebuildTree(nEval, *built.tree, built.dom)) {
+                    if (!safeRebuildTempTree(nEval, built)) {
                         continue;
                     }
                     const uintptr_t h = naming::StateKey::hashFromGUITree(*built.tree);
@@ -5295,8 +5342,8 @@ namespace {
                 }
                 const naming::NamingPtr nA = namingForApePredicateEval(builtA.tree);
                 const naming::NamingPtr nB = namingForApePredicateEval(builtB.tree);
-                if (!safeRebuildTree(nA, *builtA.tree, builtA.dom) ||
-                    !safeRebuildTree(nB, *builtB.tree, builtB.dom)) {
+                if (!safeRebuildTempTree(nA, builtA) ||
+                    !safeRebuildTempTree(nB, builtB)) {
                     return false;
                 }
                 const uintptr_t hA = naming::StateKey::hashFromGUITree(*builtA.tree);
@@ -5329,7 +5376,7 @@ namespace {
                     continue;
                 }
                 const naming::NamingPtr nEval = namingForApePredicateEval(built.tree);
-                if (!safeRebuildTree(nEval, *built.tree, built.dom)) {
+                if (!safeRebuildTempTree(nEval, built)) {
                     return false;
                 }
                 std::vector<gui_tree::GUITreeNode *> po;
@@ -5424,7 +5471,7 @@ namespace {
         if (!built.tree || !built.dom) {
             return;
         }
-        if (!safeRebuildTree(updatedNaming, *built.tree, built.dom)) {
+        if (!safeRebuildTempTree(updatedNaming, built)) {
             return;
         }
         std::vector<gui_tree::GUITreeNode *> po;
@@ -5542,7 +5589,7 @@ namespace {
                 continue;
             }
             const naming::NamingPtr nPred = namingForRollbackPredicateEval(built.tree);
-            if (!nPred || !safeRebuildTree(nPred, *built.tree, built.dom)) {
+            if (!nPred || !safeRebuildTempTree(nPred, built)) {
                 continue;
             }
             std::vector<gui_tree::GUITreeNode *> po;
@@ -5765,89 +5812,6 @@ namespace {
         }
         return std::vector<std::string>(activitiesSet.begin(), activitiesSet.end());
     }
-
-#if defined(FASTBOT_HAS_PUGIXML) && FASTBOT_HAS_PUGIXML && DYNAMIC_STATE_ABSTRACTION_ENABLED
-    /** @brief Resolves widget XPath-side expressions and parent namelets for split/refinement. */
-    bool Model::resolveApeWidgetExprAndParentNamelet(uintptr_t stateHash, const std::string &activityForSplit,
-                                                     const naming::NamingPtr &cur, const WidgetPtr &targetWidget,
-                                                     std::string *outExpr, naming::NameletPtr *outParent) const {
-        if (!outExpr || !outParent) {
-            return false;
-        }
-        outExpr->clear();
-        *outParent = nullptr;
-        if (!targetWidget || !targetWidget->getBounds() || !cur) {
-            return false;
-        }
-
-        std::string pkg;
-        std::string cls;
-        naming::StateKey::splitActivityPackageClass(activityForSplit, &pkg, &cls);
-        gui_tree::GUITreeBuildResult built;
-        auto itEl = _apeStateElementByStateHash.find(stateHash);
-        if (itEl != _apeStateElementByStateHash.end() && itEl->second) {
-            built = gui_tree::GUITreeFactory::buildFromElement(itEl->second, pkg, cls);
-        }
-        if (!built.tree || !built.dom) {
-            std::string stateXml;
-            if (!loadStateXmlSnapshot(stateHash, &stateXml)) {
-                return false;
-            }
-            built = buildGuitreePreferApeSnapshotAndDomXml(stateXml, pkg, cls,
-                apeLatestGuiTreeSnapshot(stateHash));
-        }
-        if (!built.tree || !built.dom) {
-            return false;
-        }
-        if (!safeRebuildTree(cur, *built.tree, built.dom, "target_resolve")) {
-            return false;
-        }
-        std::vector<gui_tree::GUITreeNode *> po;
-        collectGUITreeNodesPreOrder(built.tree->getRootNode(), &po);
-        if (po.empty()) {
-            return false;
-        }
-        const Rect targetRect = *targetWidget->getBounds();
-        for (gui_tree::GUITreeNode *node : po) {
-            if (!node) {
-                continue;
-            }
-            if (!(node->getBounds() == targetRect)) {
-                continue;
-            }
-            const naming::NamePtr nm = node->getXPathName();
-            if (nm) {
-                *outExpr = nm->toXPath();
-                if (!outExpr->empty()) {
-                    break;
-                }
-            }
-        }
-        if (outExpr->empty()) {
-            return false;
-        }
-        for (gui_tree::GUITreeNode *node : po) {
-            if (!node) {
-                continue;
-            }
-            const naming::NamePtr nm = node->getXPathName();
-            if (!nm || nm->toXPath() != *outExpr) {
-                continue;
-            }
-            naming::NameletPtr nl = node->getCurrentNamelet();
-            if (!nl) {
-                continue;
-            }
-            if (!*outParent) {
-                *outParent = nl;
-            } else if ((*outParent).get() != nl.get()) {
-                outParent->reset();
-                return false;
-            }
-        }
-        return static_cast<bool>(*outParent);
-    }
-#endif
 
     /** @brief Overload that forwards to the full refine implementation (no failure-reason output). */
     bool Model::refineActivityApeNaming(const std::string &activity, const ApeRefinePair *pair,
@@ -7286,7 +7250,7 @@ namespace {
             gui_tree::GUITreeBuildResult noopBuilt =
                 buildGuitreePreferApeSnapshotAndDomXml(branchAXml.back(), pkgDom, clsDom, noopSnap);
             if (noopBuilt.tree && noopBuilt.dom &&
-                safeRebuildTree(cur, *noopBuilt.tree, noopBuilt.dom, "ape_noop_gate")) {
+                safeRebuildTempTree(cur, noopBuilt, "ape_noop_gate")) {
                 naming::NamingPtr noopResolved =
                     _apeStateNamingManager->treeToNaming(*noopBuilt.tree, noopBuilt.dom);
                 if (noopResolved && next &&
@@ -7545,9 +7509,6 @@ namespace {
                 recordApeStateKey(canonical, apeKey);
             }
             storeStateXmlSnapshot(canonical->hash(), rawActivity, xml);
-            if (elem) {
-                _apeStateElementByStateHash[canonical->hash()] = elem;
-            }
         };
 
         auto keyHashSet = std::unordered_set<uintptr_t>(oldKeyHashes.begin(), oldKeyHashes.end());
@@ -7698,7 +7659,7 @@ namespace {
                 *out = &treeCache.find(stateHash)->second;
                 return false;
             }
-            if (!safeRebuildTree(toNaming, *entry.built.tree, entry.built.dom)) {
+            if (!safeRebuildTempTree(toNaming, entry.built)) {
                 treeCache.emplace(stateHash, std::move(entry));
                 *out = &treeCache.find(stateHash)->second;
                 return false;
@@ -8607,10 +8568,10 @@ namespace {
                 uintptr_t focusOldKeyHash = 0;
                 uintptr_t focusOldKeyHashXml = 0;
                 if (beforeNaming && built.tree && built.dom) {
-                    if (safeRebuildTree(beforeNaming, *built.tree, built.dom)) {
+                    if (safeRebuildTempTree(beforeNaming, built)) {
                         focusOldKeyHash = naming::StateKey::hashFromGUITree(*built.tree);
                     }
-                    if (!safeRebuildTree(naming, *built.tree, built.dom)) {
+                    if (!safeRebuildTempTree(naming, built)) {
                         // Rebuild under current naming failed; tree may be stuck in beforeNaming state.
                         // Re-run getNamingFixedPoint to restore the tree to a consistent state.
                         naming = _apeStateNamingManager->getNamingFixedPoint(
@@ -8708,7 +8669,7 @@ namespace {
             if (!naming) {
                 return fail(ApeStateKeyBuildFailReason::NoNaming);
             }
-            if (!safeRebuildTree(naming, *built.tree, built.dom)) {
+            if (!safeRebuildTempTree(naming, built)) {
                 return fail(ApeStateKeyBuildFailReason::RebuildTreeFailed);
             }
             if (seq <= 20 || (seq % 400) == 0) {
@@ -8751,10 +8712,10 @@ namespace {
 #endif
                 // Fallback to Element-space if XML remap unavailable.
                 if (oldH == 0 && newH == 0) {
-                    if (safeRebuildTree(prevN, *built.tree, built.dom)) {
+                    if (safeRebuildTempTree(prevN, built)) {
                         oldH = naming::StateKey::hashFromGUITree(*built.tree);
                     }
-                    if (!safeRebuildTree(naming, *built.tree, built.dom)) {
+                    if (!safeRebuildTempTree(naming, built)) {
                         oldH = 0;
                         newH = 0;
                     } else {
@@ -8819,7 +8780,7 @@ namespace {
                     xmlBuilt = buildGuitreeFromCachedXmlPreferElement(xmlForCompare, pkg, cls);
 #endif
                     bool haveXmlTreeForDiff =
-                        xmlBuilt.tree && xmlBuilt.dom && safeRebuildTree(naming, *xmlBuilt.tree, xmlBuilt.dom);
+                        xmlBuilt.tree && xmlBuilt.dom && safeRebuildTempTree(naming, xmlBuilt);
                     const auto &elementXPaths = built.tree->getCurrentXPaths();
                     const std::vector<std::string> *xmlXPaths =
                         haveXmlTreeForDiff ? &xmlBuilt.tree->getCurrentXPaths() : nullptr;

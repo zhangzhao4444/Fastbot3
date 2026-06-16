@@ -172,10 +172,10 @@ inline void logLongStringInfo(const std::string& longStr) {
 #define FASTBOT_VERSION __DATE__ " " __TIME__
 
 // Performance optimization: Control raw guitree XML logging
-// Set to 1 to enable detailed line-by-line XML logging (for debugging)
+// Set to 1 to enable detailed line-by-line [domtree] XML logging (for debugging)
 // Set to 0 to disable (default) for better performance on large dumps
 #ifndef FASTBOT_LOG_RAW_GUITREE
-#define FASTBOT_LOG_RAW_GUITREE 1
+#define FASTBOT_LOG_RAW_GUITREE 0
 #endif
 
 // Performance optimization: Control xpath matching detailed logging

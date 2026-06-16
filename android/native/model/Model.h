@@ -773,6 +773,10 @@ namespace gui_tree {
                                                std::unordered_set<uintptr_t> &staleStateHashes,
                                                const char *reasonTag);
 
+        /// Drop dedup-map entries whose StatePtr was pruned from the graph (prevents ReuseState leaks).
+        void pruneApeGraphStateKeyDedupForStateHashes(
+            const std::unordered_set<uintptr_t> &staleStateHashes);
+
         /// graph state from refine source-side GUITrees.
         bool evalApeGuiTreeNamingBlacklist(const std::vector<uintptr_t> &stateHashes,
                                            const naming::NamingPtr &naming) const;
@@ -1007,13 +1011,7 @@ namespace gui_tree {
         mutable std::unordered_map<std::string, XmlHotCacheEntry> _xmlHotCache;
         mutable size_t _xmlHotCacheBytes{0};
         mutable uint64_t _xmlHotCacheClock{0};
-        /// Same keys when the live Element snapshot exists - avoids tinyxml re-parse; matches buildFromElement semantics.
-        std::unordered_map<uintptr_t, ElementPtr> _apeStateElementByStateHash;
         std::string _xmlSnapshotOutputDirectory;
-        /** Resolve widget XPath + parent Namelet under @p cur for cached XML of @p stateHash (Java resolveCurrentNamelet). */
-        bool resolveApeWidgetExprAndParentNamelet(uintptr_t stateHash, const std::string &activityForSplit,
-                                                  const naming::NamingPtr &cur, const WidgetPtr &targetWidget,
-                                                  std::string *outExpr, naming::NameletPtr *outParent) const;
 #endif
         /// Graph state hash -> Naming fingerprints forbidden after batchAbstract-style rollback.
         std::unordered_map<uintptr_t, std::unordered_set<std::string>> _apeGuiTreeNamingBlacklist;

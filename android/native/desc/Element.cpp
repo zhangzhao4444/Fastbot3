@@ -362,7 +362,7 @@ namespace {
         }
 #endif
         if (!FASTBOT_LOG_RAW_GUITREE) {
-            BLOG("guitree size=%zu", xmlContent.size());
+            BDLOG("guitree size=%zu", xmlContent.size());
         }
         
         // Parse XML content
