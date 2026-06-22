@@ -227,6 +227,26 @@ namespace fastbotx {
         return total;
     }
 
+    size_t State::getWidgetInstanceCount(const WidgetPtr &widget) const {
+        if (!widget) {
+            return 0;
+        }
+        auto mergedIt = this->_mergedWidgets.find(widget->hash());
+        if (mergedIt == this->_mergedWidgets.end()) {
+            return 1;
+        }
+        const WidgetPtrVec &merged = mergedIt->second;
+        if (merged.empty()) {
+            return 1;
+        }
+        // Dynamic merge (ReuseState): vector includes the representative at [0].
+        // Static merge: vector stores only duplicate widgets.
+        if (merged[0].get() == widget.get()) {
+            return merged.size();
+        }
+        return 1 + merged.size();
+    }
+
     size_t State::getMaxWidgetsPerModelAction() const {
         size_t maxCount = 1;
         for (const auto &w : this->_widgets) {

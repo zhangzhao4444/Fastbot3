@@ -18,9 +18,8 @@
 #include <iostream>
 #include <map>
 #include <fstream>
-#if DYNAMIC_STATE_ABSTRACTION_ENABLED
-#include <utility>
 #include <sstream>
+#include <set>
 
 namespace {
     /// Convert WidgetKeyMask to human-readable dimension list for logging (e.g. "Clazz|ResourceID|ContentDesc").
@@ -37,6 +36,8 @@ namespace {
         return os.str().empty() ? "(none)" : os.str();
     }
 }
+#if DYNAMIC_STATE_ABSTRACTION_ENABLED
+#include <utility>
 #endif
 
 namespace fastbotx {
@@ -80,14 +81,25 @@ namespace fastbotx {
         
         // Print state header with hash code
         BDLOG("{state: %lu", static_cast<unsigned long>(state->hash()));
-        
-        // Print each widget on a separate line for better readability; skip empty (e.g. toXPath returns "" when details cleared)
-        BDLOG("widgets:");
+
+        const WidgetKeyMask widgetKeyMask = state->getWidgetKeyMask();
         const auto &widgets = state->getWidgets();
-        for (const auto &widget : widgets) {
+        BDLOG("widgets: count=%zu keyMask=%u (%s)",
+              widgets.size(),
+              static_cast<unsigned>(widgetKeyMask),
+              maskToDimensionString(widgetKeyMask).c_str());
+
+        for (size_t i = 0; i < widgets.size(); ++i) {
+            const auto &widget = widgets[i];
+            if (!widget) {
+                continue;
+            }
             std::string widgetStr = widget->toString();
-            if (widgetStr.empty()) continue;
-            // If widget string is too long, split it across multiple log lines
+            if (widgetStr.empty()) {
+                continue;
+            }
+            widgetStr += " instances:";
+            widgetStr += std::to_string(state->getWidgetInstanceCount(widget));
             if (widgetStr.length() > 3000) {
                 logLongStringInfo("   " + widgetStr);
             } else {
@@ -412,8 +424,14 @@ namespace fastbotx {
         actionCost = 0.0;
         ActionPtr action = customAction; // Use custom action if provided
 
+        // Log the freshly observed state on the agent (may differ from graph-canonical state after addState).
+        StatePtr stateForLog = (agent && agent->getNewState()) ? agent->getNewState() : state;
+        if (agent && stateForLog) {
+            agent->refreshActionPriorities();
+        }
+
         // Log state information for debugging
-        logStatePerLine(state);
+        logStatePerLine(stateForLog);
 
         // Check if preference indicates we should skip model actions (listen mode)
         bool shouldSkipActionsFromModel = this->_preference ? this->_preference->skipAllActionsFromModel() : false;

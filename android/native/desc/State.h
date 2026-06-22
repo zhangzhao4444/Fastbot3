@@ -192,6 +192,11 @@ namespace fastbotx {
         size_t getConcreteTargetCount(const WidgetPtr &target) const;
 
         /**
+         * @brief Number of concrete widgets merged into this abstract representative (for logging).
+         */
+        size_t getWidgetInstanceCount(const WidgetPtr &widget) const;
+
+        /**
          * @brief Get the maximum number of widgets that map to the same model action in this state.
          * Used for Action Refinement (α): if > α, the activity should be refined (APE paper).
          * @return Max count of widgets per distinct model action (by current mask / hash).
@@ -256,6 +261,9 @@ namespace fastbotx {
          * @return true if details have been cleared
          */
         bool hasNoDetail() const { return this->_hasNoDetail; }
+
+        /// Widget key mask used when this state was built (merge / state hash dimensions).
+        virtual WidgetKeyMask getWidgetKeyMask() const { return DefaultWidgetKeyMask; }
 
         FuncGetID(State);
 
