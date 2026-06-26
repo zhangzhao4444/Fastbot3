@@ -29,7 +29,7 @@ public class U2Client extends ScriptDriverClient {
 
         JsonRPCRequest requestObj = new JsonRPCRequest(
                 "dumpWindowHierarchy",
-                Arrays.asList(false, 50)
+                Arrays.asList(false, 50, true)
         );
 
         int maxRetries = 1;
