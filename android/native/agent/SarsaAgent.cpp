@@ -346,9 +346,8 @@ namespace fastbotx {
     }
 
     namespace {
+        // Standard Gumbel(0,1): G = -log(-log(u)). Gumbel-max uses argmax(q + G).
         inline double sampleGumbelNoise() {
-            // Sample a value in (0,1) and transform to standard Gumbel(0,1).
-            // Avoid exact 0/1 to keep log well-defined.
             const int r = randomInt(1, 10000);
             const double u = static_cast<double>(r) / 10001.0;
             return -std::log(-std::log(u));
@@ -370,7 +369,7 @@ namespace fastbotx {
                 float qv = static_cast<float>(this->getReuseActionValue(actPtr, visitedActivities));
                 if (qv > 1e-4f) {
                     qv = 10.0f * qv;
-                    qv -= static_cast<float>(sampleGumbelNoise());
+                    qv += static_cast<float>(sampleGumbelNoise());
                     if (qv > maxValue) {
                         maxValue = qv;
                         retAct = action;
@@ -401,7 +400,7 @@ namespace fastbotx {
             }
             qv += action->getQValue();
             qv /= kEntropyAlpha;
-            qv -= sampleGumbelNoise();
+            qv += sampleGumbelNoise();
             if (qv > maxQ) {
                 maxQ = static_cast<float>(qv);
                 retAct = action;

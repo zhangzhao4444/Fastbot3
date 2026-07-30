@@ -32,6 +32,8 @@ namespace fastbotx {
         uintptr_t actionHash{0};
         uintptr_t targetStateHash{0};
         std::string sourceActivity;
+        WidgetKeyMask sourceMask{DefaultWidgetKeyMask};
+        uint64_t abstractionEpoch{0};
         bool valid{false};
     };
 
@@ -329,6 +331,10 @@ namespace fastbotx {
         /// selection for predefined tasks (e.g. login flows).
         std::shared_ptr<LLMTaskAgent> _llmTaskAgent;
 
+        /// Last model action returned per device; visit() on the next getOperateOpt after moveForward
+        /// (counts only after a new observation, and keeps visitedCount aligned with resolveAt).
+        std::unordered_map<std::string, ActionPtr> _pendingModelActionVisitByDevice;
+
         /// Coverage tracking: visited activities and step count (performance optimization)
         std::unordered_set<std::string> _visitedActivities;
         int _coverageStepCount{0};
@@ -338,6 +344,8 @@ namespace fastbotx {
         mutable std::unordered_map<std::string, WidgetKeyMask> _activityKeyMask;
 
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
+        /// Per-activity abstraction epoch. Incremented whenever that activity's mask changes.
+        std::unordered_map<std::string, uint64_t> _activityAbstractionEpoch;
         std::vector<TransitionEntry> _transitionLog;
         size_t _transitionLogWriteIndex{0};
         size_t _stepCountSinceLastCheck{0};

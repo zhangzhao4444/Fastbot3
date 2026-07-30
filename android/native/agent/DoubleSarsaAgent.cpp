@@ -753,7 +753,7 @@ namespace fastbotx {
     }
 
     /**
-     * @brief Select unexecuted action not in reuse model
+     * @brief Select unsaturated action not in reuse model
      */
     ActionPtr DoubleSarsaAgent::selectUnperformedActionNotInReuseModel() const {
         std::vector<ActionPtr> actionsNotInModel;
@@ -761,6 +761,7 @@ namespace fastbotx {
         int modelActions = 0;
         int inReuseModel = 0;
         int visitedActions = 0;
+        int saturatedActions = 0;
         
         for (const auto &action: this->_newState->getActions()) {
             totalActions++;
@@ -773,6 +774,7 @@ namespace fastbotx {
             uintptr_t actionHash = action->hash();
             bool inModel = this->isActionInReuseModel(actionHash);
             bool visited = action->getVisitedCount() > 0;
+            bool saturated = this->_newState->isSaturated(action);
             
             if (inModel) {
                 inReuseModel++;
@@ -780,9 +782,12 @@ namespace fastbotx {
             if (visited) {
                 visitedActions++;
             }
+            if (saturated) {
+                saturatedActions++;
+            }
             
-            // Match condition: model action, not in reuse model, and not visited
-            bool matched = !inModel && !visited;
+            // Match condition: model action, not in reuse model, and still has concrete targets left.
+            bool matched = !inModel && !saturated;
             
             if (matched) {
                 actionsNotInModel.emplace_back(action);
@@ -790,8 +795,8 @@ namespace fastbotx {
         }
         
         if (actionsNotInModel.empty()) {
-            BDLOG("Double SARSA: Cannot find unexecuted action not in reuse model - total actions=%d, model actions=%d, in reuse model=%d, visited=%d (this is normal, will try next strategy)", 
-                   totalActions, modelActions, inReuseModel, visitedActions);
+            BDLOG("Double SARSA: Cannot find unsaturated action not in reuse model - total actions=%d, model actions=%d, in reuse model=%d, visited=%d, saturated=%d (this is normal, will try next strategy)",
+                   totalActions, modelActions, inReuseModel, visitedActions, saturatedActions);
             return nullptr;
         }
         
@@ -808,10 +813,11 @@ namespace fastbotx {
             return nullptr;
         }
         
-        // Use binary search to select action
+        // randomInt(0, totalWeight) -> [0, totalWeight - 1]; upper_bound picks the
+        // first cumulative weight strictly greater than randI (one slot per unit).
         int randI = randomInt(0, totalWeight);
-        auto it = std::lower_bound(cumulativeWeights.begin(), 
-                                  cumulativeWeights.end(), randI);
+        auto it = std::upper_bound(cumulativeWeights.begin(),
+                                   cumulativeWeights.end(), randI);
         size_t index = std::distance(cumulativeWeights.begin(), it);
         
         if (index < actionsNotInModel.size()) {
@@ -823,7 +829,7 @@ namespace fastbotx {
     }
 
     /**
-     * @brief Select unvisited unexecuted action in reuse model
+     * @brief Select unsaturated action in reuse model
      */
     ActionPtr DoubleSarsaAgent::selectUnperformedActionInReuseModel() const {
         float maxValue = -MAXFLOAT;
@@ -842,33 +848,40 @@ namespace fastbotx {
         // Use humble-gumbel distribution to influence sampling
         for (const auto &action: this->_newState->targetActions()) {
             uintptr_t actionHash = action->hash();
-            
-            if (this->isActionInReuseModel(actionHash)) {
-                if (action->getVisitedCount() > 0) {
-                    BDLOG("Double SARSA: action has been visited - %s, visitedCount=%d", 
-                          action->toString().c_str(), action->getVisitedCount());
-                    continue;
-                }
-                
-                auto qualityValue = static_cast<float>(this->probabilityOfVisitingNewActivities(
-                        action,
-                        visitedActivities));
-                
-                if (qualityValue > DoubleSarsaRLConstants::QualityValueThreshold) {
-                    qualityValue = DoubleSarsaRLConstants::QualityValueMultiplier * qualityValue;
-                    
-                    auto uniform = _uniformFloatDist(_rng);
-                    
-                    if (uniform < std::numeric_limits<float>::min()) {
-                        uniform = std::numeric_limits<float>::min();
-                    }
-                    
-                    qualityValue -= log(-log(uniform));
+            if (!this->isActionInReuseModel(actionHash)) {
+                continue;
+            }
+            const size_t concreteCount = this->_newState->getConcreteTargetCount(action->getTarget());
+            if (this->_newState->isSaturated(action)) {
+                BDLOG("Double SARSA: action is saturated - %s, visitedCount=%d concrete=%zu",
+                      action->toString().c_str(), action->getVisitedCount(), concreteCount);
+                continue;
+            }
 
-                    if (qualityValue > maxValue) {
-                        maxValue = qualityValue;
-                        nextAction = action;
-                    }
+            auto qualityValue = static_cast<float>(this->probabilityOfVisitingNewActivities(
+                    action,
+                    visitedActivities));
+
+            BDLOG("Double SARSA: strategy2 candidate act=%s hash=%" PRIu64 " visited=%d concrete=%zu quality=%.4f",
+                  action->toString().c_str(),
+                  static_cast<uint64_t>(actionHash),
+                  action->getVisitedCount(),
+                  concreteCount,
+                  static_cast<double>(qualityValue));
+            if (qualityValue > DoubleSarsaRLConstants::QualityValueThreshold) {
+                qualityValue = DoubleSarsaRLConstants::QualityValueMultiplier * qualityValue;
+
+                auto uniform = _uniformFloatDist(_rng);
+
+                if (uniform < std::numeric_limits<float>::min()) {
+                    uniform = std::numeric_limits<float>::min();
+                }
+
+                qualityValue -= log(-log(uniform));
+
+                if (qualityValue > maxValue) {
+                    maxValue = qualityValue;
+                    nextAction = action;
                 }
             }
         }
@@ -975,24 +988,30 @@ namespace fastbotx {
     ActionPtr DoubleSarsaAgent::selectNewAction() {
         ActionPtr action = nullptr;
         
-        // Strategy 1: Select unexecuted actions not in reuse model
+        // Strategy 1: Select unsaturated actions not in reuse model
         action = this->selectUnperformedActionNotInReuseModel();
         if (nullptr != action) {
             BLOG("Double SARSA: select action not in reuse model - %s", action->toString().c_str());
             return action;
         }
 
-        // Strategy 2: Select unvisited unexecuted actions in reuse model
+        // Strategy 2: Select unsaturated actions in reuse model
         action = this->selectUnperformedActionInReuseModel();
         if (nullptr != action) {
             BLOG("Double SARSA: select action in reuse model - %s", action->toString().c_str());
             return action;
         }
 
-        // Strategy 3: Select unvisited actions
-        action = this->_newState->randomPickUnvisitedAction();
+        // Strategy 3: Select any unsaturated action that still has concrete targets left
+        action = this->_newState->randomPickUnsaturatedAction();
         if (nullptr != action) {
-            BLOG("Double SARSA: select action in unvisited action - %s", action->toString().c_str());
+            auto stateAction = std::dynamic_pointer_cast<ActivityStateAction>(action);
+            const size_t concreteCount =
+                (stateAction && stateAction->requireTarget())
+                ? this->_newState->getConcreteTargetCount(stateAction->getTarget())
+                : 0;
+            BLOG("Double SARSA: select action in unsaturated action - %s (visited=%d concrete=%zu)",
+                 action->toString().c_str(), action->getVisitedCount(), concreteCount);
             return action;
         }
 
@@ -1046,6 +1065,12 @@ namespace fastbotx {
                                           : (basePath + ModelStorageConstants::TempModelFileExtension);
         }
         
+        // Temporarily disable loading historical FBM data; keep save paths unchanged so
+        // current run can still build and persist a fresh model snapshot.
+        BLOG("Double SARSA: skip loading historical fbm model temporarily: %s", this->_modelSavePath.c_str());
+        clearReuseModelOnLoadFailure();
+        return;
+
         BLOG("Double SARSA: begin load model: %s", this->_modelSavePath.c_str());
 
         // Open model file

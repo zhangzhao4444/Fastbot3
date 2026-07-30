@@ -18,13 +18,13 @@ package com.android.commands.monkey.events.base;
 
 import android.app.IActivityManager;
 import android.graphics.Rect;
-import android.hardware.input.InputManager;
 import android.os.SystemClock;
 import android.view.IWindowManager;
 import android.view.InputDevice;
 import android.view.MotionEvent;
 
 import com.android.commands.monkey.events.MonkeyEvent;
+import com.android.commands.monkey.framework.APIAdapter;
 import com.android.commands.monkey.framework.AndroidDevice;
 import com.android.commands.monkey.utils.Logger;
 
@@ -281,8 +281,8 @@ public abstract class MonkeyMotionEvent extends MonkeyEvent {
             if (!AndroidDevice.setInputEventDisplayId(me, displayId)) {
                 return MonkeyEvent.INJECT_FAIL;
             }
-            if (!InputManager.getInstance().injectInputEvent(me,
-                    InputManager.INJECT_INPUT_EVENT_MODE_WAIT_FOR_RESULT)) {
+            if (!APIAdapter.injectInputEvent(me,
+                    APIAdapter.INJECT_INPUT_EVENT_MODE_WAIT_FOR_RESULT)) {
                 return MonkeyEvent.INJECT_FAIL;
             }
         } catch (SecurityException e) {

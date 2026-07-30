@@ -13,10 +13,6 @@
 #include "Model.h"
 #include "DoubleSarsaAgent.h"
 #include "SarsaAgent.h"
-#include "DFSAgent.h"
-#include "BFSAgent.h"
-#include "FrontierAgent.h"
-#include "GOExploreAgent.h"
 #include "CuriosityAgent.h"
 #include "../desc/StateEncoder.h"
 #include "json.hpp"
@@ -30,7 +26,9 @@ namespace fastbotx {
      * Creates corresponding Agent instance based on algorithm type (agentT).
      * 
      * Supported algorithm types:
-     * - All types: Creates DoubleSarsaAgent (Double SARSA)
+     * - Curiosity: CuriosityAgent
+     * - Sarsa: SarsaAgent
+     * - Default: DoubleSarsaAgent
      * 
      * Creation flow:
      * 1. Create Agent instance based on algorithm type
@@ -51,30 +49,6 @@ namespace fastbotx {
     AgentFactory::create(AlgorithmType agentT, const ModelPtr &model, DeviceType /*deviceType*/) {
         AbstractAgentPtr agent = nullptr;
 
-        // For AlgorithmType::DFS, use a simple DFS-based exploration agent.
-        if (agentT == AlgorithmType::DFS) {
-            DFSAgentPtr dfsAgent = std::make_shared<DFSAgent>(model);
-            agent = dfsAgent;
-            BLOG("Created DFSAgent (depth-first exploration)");
-            return agent;
-        }
-
-        // For AlgorithmType::BFS, use BFS-based exploration agent (layer-by-layer).
-        if (agentT == AlgorithmType::BFS) {
-            BFSAgentPtr bfsAgent = std::make_shared<BFSAgent>(model);
-            agent = bfsAgent;
-            BLOG("Created BFSAgent (breadth-first exploration)");
-            return agent;
-        }
-
-        // For AlgorithmType::Frontier, use frontier-based exploration agent.
-        if (agentT == AlgorithmType::Frontier) {
-            FrontierAgentPtr frontierAgent = std::make_shared<FrontierAgent>(model);
-            agent = frontierAgent;
-            BLOG("Created FrontierAgent (frontier-based exploration)");
-            return agent;
-        }
-
         // For AlgorithmType::Curiosity, use curiosity-driven agent (WebRLED-style dual novelty).
         if (agentT == AlgorithmType::Curiosity) {
             CuriosityAgentPtr curiosityAgent = std::make_shared<CuriosityAgent>(model);
@@ -92,16 +66,6 @@ namespace fastbotx {
 #endif
             return agent;
         }
-
-        // For AlgorithmType::GoExplore, use standalone Go-Explore style agent (archive + return + explore).
-        if (agentT == AlgorithmType::GoExplore) {
-            GOExploreAgentPtr goExploreAgent = std::make_shared<GOExploreAgent>(model);
-            agent = goExploreAgent;
-            BLOG("Created GOExploreAgent (standalone Go-Explore style)");
-            return agent;
-        }
-
-        // LLMExplorer removed (effect not ideal); AlgorithmType::LLMExplorer falls through to DoubleSarsa.
 
         // For AlgorithmType::Sarsa, use legacy-compatible SarsaAgent (single-Q SARSA + reuse model).
         if (agentT == AlgorithmType::Sarsa) {

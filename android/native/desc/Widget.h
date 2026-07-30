@@ -59,6 +59,8 @@ namespace fastbotx {
 
         bool hasOperate(OperateType opt) const { return this->_operateMask & opt; }
 
+        int getOperateMask() const { return this->_operateMask; }
+
         bool hasAction() const { return !this->_actions.empty(); }
 
         bool isEditable() const;

@@ -6,7 +6,7 @@
 
 ## 执行摘要
 
-本文档详细解释 **CuriosityAgent** 在 Android UI 测试中采用的**好奇心驱动探索（Curiosity-driven Exploration）**算法的原理与实现。CuriosityAgent 与 BFSAgent、DFSAgent、FrontierAgent 一样不依赖 Q 值或强化学习模型，完全基于**访问计数**与 **episode/全局双重新颖性**；通过 **「episode 内少重复 + 全局少访问 + 后继状态新颖性 + 乘性得分」** 的 WebRLED/NGU 风格框架，将 curiosity 得分定义为 **globalNovelty × episodeMod × stateFactor × successorFactor**（整体 cap 到 L=5），用 **ε-greedy**（ε 从 0.4 线性衰减到 0.05）在合法动作上选动作，在保持无模型、可解释的前提下，实现「少重复状态、少重复动作、优先能带来新状态的动作、鼓励离开过访状态」的探索语义。
+本文档详细解释 **CuriosityAgent** 在 Android UI 测试中采用的**好奇心驱动探索（Curiosity-driven Exploration）**算法的原理与实现。CuriosityAgent 不依赖 Q 值或强化学习模型，完全基于**访问计数**与 **episode/全局双重新颖性**；通过 **「episode 内少重复 + 全局少访问 + 后继状态新颖性 + 乘性得分」** 的 WebRLED/NGU 风格框架，将 curiosity 得分定义为 **globalNovelty × episodeMod × stateFactor × successorFactor**（整体 cap 到 L=5），用 **ε-greedy**（ε 从 0.4 线性衰减到 0.05）在合法动作上选动作，在保持无模型、可解释的前提下，实现「少重复状态、少重复动作、优先能带来新状态的动作、鼓励离开过访状态」的探索语义。
 
 **当前实现**：CuriosityAgent 在共享状态图与自维护的 `_episodeStateCount`、`_globalStateCount`、`_succStats`（后继状态统计）、`_selfLoopCount` 之上，实现 **episode 新颖性 1/√(1+n)**、**动作全局新颖性 1/(1+visitCount)**、**状态级全局因子 stateFactor**、**后继状态新颖性因子 successorFactor（偏好通向全局访问少的后继状态的动作）**、**加权随机的 ε-greedy 选动作**，并与防卡死（block → BACK / DEEP_LINK / CLEAN_RESTART）、有限长 episode（步数/状态数截断）、自环惩罚（多次自环的动作被降权）、状态抽象变更下的计数清空等结合，形成一套完整的无模型、好奇心驱动探索算法。使用方式：**`--agent icm`** 或 **`--agent curiosity`**。
 
@@ -103,7 +103,7 @@ score = **globalNovelty(a)** × **episodeMod** × **stateFactor**，再整体 ca
 
 ### 2.4.3 可选：长程新颖性（Long-horizon / 图结构 frontier，编译开关默认关闭）
 
-- **动机**：结合图结构做轻量「长程新颖性」——偏好能带到**仍有未访问动作的状态（frontier）**的动作，从而更易走向未探索区域（与 FrontierAgent 的 frontier 概念一致，但不做 BFS 路径规划）。
+- **动机**：结合图结构做轻量「长程新颖性」——偏好能带到**仍有未访问动作的状态（frontier）**的动作，从而更易走向未探索区域（经典 frontier 语义，但不做 BFS 路径规划）。
 - **实现**：每次 selectNewAction 时若开启，则从 Model 的 Graph 扫一遍所有状态，得到 **frontier 集合**：stateHash 的集合，满足该状态上至少有一个 action 的 getVisitedCount()==0。对每个候选动作，若存在后继统计 \_succStats，则统计其 topNext 中有多少后继 stateHash 落在 frontier 集合中，记为 frontierCount；**longHorizonFactor** = 1 + kLongHorizonFrontierBonus × min(frontierCount, kLongHorizonFrontierCap)，乘到该动作得分上。即：倾向于「历史上常进入仍有未访问动作的状态」的动作得分更高。
 - **轻量化**：不做 BFS、不维护边表；仅用 Graph::getStates() 一次遍历建 frontier 集合，再对每个动作做 O(K) 的集合查询。
 - **开关**：`kEnableLongHorizonNovelty` 默认为 **false**；设为 true 可开启。常数：`kLongHorizonFrontierBonus`（默认 0.2）、`kLongHorizonFrontierCap`（默认 3）。

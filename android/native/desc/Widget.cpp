@@ -94,10 +94,10 @@ namespace fastbotx {
             this->_text = finalText;
         }
 
-        // Performance optimization: Compute text hash only once and reuse
-        // Component hash for Text (for dynamic abstraction hashWithMask)
-        // Use fast string hash for better performance
-        uintptr_t textHash = finalText.empty() ? 0 : (0x79b9U + (fastbotx::fastStringHash(finalText) << 5));
+        // Component hash for Text (for dynamic abstraction hashWithMask).
+        // Prefer APK-valid text when available; fall back to the normalized raw text.
+        const std::string &textForHash = (!element->validText.empty()) ? element->validText : finalText;
+        uintptr_t textHash = textForHash.empty() ? 0 : (0x79b9U + (fastbotx::fastStringHash(textForHash) << 5));
         this->_hashText = textHash;
         
         // Only include text in hash if it wasn't truncated
@@ -113,18 +113,19 @@ namespace fastbotx {
     }
 
     void Widget::initFormElement(const ElementPtr &element) {
-        if (element->getCheckable())
-            enableOperate(OperateType::Checkable);
-        if (element->getEnable())
-            enableOperate(OperateType::Enable);
-        if (element->getClickable())
-            enableOperate(OperateType::Clickable);
-        if (element->getScrollable())
-            enableOperate(OperateType::Scrollable);
-        if (element->getLongClickable()) {
-            enableOperate(OperateType::LongClickable);
-            this->_actions.insert(ActionType::LONG_CLICK);
-        }
+      bool validActionBounds = !FASTBOT_FILTER_INVALID_ACTION_BOUNDS || element->hasValidActionBounds();
+      if (validActionBounds && element->getCheckable())
+        enableOperate(OperateType::Checkable);
+      if (element->getEnable())
+        enableOperate(OperateType::Enable);
+      if (validActionBounds && element->getClickable())
+        enableOperate(OperateType::Clickable);
+      if (validActionBounds && element->getScrollable())
+        enableOperate(OperateType::Scrollable);
+      if (validActionBounds && element->getLongClickable()) {
+        enableOperate(OperateType::LongClickable);
+        this->_actions.insert(ActionType::LONG_CLICK);
+      }
         if (this->hasOperate(OperateType::Checkable) ||
             this->hasOperate(OperateType::Clickable)) {
             this->_actions.insert(ActionType::CLICK);

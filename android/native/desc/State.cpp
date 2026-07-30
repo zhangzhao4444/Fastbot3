@@ -182,8 +182,8 @@ namespace fastbotx {
      * 
      * An action is considered saturated if:
      * - For actions without targets: visited at least once
-     * - For actions with targets: visited more times than the number of merged widgets
-     *   with the same hash (to account for duplicate widgets)
+     * - For actions with targets: visited enough times to cover every concrete widget
+     *   represented by the abstract target (representative widget + merged duplicates)
      * 
      * Performance optimization:
      * - Uses find instead of count + at to avoid double lookup
@@ -201,22 +201,50 @@ namespace fastbotx {
             return action->isVisited();
         }
         
-        // Actions with targets: check if visited more times than merged widget count
+        // Actions with targets: check if every concrete target has been exercised.
         const WidgetPtr& target = action->getTarget();
         if (target == nullptr) {
             // No target but requires target: default to saturated if visited
             return action->getVisitedCount() >= 1;
         }
-        
-        uintptr_t h = target->hash();
-        auto mergedIt = this->_mergedWidgets.find(h);
-        if (mergedIt != this->_mergedWidgets.end()) {
-            // Action is saturated if visited more times than merged widget count
-            return action->getVisitedCount() > static_cast<int>(mergedIt->second.size());
+
+        const size_t totalTargets = getConcreteTargetCount(target);
+        if (totalTargets == 0) {
+            return action->getVisitedCount() >= 1;
         }
-        
-        // Target not found in merged widgets: default to saturated if visited at least once
-        return action->getVisitedCount() >= 1;
+        return action->getVisitedCount() >= static_cast<int>(totalTargets);
+    }
+
+    size_t State::getConcreteTargetCount(const WidgetPtr &target) const {
+        if (!target) {
+            return 0;
+        }
+        size_t total = 1; // representative widget stored in `_widgets`
+        auto mergedIt = this->_mergedWidgets.find(target->hash());
+        if (mergedIt != this->_mergedWidgets.end()) {
+            total += mergedIt->second.size();
+        }
+        return total;
+    }
+
+    size_t State::getWidgetInstanceCount(const WidgetPtr &widget) const {
+        if (!widget) {
+            return 0;
+        }
+        auto mergedIt = this->_mergedWidgets.find(widget->hash());
+        if (mergedIt == this->_mergedWidgets.end()) {
+            return 1;
+        }
+        const WidgetPtrVec &merged = mergedIt->second;
+        if (merged.empty()) {
+            return 1;
+        }
+        // Dynamic merge (ReuseState): vector includes the representative at [0].
+        // Static merge: vector stores only duplicate widgets.
+        if (merged[0].get() == widget.get()) {
+            return merged.size();
+        }
+        return 1 + merged.size();
     }
 
     size_t State::getMaxWidgetsPerModelAction() const {
@@ -497,7 +525,16 @@ namespace fastbotx {
         return action;
     }
 
+    ActivityStateActionPtr State::randomPickUnsaturatedAction() const {
+        ActivityStateActionPtr action = this->randomPickAction(enableValidUnSaturatedFilter, false);
+        if (action == nullptr && enableValidUnSaturatedFilter->include(getBackAction())) {
+            action = getBackAction();
+        }
+        return action;
+    }
 
+
+    /** Rotates among all concrete widgets represented by one abstract action. */
     ActivityStateActionPtr State::resolveAt(ActivityStateActionPtr action, time_t /*t*/) {
         if (action == nullptr) {
             return action;
@@ -507,22 +544,42 @@ namespace fastbotx {
             return action;
         }
         
-        uintptr_t h = action->getTarget()->hash();
-        auto targetWidgets = this->_mergedWidgets.find(h);
-        if (targetWidgets == this->_mergedWidgets.end()) {
+        const uintptr_t h = action->getTarget()->hash();
+        auto representative = std::find_if(this->_widgets.begin(), this->_widgets.end(),
+            [h](const WidgetPtr &widget) {
+                return widget && widget->hash() == h;
+            });
+        if (representative == this->_widgets.end()) {
             return action;
         }
-        
-        int total = static_cast<int>(targetWidgets->second.size());
-        // Safety check: ensure total is positive to avoid division by zero
+
+        const int total = static_cast<int>(getConcreteTargetCount(action->getTarget()));
         if (total <= 0) {
-            BLOGE("resolveAt: merged widgets vector is empty for hash %" PRIuPTR, h);
+            BLOGE("resolveAt: concrete target count is 0 for hash %" PRIuPTR, h);
             return action;
         }
-        
-        int index = action->getVisitedCount() % total;
-        BLOG("resolve a merged widget %d/%d for action %s", index, total, action->getId().c_str());
-        action->setTarget(targetWidgets->second[index]);
+
+        const int slot = action->getVisitedCount() % total;
+        if (slot == 0) {
+            BLOG("resolveAt: action=%s hash=%" PRIuPTR " visited=%d concrete=%d slot=%d target=representative",
+                 action->getId().c_str(), h, action->getVisitedCount(), total, slot);
+            action->setTarget(*representative);
+            return action;
+        }
+
+        auto targetWidgets = this->_mergedWidgets.find(h);
+        if (targetWidgets == this->_mergedWidgets.end() ||
+            static_cast<size_t>(slot - 1) >= targetWidgets->second.size()) {
+            BLOGE("resolveAt: merged widget slot out of range for hash %" PRIuPTR " slot=%d total=%d",
+                  h, slot, total);
+            action->setTarget(*representative);
+            return action;
+        }
+
+        const int mergedIndex = slot - 1;
+        BLOG("resolveAt: action=%s hash=%" PRIuPTR " visited=%d concrete=%d slot=%d target=merged",
+             action->getId().c_str(), h, action->getVisitedCount(), total, slot);
+        action->setTarget(targetWidgets->second[static_cast<size_t>(mergedIndex)]);
         return action;
     }
 

@@ -269,7 +269,7 @@ namespace fastbotx {
         uintptr_t currentHash = state->hash();
         int blockTimes = getCurrentStateBlockTimes();
 
-        // ---------- Anti-stuck (align with Frontier/BFS/DFS) ----------
+        // ---------- Anti-stuck (shared block thresholds with other agents) ----------
         if (blockTimes > kBlockCleanRestartThreshold) {
             BDLOG("CuriosityAgent: blocked %d steps (>%d), CLEAN_RESTART", blockTimes, kBlockCleanRestartThreshold);
             return Action::CLEAN_RESTART;

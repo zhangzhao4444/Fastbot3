@@ -276,25 +276,46 @@ namespace fastbotx {
     }
 
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
+    namespace {
+        std::unordered_set<uintptr_t> collectUniqueWidgetHashesUnderMask(const WidgetPtrVec &widgets,
+                                                                         const WidgetPtrVecMap &mergedWidgets,
+                                                                         WidgetKeyMask mask) {
+            std::unordered_set<const Widget *> seenConcrete;
+            std::unordered_set<uintptr_t> uniqueHashes;
+            auto addWidget = [&](const WidgetPtr &w) {
+                if (!w || !seenConcrete.insert(w.get()).second) {
+                    return;
+                }
+                uniqueHashes.insert(w->hashWithMask(mask));
+            };
+
+            for (const auto &w : widgets) {
+                addWidget(w);
+            }
+            for (const auto &p : mergedWidgets) {
+                for (const auto &w : p.second) {
+                    addWidget(w);
+                }
+            }
+            return uniqueHashes;
+        }
+    }
+
     uintptr_t ReuseState::getHashUnderMask(WidgetKeyMask mask) const {
         std::string activityString = (_activity && _activity.get()) ? *_activity : "";
         // Performance optimization: Use fast string hash instead of std::hash
         uintptr_t activityHash = (fastbotx::fastStringHash(activityString) * 31U) << 5;
         uintptr_t widgetsHash = 0x1;
-        for (const auto &w : _widgets) {
-            if (w) {
-                widgetsHash ^= w->hashWithMask(mask);
-            }
+        std::unordered_set<uintptr_t> uniqueHashes =
+            collectUniqueWidgetHashesUnderMask(_widgets, _mergedWidgets, mask);
+        for (uintptr_t h : uniqueHashes) {
+            widgetsHash ^= h;
         }
         return activityHash ^ (widgetsHash << 1);
     }
 
     size_t ReuseState::getUniqueWidgetCountUnderMask(WidgetKeyMask mask) const {
-        std::unordered_set<uintptr_t> seen;
-        for (const auto &w : _widgets) {
-            if (w) seen.insert(w->hashWithMask(mask));
-        }
-        return seen.size();
+        return collectUniqueWidgetHashesUnderMask(_widgets, _mergedWidgets, mask).size();
     }
 #endif
 

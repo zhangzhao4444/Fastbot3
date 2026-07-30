@@ -38,6 +38,8 @@ namespace fastbotx {
         create(const ElementPtr &element, const stringPtr &activityName,
                WidgetKeyMask mask = DefaultWidgetKeyMask);
 
+        WidgetKeyMask getWidgetKeyMask() const override { return _widgetKeyMask; }
+
     protected:
         virtual void buildStateFromElement(WidgetPtr parentWidget, ElementPtr element);
 

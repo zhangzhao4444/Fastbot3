@@ -106,6 +106,11 @@ public class Config {
      */
     public static final String treeDumpMode = Config.get("max.treeDumpMode", "xml");
     /**
+     * When enabled, compute a lightweight screenshot-region hash for actionable image-only leaf widgets.
+     * Config: max.guitree.computeImageText = true | false
+     */
+    public static final boolean guitreeComputeImageText = Config.getBoolean("max.guitree.computeImageText", false);
+    /**
      * generator fuzzing event
      */
     public static final double fuzzingRate = Config.getDouble("max.fuzzingRate", 0.01D);

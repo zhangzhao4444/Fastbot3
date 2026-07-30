@@ -138,6 +138,13 @@ inline void logLongStringInfo(const std::string& longStr) {
 
 #define PARENT_CLICK_CHANGE_CHILDREN 1
 
+// GUI tree normalization inspired by APE.
+#define FASTBOT_PATCH_CONTAINER_ACTIONS 1
+#define FASTBOT_IGNORE_WEBVIEW_ACTIONS 1
+#define FASTBOT_WEBVIEW_NODE_THRESHOLD 80
+#define FASTBOT_SEMANTIC_CLICK_FALLBACK 1
+#define FASTBOT_FILTER_INVALID_ACTION_BOUNDS 1
+
 #define SCROLL_BOTTOM_UP_N_ENABLE 0
 
 // Dynamic state abstraction (refinement/coarsening)

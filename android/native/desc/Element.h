@@ -105,6 +105,18 @@ namespace fastbotx {
 
         bool isEditText() const;
 
+        bool hasActionableFlag() const;
+
+        bool hasValidActionBounds() const;
+
+        int getDepth() const { return _depth; }
+
+        int getHeight() const { return _height; }
+
+        int getDescendantCount() const { return _descendantCount; }
+
+        int getActionableDescendantCount() const { return _actionableDescendantCount; }
+
         const std::vector<std::shared_ptr<Element> > &
         getChildren() const { return this->_children; }
 
@@ -224,11 +236,13 @@ namespace fastbotx {
 
         /** Parse one node from binary buffer; used by createFromBinary. */
         static std::shared_ptr<Element> parseBinaryNode(const char *buf, size_t len, size_t *offset,
-                                                        const std::shared_ptr<Element> &parent);
+                                                        const std::shared_ptr<Element> &parent,
+                                                        bool hasExplicitScrollType);
 
         /** Instance helper: fill this node from binary buffer; used by parseBinaryNode. */
         bool parseBinaryNodeSelf(const char *buf, size_t len, size_t *offset,
-                                 const std::shared_ptr<Element> &parent);
+                                 const std::shared_ptr<Element> &parent,
+                                 bool hasExplicitScrollType);
 
         long hash(bool recursive = true);
 
@@ -237,6 +251,24 @@ namespace fastbotx {
         virtual ~Element();
 
     protected:
+        void optimizeTreeAfterParse();
+
+        void computeTreeStats(int depth);
+
+        void patchContainerActions();
+
+        bool patchChildrenFromContainer();
+
+        bool pruneLargeWebViews();
+
+        void clearActionsInWebView(bool insideWebView);
+
+        void clearInvalidActions(const RectPtr &rootBounds);
+
+        void applySemanticClickFallback();
+
+        void clearActions();
+
         void fromXMLNode(const tinyxml2::XMLElement *xmlNode,
                          const std::shared_ptr<Element> &parentOfNode);
 
@@ -266,6 +298,10 @@ namespace fastbotx {
         bool _password;
         bool _selected;
         bool _isEditable;
+        int _depth;
+        int _height;
+        int _descendantCount;
+        int _actionableDescendantCount;
 
         RectPtr _bounds;
         std::vector<std::shared_ptr<Element> > _children;

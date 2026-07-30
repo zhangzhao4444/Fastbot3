@@ -18,9 +18,8 @@
 #include <iostream>
 #include <map>
 #include <fstream>
-#if DYNAMIC_STATE_ABSTRACTION_ENABLED
-#include <utility>
 #include <sstream>
+#include <set>
 
 namespace {
     /// Convert WidgetKeyMask to human-readable dimension list for logging (e.g. "Clazz|ResourceID|ContentDesc").
@@ -37,6 +36,8 @@ namespace {
         return os.str().empty() ? "(none)" : os.str();
     }
 }
+#if DYNAMIC_STATE_ABSTRACTION_ENABLED
+#include <utility>
 #endif
 
 namespace fastbotx {
@@ -54,6 +55,12 @@ namespace fastbotx {
     }
 
     void Model::setActivityKeyMask(const std::string &activity, WidgetKeyMask mask) {
+#if DYNAMIC_STATE_ABSTRACTION_ENABLED
+        WidgetKeyMask oldMask = getActivityKeyMask(activity);
+        if (oldMask != mask) {
+            _activityAbstractionEpoch[activity]++;
+        }
+#endif
         _activityKeyMask[activity] = mask;
     }
 
@@ -74,14 +81,25 @@ namespace fastbotx {
         
         // Print state header with hash code
         BDLOG("{state: %lu", static_cast<unsigned long>(state->hash()));
-        
-        // Print each widget on a separate line for better readability; skip empty (e.g. toXPath returns "" when details cleared)
-        BDLOG("widgets:");
+
+        const WidgetKeyMask widgetKeyMask = state->getWidgetKeyMask();
         const auto &widgets = state->getWidgets();
-        for (const auto &widget : widgets) {
+        BDLOG("widgets: count=%zu keyMask=%u (%s)",
+              widgets.size(),
+              static_cast<unsigned>(widgetKeyMask),
+              maskToDimensionString(widgetKeyMask).c_str());
+
+        for (size_t i = 0; i < widgets.size(); ++i) {
+            const auto &widget = widgets[i];
+            if (!widget) {
+                continue;
+            }
             std::string widgetStr = widget->toString();
-            if (widgetStr.empty()) continue;
-            // If widget string is too long, split it across multiple log lines
+            if (widgetStr.empty()) {
+                continue;
+            }
+            widgetStr += " instances:";
+            widgetStr += std::to_string(state->getWidgetInstanceCount(widget));
             if (widgetStr.length() > 3000) {
                 logLongStringInfo("   " + widgetStr);
             } else {
@@ -135,7 +153,7 @@ namespace fastbotx {
         #define FASTBOT_VERSION __DATE__ " " __TIME__
     #endif
 #endif
-        BLOG("----Fastbot native build version: " FASTBOT_VERSION "----\n");
+        BLOG("----Fastbot native code version: 07032122, build version: " FASTBOT_VERSION "----\n");
         this->_graph = std::make_shared<Graph>();
         this->_preference = Preference::inst();
         this->_netActionParam.netActionTaskid = 0;
@@ -406,8 +424,14 @@ namespace fastbotx {
         actionCost = 0.0;
         ActionPtr action = customAction; // Use custom action if provided
 
+        // Log the freshly observed state on the agent (may differ from graph-canonical state after addState).
+        StatePtr stateForLog = (agent && agent->getNewState()) ? agent->getNewState() : state;
+        if (agent && stateForLog) {
+            agent->refreshActionPriorities();
+        }
+
         // Log state information for debugging
-        logStatePerLine(state);
+        logStatePerLine(stateForLog);
 
         // Check if preference indicates we should skip model actions (listen mode)
         bool shouldSkipActionsFromModel = this->_preference ? this->_preference->skipAllActionsFromModel() : false;
@@ -442,11 +466,8 @@ namespace fastbotx {
             double endGeneratingActionTimestamp = currentStamp();
             actionCost = endGeneratingActionTimestamp - startGeneratingActionTimestamp;
             
-            // moveForward is now called at the start of the next getOperateOpt (before addState),
-            // so (fromState, actionTaken, nextState) is correct for AIG/updateKnowledge.
-            if (state && action->isModelAct()) {
-                action->visit(this->_graph->getTimestamp());
-            }
+            // visit() is deferred until the next observed state, so resolveAt() uses the
+            // pre-execution count when rotating concrete targets under one abstract action.
         }
         
         return action;
@@ -556,6 +577,20 @@ namespace fastbotx {
             state = this->_graph->addState(state);
             state->visit(this->_graph->getTimestamp());
         }
+        // Count the previous step's model action only after observing the next state.
+        // This covers RL, xpath custom, and LLM-selected model actions while keeping
+        // resolveAt's visitedCount % concreteTargetCount aligned with actual execution.
+        if (state && agent) {
+            const std::string devKey = deviceID.empty() ? ModelConstants::DefaultDeviceID : deviceID;
+            auto pit = _pendingModelActionVisitByDevice.find(devKey);
+            if (pit != _pendingModelActionVisitByDevice.end()) {
+                ActionPtr pend = pit->second;
+                if (pend && pend->isModelAct()) {
+                    pend->visit(this->_graph->getTimestamp());
+                }
+                _pendingModelActionVisitByDevice.erase(pit);
+            }
+        }
         double buildStateEndTimestamp = currentStamp();
         bool fromLlm = (_llmTaskAgent && _llmTaskAgent->inSession());
 #if DYNAMIC_STATE_ABSTRACTION_ENABLED
@@ -638,6 +673,10 @@ namespace fastbotx {
             }
         }
 #endif
+        if (action && action->isModelAct()) {
+            const std::string devKey = deviceID.empty() ? ModelConstants::DefaultDeviceID : deviceID;
+            _pendingModelActionVisitByDevice[devKey] = action;
+        }
         return opt;
     }
 
@@ -655,11 +694,15 @@ namespace fastbotx {
             auto actPtr = srcState->getActivityString();
             e.sourceActivity = (actPtr && actPtr.get()) ? *actPtr : "";
         }
+        e.sourceMask = getActivityKeyMask(e.sourceActivity);
+        auto epochIt = _activityAbstractionEpoch.find(e.sourceActivity);
+        e.abstractionEpoch = epochIt != _activityAbstractionEpoch.end() ? epochIt->second : 0;
         e.valid = true;
         if (_transitionLog.empty()) return;
-        BDLOG("state abstraction: transition src=%lu act=%lu tgt=%lu activity=%s",
+        BDLOG("state abstraction: transition src=%lu act=%lu tgt=%lu activity=%s mask=%u epoch=%llu",
               (unsigned long)e.sourceStateHash, (unsigned long)e.actionHash, (unsigned long)e.targetStateHash,
-              e.sourceActivity.c_str());
+              e.sourceActivity.c_str(), (unsigned)e.sourceMask,
+              (unsigned long long)e.abstractionEpoch);
         _transitionLog[_transitionLogWriteIndex] = std::move(e);
         _transitionLogWriteIndex = (_transitionLogWriteIndex + 1) % _transitionLog.size();
     }
@@ -684,6 +727,10 @@ namespace fastbotx {
         std::map<Key, std::pair<std::unordered_set<uintptr_t>, std::string>> saToTargets;
         for (const auto &e : _transitionLog) {
             if (!e.valid) continue;
+            if (e.sourceMask != getActivityKeyMask(e.sourceActivity)) continue;
+            auto epochIt = _activityAbstractionEpoch.find(e.sourceActivity);
+            uint64_t currentEpoch = epochIt != _activityAbstractionEpoch.end() ? epochIt->second : 0;
+            if (e.abstractionEpoch != currentEpoch) continue;
             if (e.sourceStateHash == e.targetStateHash) continue;
             Key k(e.sourceStateHash, e.actionHash);
             saToTargets[k].first.insert(e.targetStateHash);

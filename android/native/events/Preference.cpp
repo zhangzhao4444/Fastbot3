@@ -641,8 +641,17 @@ namespace fastbotx {
 
         if (this->_pruningValidTexts) this->pruningValidTexts(element);
 
-        for (const auto &child : element->getChildren()) {
+        // Note: the recursive call may delete `child` from element's children vector
+        // (avoid rule -> deleteElement()), which invalidates iterators of that vector.
+        // Iterate by index and hold a shared_ptr; only advance when the child at slot i
+        // is still the one we just processed (otherwise the next sibling shifted into i).
+        const auto &children = element->getChildren();
+        for (size_t i = 0; i < children.size();) {
+            ElementPtr child = children[i];
             this->resolveElementWithAvoid(child, activity);
+            if (i < children.size() && children[i].get() == child.get()) {
+                ++i;
+            }
         }
     }
 

@@ -103,7 +103,7 @@ namespace fastbotx {
             actStr = "INVALID_ACTION(" + std::to_string(static_cast<int>(this->_actionType)) + ")";
         }
         strs << "{id: " << this->getId() << ", act: " << actStr <<
-             ", value: " << this->_qValue << "}";
+             ", value: " << this->_qValue << ", priority: " << this->getPriority() << "}";
         return strs.str();
     }
 

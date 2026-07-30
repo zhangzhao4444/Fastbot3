@@ -136,6 +136,15 @@ namespace fastbotx {
         ActivityStateActionPtr randomPickUnvisitedAction() const;
 
         /**
+         * @brief Randomly pick an action that has not exhausted all concrete targets
+         *
+         * Useful when one abstract action represents several concrete widgets.
+         *
+         * @return Random unsaturated action, or nullptr if all actions are saturated
+         */
+        ActivityStateActionPtr randomPickUnsaturatedAction() const;
+
+        /**
          * @brief Randomly pick an action matching the filter
          * 
          * @param filter Action filter to apply
@@ -163,13 +172,29 @@ namespace fastbotx {
         /**
          * @brief Check if an action is saturated (visited too many times)
          * 
-         * For actions with targets, checks if visited count exceeds merged widget count.
+         * For actions with targets, checks if visited count covers every concrete target.
          * For actions without targets, checks if visited at least once.
          * 
          * @param action Action to check
          * @return true if action is saturated
          */
         bool isSaturated(const ActivityStateActionPtr &action) const;
+
+        /**
+         * @brief Get the number of concrete widgets represented by an abstract target.
+         *
+         * The count includes the representative widget stored in `_widgets` plus any
+         * duplicate widgets stored in `_mergedWidgets`.
+         *
+         * @param target Abstract target widget
+         * @return Number of concrete widgets, or 0 when target is null
+         */
+        size_t getConcreteTargetCount(const WidgetPtr &target) const;
+
+        /**
+         * @brief Number of concrete widgets merged into this abstract representative (for logging).
+         */
+        size_t getWidgetInstanceCount(const WidgetPtr &widget) const;
 
         /**
          * @brief Get the maximum number of widgets that map to the same model action in this state.
@@ -236,6 +261,9 @@ namespace fastbotx {
          * @return true if details have been cleared
          */
         bool hasNoDetail() const { return this->_hasNoDetail; }
+
+        /// Widget key mask used when this state was built (merge / state hash dimensions).
+        virtual WidgetKeyMask getWidgetKeyMask() const { return DefaultWidgetKeyMask; }
 
         FuncGetID(State);
 

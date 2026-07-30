@@ -13,9 +13,68 @@
 #include "../thirdpart/json/json.hpp"
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 
 
 namespace fastbotx {
+
+    static bool isEditTextClassName(const std::string &cls) {
+        const char *p = cls.c_str();
+        const size_t len = cls.size();
+        return (len == 23 && std::strcmp(p, "android.widget.EditText") == 0) ||
+               (len == 42 && std::strcmp(p, "android.inputmethodservice.ExtractEditText") == 0) ||
+               (len == 35 && std::strcmp(p, "android.widget.AutoCompleteTextView") == 0) ||
+               (len == 42 && std::strcmp(p, "android.widget.MultiAutoCompleteTextView") == 0);
+    }
+
+    static std::string removeDoubleQuotes(const std::string &input) {
+        if (input.find('"') == std::string::npos) {
+            return input;
+        }
+        std::string out;
+        out.reserve(input.size());
+        for (char c : input) {
+            if (c != '"') {
+                out.push_back(c);
+            }
+        }
+        return out;
+    }
+
+    static std::string truncateUtf8Codepoints(const std::string &input, size_t maxCodepoints) {
+        if (input.empty() || maxCodepoints == 0) {
+            return std::string();
+        }
+        size_t i = 0;
+        size_t codepoints = 0;
+        while (i < input.size() && codepoints < maxCodepoints) {
+            const unsigned char c = static_cast<unsigned char>(input[i]);
+            size_t step = 1;
+            if ((c & 0x80u) == 0x00u) {
+                step = 1;
+            } else if ((c & 0xe0u) == 0xc0u) {
+                step = 2;
+            } else if ((c & 0xf0u) == 0xe0u) {
+                step = 3;
+            } else if ((c & 0xf8u) == 0xf0u) {
+                step = 4;
+            }
+            if (i + step > input.size()) {
+                step = 1;
+            }
+            i += step;
+            ++codepoints;
+        }
+        return input.substr(0, i);
+    }
+
+    static std::string normalizeTextForGuitree(const std::string &input) {
+        return truncateUtf8Codepoints(removeDoubleQuotes(input), 8);
+    }
+
+    static std::string normalizeContentDescForGuitree(const std::string &input) {
+        return removeDoubleQuotes(input);
+    }
 
     /// Parse one integer (optional '-', then digits) and advance p past it. Used for bounds "[xl,yl][xr,yr]".
     static int parseIntAndAdvance(const char *&p) {
@@ -67,10 +126,53 @@ namespace fastbotx {
         return false;
     }
 
+    static const char *rawStringAttr(const tinyxml2::XMLElement *node, const char *shortName, const char *longName) {
+        const char *out = node->Attribute(shortName);
+        if (out) return out;
+        return node->Attribute(longName);
+    }
+
+    static bool asciiEqualsIgnoreCase(const char *value, const char *literal) {
+        if (!value || !literal) {
+            return false;
+        }
+        while (*value && *literal) {
+            char v = *value++;
+            char l = *literal++;
+            if (v >= 'A' && v <= 'Z') v = static_cast<char>(v + 32);
+            if (l >= 'A' && l <= 'Z') l = static_cast<char>(l + 32);
+            if (v != l) {
+                return false;
+            }
+        }
+        return *value == *literal;
+    }
+
+    static bool hasElementChild(const tinyxml2::XMLElement *node) {
+        return node && node->FirstChildElement() != nullptr;
+    }
+
+    static bool xmlChildExcludedByGuitreeRules(const tinyxml2::XMLElement *node) {
+        if (!node) {
+            return true;
+        }
+        bool visibleToUser = true;
+        if (queryBoolAttr(node, "vu", "visible-to-user", visibleToUser) && !visibleToUser) {
+            return true;
+        }
+        const char *visibility = rawStringAttr(node, "vis", "visibility");
+        if (asciiEqualsIgnoreCase(visibility, "gone") || asciiEqualsIgnoreCase(visibility, "invisible")) {
+            return true;
+        }
+        const char *bounds = rawStringAttr(node, "bnd", "bounds");
+        return bounds && bounds[0] == '\0' && !hasElementChild(node);
+    }
+
     Element::Element()
             : _enabled(false), _checked(false), _checkable(false), _clickable(false),
               _focusable(false), _scrollable(false), _longClickable(false), _childCount(0),
               _focused(false), _index(0), _password(false), _selected(false), _isEditable(false),
+              _depth(1), _height(1), _descendantCount(1), _actionableDescendantCount(0),
               _cachedScrollType(ScrollType::NONE), _scrollTypeCached(false),
               _cachedHash(0), _hashCached(false) {
         _children.clear();
@@ -307,14 +409,13 @@ namespace fastbotx {
         // If no elements are clickable, make all clickable as fallback
         // This ensures the UI can still be interacted with
         if (_allClickableFalse) {
-            elementPtr->recursiveDoElements([](const ElementPtr &elm) {
-                elm->_clickable = true;
-            });
+            elementPtr->applySemanticClickFallback();
         }
-        
+
         // Force set root element scrollable = true
         // Root element should always be scrollable to allow navigation
         elementPtr->_scrollable = true;
+        elementPtr->optimizeTreeAfterParse();
 
 #if FASTBOT_LOG_RAW_GUITREE
         int domTreeLineCount = 0;
@@ -331,15 +432,18 @@ namespace fastbotx {
         _allClickableFalse = true;
         elementPtr->fromXml(doc, nullptr);
         if (_allClickableFalse) {
-            elementPtr->recursiveDoElements([](const ElementPtr &elm) {
-                elm->_clickable = true;
-            });
+            elementPtr->applySemanticClickFallback();
         }
+        elementPtr->optimizeTreeAfterParse();
         return elementPtr;
     }
 
     // Binary format (little-endian): magic "FB\0\1" (4), then node: bounds(16), index(2), flags(2), num_strings(1), [tag(1) len(2) data(len)]*, num_children(2), children*
-    static const char BINARY_MAGIC[] = {'F', 'B', 0, 1};
+    // Binary format v2 (little-endian): magic "FB\0\2" (4), then node:
+    // bounds(16), index(2), flags(2), scroll_type(1), num_strings(1), strings, num_children(2), children.
+    // v1 ("FB\0\1") is still accepted and infers scroll type from class.
+    static const char BINARY_MAGIC_V1[] = { 'F', 'B', 0, 1 };
+    static const char BINARY_MAGIC_V2[] = { 'F', 'B', 0, 2 };
     enum { TAG_TEXT = 0, TAG_RID = 1, TAG_CLASS = 2, TAG_PKG = 3, TAG_CD = 4 };
     static bool readBytes(const char *buf, size_t len, size_t *offset, void *out, size_t n) {
         if (*offset + n > len) return false;
@@ -348,22 +452,26 @@ namespace fastbotx {
         return true;
     }
 
-    ElementPtr Element::parseBinaryNode(const char *buf, size_t len, size_t *offset, const ElementPtr &parent) {
-        if (*offset + 21 > len) return nullptr;  // min header
+    ElementPtr Element::parseBinaryNode(const char *buf, size_t len, size_t *offset, const ElementPtr &parent,
+                                    bool hasExplicitScrollType) {
+        if (*offset + (hasExplicitScrollType ? 22 : 21) > len) return nullptr; // min header
         ElementPtr elm = std::make_shared<Element>();
-        if (!elm->parseBinaryNodeSelf(buf, len, offset, parent)) return nullptr;
+        if (!elm->parseBinaryNodeSelf(buf, len, offset, parent, hasExplicitScrollType)) return nullptr;
         return elm;
     }
 
-    bool Element::parseBinaryNodeSelf(const char *buf, size_t len, size_t *offset, const ElementPtr &parent) {
+    bool Element::parseBinaryNodeSelf(const char *buf, size_t len, size_t *offset, const ElementPtr &parent,
+                                  bool hasExplicitScrollType) {
         int32_t left, top, right, bottom;
         int16_t idx;
         uint16_t flags;
+        uint8_t explicitScrollType = static_cast<uint8_t>(ScrollType::NONE);
         uint8_t numStrings;
         if (!readBytes(buf, len, offset, &left, 4) || !readBytes(buf, len, offset, &top, 4) ||
             !readBytes(buf, len, offset, &right, 4) || !readBytes(buf, len, offset, &bottom, 4) ||
-            !readBytes(buf, len, offset, &idx, 2) || !readBytes(buf, len, offset, &flags, 2) ||
-            !readBytes(buf, len, offset, &numStrings, 1)) return false;
+            !readBytes(buf, len, offset, &idx, 2) || !readBytes(buf, len, offset, &flags, 2)) return false;
+        if (hasExplicitScrollType && !readBytes(buf, len, offset, &explicitScrollType, 1)) return false;
+        if (!readBytes(buf, len, offset, &numStrings, 1)) return false;
         if (parent) _parent = parent;
         _index = idx;
         _bounds = std::make_shared<Rect>(left, top, right, bottom);
@@ -390,32 +498,52 @@ namespace fastbotx {
             else if (tag == TAG_PKG) _packageName = std::move(s);
             else if (tag == TAG_CD) _contentDesc = std::move(s);
         }
+        _isEditable = isEditTextClassName(_classname);
+        if (_isEditable) {
+            _text.clear();
+        } else {
+            _text = normalizeTextForGuitree(_text);
+        }
+        _contentDesc = normalizeContentDescForGuitree(_contentDesc);
         uint16_t numChildren;
         if (!readBytes(buf, len, offset, &numChildren, 2)) return true;
         _children.reserve(numChildren > 32 ? 32 : numChildren);
-        for (uint16_t c = 0; c < numChildren; c++) {
-            ElementPtr child = Element::parseBinaryNode(buf, len, offset, shared_from_this());
+        for (uint16_t c = 0; c < numChildren; ++c) {
+            ElementPtr child = Element::parseBinaryNode(buf, len, offset, shared_from_this(), hasExplicitScrollType);
             if (!child) break;
             _children.push_back(child);
         }
         _childCount = static_cast<int>(_children.size());
-        _isEditable = (_classname == "android.widget.EditText");
         if (_isEditable) _longClickable = _clickable = _enabled = true;
-        _cachedScrollType = _computeScrollType();
+        if (hasExplicitScrollType && explicitScrollType < static_cast<uint8_t>(ScrollType::ScrollTypeSize)) {
+            _cachedScrollType = static_cast<ScrollType>(explicitScrollType);
+        } else {
+            _cachedScrollType = _computeScrollType();
+        }
         _scrollTypeCached = true;
         return true;
     }
 
     ElementPtr Element::createFromBinary(const char *buf, size_t len) {
-        if (len < 4 || memcmp(buf, BINARY_MAGIC, 4) != 0) return nullptr;
+        if (len < 4) return nullptr;
+        bool hasExplicitScrollType = false;
+        if (memcmp(buf, BINARY_MAGIC_V2, 4) == 0) {
+            hasExplicitScrollType = true;
+        } else if (memcmp(buf, BINARY_MAGIC_V1, 4) == 0) {
+            hasExplicitScrollType = false;
+        } else {
+            return nullptr;
+        }
+
         size_t offset = 4;
         Element::_allClickableFalse = true;
-        ElementPtr root = Element::parseBinaryNode(buf, len, &offset, nullptr);
+        ElementPtr root = Element::parseBinaryNode(buf, len, &offset, nullptr, hasExplicitScrollType);
         if (!root) return nullptr;
         if (Element::_allClickableFalse) {
-            root->recursiveDoElements([](const ElementPtr &elm) { elm->_clickable = true; });
+            root->applySemanticClickFallback();
         }
         root->_scrollable = true;
+        root->optimizeTreeAfterParse();
 #if FASTBOT_LOG_RAW_GUITREE
         BLOG("[domtree] from binary (no raw XML); parsed tree hierarchy:");
         int domTreeLineCount = 0;
@@ -468,7 +596,10 @@ namespace fastbotx {
         xml->SetAttribute("class", elm->getClassname().c_str());
         xml->SetAttribute("resource-id", elm->getResourceID().c_str());
         xml->SetAttribute("package", elm->getPackageName().c_str());
-        xml->SetAttribute("content-desc", elm->getContentDesc().c_str());
+        std::string text = elm->isEditText() ? std::string() : normalizeTextForGuitree(elm->getText());
+        std::string contentDesc = normalizeContentDescForGuitree(elm->getContentDesc());
+        xml->SetAttribute("text", text.c_str());
+        xml->SetAttribute("content-desc", contentDesc.c_str());
         xml->SetAttribute("checkable", elm->getCheckable() ? "true" : "false");
         xml->SetAttribute("checked", elm->_checked ? "true" : "false");
         xml->SetAttribute("clickable", elm->getClickable() ? "true" : "false");
@@ -552,6 +683,13 @@ namespace fastbotx {
         if (queryStringAttr(xmlNode, "pkg", "package", pkgname)) this->_packageName = std::string(pkgname);
         const char *content_desc = nullptr;
         if (queryStringAttr(xmlNode, "cd", "content-desc", content_desc)) this->_contentDesc = std::string(content_desc);
+        this->_isEditable = isEditTextClassName(this->_classname);
+        if (this->_isEditable) {
+            this->_text.clear();
+        } else {
+            this->_text = normalizeTextForGuitree(this->_text);
+        }
+        this->_contentDesc = normalizeContentDescForGuitree(this->_contentDesc);
         bool b = false;
         if (queryBoolAttr(xmlNode, "ck", "checkable", b)) this->_checkable = b;
         if (queryBoolAttr(xmlNode, "clk", "clickable", b)) { this->_clickable = b; if (b) _allClickableFalse = false; }
@@ -563,24 +701,32 @@ namespace fastbotx {
         if (queryBoolAttr(xmlNode, "lclk", "long-clickable", b)) this->_longClickable = b;
         if (queryBoolAttr(xmlNode, "pwd", "password", b)) this->_password = b;
         if (queryBoolAttr(xmlNode, "sel", "selected", b)) this->_selected = b;
+        const char *scrollType = nullptr;
+        if (queryStringAttr(xmlNode, "st", "scroll-type", scrollType)) {
+            this->_cachedScrollType = stringToScrollType(scrollType);
+            this->_scrollTypeCached = true;
+        }
 
-        this->_isEditable = "android.widget.EditText" == this->_classname;
         if (FORCE_EDITTEXT_CLICK_TRUE && this->_isEditable) {
             this->_longClickable = this->_clickable = this->_enabled = true;
         }
 
+#if !FASTBOT_PATCH_CONTAINER_ACTIONS
         if (PARENT_CLICK_CHANGE_CHILDREN && parentOfNode && parentOfNode->_longClickable) {
             this->_longClickable = parentOfNode->_longClickable;
         }
         if (PARENT_CLICK_CHANGE_CHILDREN && parentOfNode && parentOfNode->_clickable) {
             this->_clickable = parentOfNode->_clickable;
         }
+#endif
         if (this->_clickable || this->_longClickable) {
             this->_enabled = true;
         }
 
-        this->_cachedScrollType = this->_computeScrollType();
-        this->_scrollTypeCached = true;
+        if (!this->_scrollTypeCached) {
+            this->_cachedScrollType = this->_computeScrollType();
+            this->_scrollTypeCached = true;
+        }
 
         // Performance: Only call shared_from_this() and reserve when node has children (most nodes are leaves).
         if (!xmlNode->NoChildren()) {
@@ -588,6 +734,9 @@ namespace fastbotx {
             const ElementPtr self = shared_from_this();
             for (const tinyxml2::XMLElement *childNode = xmlNode->FirstChildElement();
                  childNode != nullptr; childNode = childNode->NextSiblingElement()) {
+                if (xmlChildExcludedByGuitreeRules(childNode)) {
+                    continue;
+                }
                 ElementPtr childElement = std::make_shared<Element>();
                 this->_children.emplace_back(childElement);
                 childElement->fromXMLNode(childNode, self);
@@ -602,6 +751,216 @@ namespace fastbotx {
 
     bool Element::isEditText() const {
         return this->_isEditable;
+    }
+
+    bool Element::hasActionableFlag() const {
+        return this->_clickable || this->_longClickable || this->_checkable || this->_scrollable || this->_isEditable;
+    }
+
+    bool Element::hasValidActionBounds() const {
+        if (!this->_bounds || this->_bounds->isEmpty()) {
+            return false;
+        }
+        return this->_bounds->right > this->_bounds->left && this->_bounds->bottom > this->_bounds->top;
+    }
+
+    void Element::clearActions() {
+        this->_clickable = false;
+        this->_longClickable = false;
+        this->_checkable = false;
+        this->_scrollable = false;
+        this->_scrollTypeCached = false;
+        this->_hashCached = false;
+    }
+
+    static bool sameRow(const std::vector<ElementPtr> &children) {
+        int top = -1, bottom = -1;
+        for (const auto &child : children) {
+            RectPtr bounds = child ? child->getBounds() : nullptr;
+            if (!bounds) continue;
+            if (top == -1) top = bounds->top;
+            else if (top != bounds->top) return false;
+            if (bottom == -1) bottom = bounds->bottom;
+            else if (bottom != bounds->bottom) return false;
+        }
+        return top != -1;
+    }
+
+    static bool sameColumn(const std::vector<ElementPtr> &children) {
+        int left = -1, right = -1;
+        for (const auto &child : children) {
+            RectPtr bounds = child ? child->getBounds() : nullptr;
+            if (!bounds) continue;
+            if (left == -1) left = bounds->left;
+            else if (left != bounds->left) return false;
+            if (right == -1) right = bounds->right;
+            else if (right != bounds->right) return false;
+        }
+        return left != -1;
+    }
+
+    static bool containsRect(const RectPtr &outer, const RectPtr &inner) {
+        return outer && inner && outer->left <= inner->left && outer->top <= inner->top
+            && outer->right >= inner->right && outer->bottom >= inner->bottom;
+    }
+
+    static RectPtr unionChildBounds(const std::vector<ElementPtr> &children) {
+        RectPtr result = nullptr;
+        for (const auto &child : children) {
+            RectPtr bounds = child ? child->getBounds() : nullptr;
+            if (!bounds || bounds->isEmpty()) continue;
+            if (!result) {
+                result = std::make_shared<Rect>(bounds->left, bounds->top, bounds->right, bounds->bottom);
+            } else {
+                result->left = std::min(result->left, bounds->left);
+                result->top = std::min(result->top, bounds->top);
+                result->right = std::max(result->right, bounds->right);
+                result->bottom = std::max(result->bottom, bounds->bottom);
+            }
+        }
+        return result;
+    }
+
+    static bool containsPoint(const RectPtr &rect, int x, int y) {
+        return rect && rect->left <= x && x < rect->right && rect->top <= y && y < rect->bottom;
+    }
+
+    static bool intersectsRect(const RectPtr &a, const RectPtr &b) {
+        return a && b && a->left < b->right && b->left < a->right
+            && a->top < b->bottom && b->top < a->bottom;
+    }
+
+    bool Element::patchChildrenFromContainer() {
+        if (!_clickable || _children.empty() || isWebView()) {
+            return false;
+        }
+        if (_children.size() > 1 && !sameRow(_children) && !sameColumn(_children)) {
+            return false;
+        }
+        bool patched = false;
+        for (const auto &child : _children) {
+            if (!child || !containsRect(_bounds, child->getBounds()) || !child->hasValidActionBounds()) {
+                continue;
+            }
+            if (!child->_clickable && !child->_checkable && !child->_scrollable) {
+                child->_clickable = true;
+                child->_enabled = true;
+                child->_hashCached = false;
+                patched = true;
+            }
+        }
+        if (patched) {
+            RectPtr childrenBounds = unionChildBounds(_children);
+            if (childrenBounds && _bounds) {
+                int centerX = _bounds->left + (_bounds->right - _bounds->left) / 2;
+                int centerY = _bounds->top + (_bounds->bottom - _bounds->top) / 2;
+                if (containsPoint(childrenBounds, centerX, centerY)) {
+                    this->_clickable = false;
+                    this->_hashCached = false;
+                }
+            }
+        }
+        return patched;
+    }
+
+    void Element::patchContainerActions() {
+        patchChildrenFromContainer();
+        for (const auto &child : _children) {
+            if (child) child->patchContainerActions();
+        }
+    }
+
+    bool Element::pruneLargeWebViews() {
+        bool changed = false;
+        if (isWebView() && _descendantCount > FASTBOT_WEBVIEW_NODE_THRESHOLD) {
+            BLOG("prune WebView subtree nodes=%d threshold=%d", _descendantCount, FASTBOT_WEBVIEW_NODE_THRESHOLD);
+            _children.clear();
+            _childCount = 0;
+            changed = true;
+        } else {
+            for (const auto &child : _children) {
+                if (child && child->pruneLargeWebViews()) changed = true;
+            }
+        }
+        if (changed) this->_hashCached = false;
+        return changed;
+    }
+
+    void Element::clearActionsInWebView(bool insideWebView) {
+        bool ignore = insideWebView || isWebView();
+        if (insideWebView) {
+            clearActions();
+        }
+        for (const auto &child : _children) {
+            if (child) child->clearActionsInWebView(ignore);
+        }
+    }
+
+    void Element::clearInvalidActions(const RectPtr &rootBounds) {
+        bool outsideRoot = rootBounds && hasValidActionBounds() && !intersectsRect(rootBounds, _bounds);
+        if (hasActionableFlag() && (!hasValidActionBounds() || (_depth > 1 && outsideRoot))) {
+            clearActions();
+        }
+        for (const auto &child : _children) {
+            if (child) child->clearInvalidActions(rootBounds);
+        }
+    }
+
+    void Element::applySemanticClickFallback() {
+        if (!FASTBOT_SEMANTIC_CLICK_FALLBACK) {
+            recursiveDoElements([](const ElementPtr &elm) { elm->_clickable = true; });
+            return;
+        }
+        bool applied = false;
+        recursiveDoElements([&applied](const ElementPtr &elm) {
+            if (!elm || !elm->hasValidActionBounds() || !elm->_children.empty()) return;
+            if (!elm->_text.empty() || !elm->_contentDesc.empty() || !elm->_resourceID.empty() || elm->_isEditable) {
+                elm->_clickable = true;
+                elm->_enabled = true;
+                applied = true;
+            }
+        });
+        if (!applied) {
+            recursiveDoElements([](const ElementPtr &elm) {
+                if (elm && elm->hasValidActionBounds() && elm->_children.empty()) {
+                    elm->_clickable = true;
+                    elm->_enabled = true;
+                }
+            });
+        }
+    }
+
+    void Element::computeTreeStats(int depth) {
+        _depth = depth;
+        _height = 1;
+        _descendantCount = 1;
+        _actionableDescendantCount = hasActionableFlag() ? 1 : 0;
+        for (const auto &child : _children) {
+            if (!child) continue;
+            child->computeTreeStats(depth + 1);
+            _descendantCount += child->_descendantCount;
+            _actionableDescendantCount += child->_actionableDescendantCount;
+            _height = std::max(_height, child->_height + 1);
+        }
+    }
+
+    void Element::optimizeTreeAfterParse() {
+        computeTreeStats(1);
+#if FASTBOT_WEBVIEW_NODE_THRESHOLD > 0
+        if (pruneLargeWebViews()) {
+            computeTreeStats(1);
+        }
+#endif
+#if FASTBOT_FILTER_INVALID_ACTION_BOUNDS
+        clearInvalidActions(this->_bounds);
+#endif
+#if FASTBOT_IGNORE_WEBVIEW_ACTIONS
+        clearActionsInWebView(false);
+#endif
+#if FASTBOT_PATCH_CONTAINER_ACTIONS
+        patchContainerActions();
+#endif
+        computeTreeStats(1);
     }
 
     ScrollType Element::_computeScrollType() const {

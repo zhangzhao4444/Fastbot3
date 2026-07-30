@@ -114,7 +114,8 @@ jstring JNICALL Java_com_bytedance_fastbot_AiClient_getOperateJsonNative(JNIEnv 
 // byteLength must be the actual number of bytes written (Java buffer limit), not capacity,
 // to avoid incomplete UTF-8 when building std::string (fixes type_error.316).
 static fastbotx::ElementPtr parseTreeFromBuffer(const char *addr, size_t byteLength) {
-    if (byteLength >= 4 && addr[0] == 'F' && addr[1] == 'B' && addr[2] == 0 && addr[3] == 1) {
+    if (byteLength >= 4 && addr[0] == 'F' && addr[1] == 'B' && addr[2] == 0
+        && (addr[3] == 1 || addr[3] == 2)) {
         return fastbotx::Element::createFromBinary(addr, byteLength);
     }
     std::string xmlString(addr, byteLength);
@@ -235,20 +236,27 @@ void JNICALL Java_com_bytedance_fastbot_AiClient_initAgentNative(JNIEnv *env, jo
 
     BLOG("init agent with type %d, %s,  %d", agentType, packageNameCString, deviceType);
     // Reuse model is supported by DoubleSarsaAgent and SarsaAgent.
-    if (algorithmType == fastbotx::AlgorithmType::DoubleSarsa) {
-        auto doubleSarsaAgentPtr = std::dynamic_pointer_cast<fastbotx::DoubleSarsaAgent>(agentPointer);
-        if (doubleSarsaAgentPtr) {
-            doubleSarsaAgentPtr->loadReuseModel(std::string(packageNameCString));
-        } else {
-            BLOGE("Double SARSA: Failed to cast agent to DoubleSarsaAgent");
+    // TEMP: do not load persisted reuse model at init (potential load bug under investigation).
+    static constexpr bool kLoadReuseModelAtInit = false;
+    if (kLoadReuseModelAtInit) {
+        if (algorithmType == fastbotx::AlgorithmType::DoubleSarsa) {
+            auto doubleSarsaAgentPtr = std::dynamic_pointer_cast<fastbotx::DoubleSarsaAgent>(agentPointer);
+            if (doubleSarsaAgentPtr) {
+                doubleSarsaAgentPtr->loadReuseModel(std::string(packageNameCString));
+            } else {
+                BLOGE("Double SARSA: Failed to cast agent to DoubleSarsaAgent");
+            }
+        } else if (algorithmType == fastbotx::AlgorithmType::Sarsa) {
+            auto sarsaAgentPtr = std::dynamic_pointer_cast<fastbotx::SarsaAgent>(agentPointer);
+            if (sarsaAgentPtr) {
+                sarsaAgentPtr->loadReuseModel(std::string(packageNameCString));
+            } else {
+                BLOGE("SarsaAgent: Failed to cast agent to SarsaAgent");
+            }
         }
-    } else if (algorithmType == fastbotx::AlgorithmType::Sarsa) {
-        auto sarsaAgentPtr = std::dynamic_pointer_cast<fastbotx::SarsaAgent>(agentPointer);
-        if (sarsaAgentPtr) {
-            sarsaAgentPtr->loadReuseModel(std::string(packageNameCString));
-        } else {
-            BLOGE("SarsaAgent: Failed to cast agent to SarsaAgent");
-        }
+    } else if (algorithmType == fastbotx::AlgorithmType::DoubleSarsa
+               || algorithmType == fastbotx::AlgorithmType::Sarsa) {
+        BLOG("reuse model: skip load at init (kLoadReuseModelAtInit=false)");
     }
     if (env)
         env->ReleaseStringUTFChars(packageName, packageNameCString);

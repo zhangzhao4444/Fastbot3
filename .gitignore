@@ -12,3 +12,5 @@ android/monkeyq copy.jar
 /android/native/CMakeFiles/fastbot_native.dir/desc
 /android/native/CMakeFiles/fastbot_native.dir
 /android/logs
+/android/native/CMakeFiles
+/android/native/CMakeFiles/4.2.2

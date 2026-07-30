@@ -79,6 +79,9 @@ namespace fastbotx {
          */
         virtual ActionPtr resolveNewAction();
 
+        /** Recompute action priorities on _newState (e.g. before logging candidate actions). */
+        void refreshActionPriorities() { adjustActions(); }
+
         /**
          * @brief Update strategy (pure virtual, implemented by subclasses)
          * 
@@ -136,6 +139,9 @@ namespace fastbotx {
          * Used by Model for transition logging (dynamic state abstraction).
          */
         StatePtr getCurrentState() const { return this->_currentState; }
+
+        /** State observed at the current step (set by moveForward before graph dedup). */
+        StatePtr getNewState() const { return this->_newState; }
 
         /**
          * @brief Get current action (action used to reach current state).

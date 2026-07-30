@@ -201,6 +201,54 @@ agent/AgentFactory.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/AgentFactory.cpp.s
 .PHONY : agent/AgentFactory.cpp.s
 
+agent/ContentAwareInputProvider.o: agent/ContentAwareInputProvider.cpp.o
+.PHONY : agent/ContentAwareInputProvider.o
+
+# target to build an object file
+agent/ContentAwareInputProvider.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/ContentAwareInputProvider.cpp.o
+.PHONY : agent/ContentAwareInputProvider.cpp.o
+
+agent/ContentAwareInputProvider.i: agent/ContentAwareInputProvider.cpp.i
+.PHONY : agent/ContentAwareInputProvider.i
+
+# target to preprocess a source file
+agent/ContentAwareInputProvider.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/ContentAwareInputProvider.cpp.i
+.PHONY : agent/ContentAwareInputProvider.cpp.i
+
+agent/ContentAwareInputProvider.s: agent/ContentAwareInputProvider.cpp.s
+.PHONY : agent/ContentAwareInputProvider.s
+
+# target to generate assembly for a file
+agent/ContentAwareInputProvider.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/ContentAwareInputProvider.cpp.s
+.PHONY : agent/ContentAwareInputProvider.cpp.s
+
+agent/CuriosityAgent.o: agent/CuriosityAgent.cpp.o
+.PHONY : agent/CuriosityAgent.o
+
+# target to build an object file
+agent/CuriosityAgent.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/CuriosityAgent.cpp.o
+.PHONY : agent/CuriosityAgent.cpp.o
+
+agent/CuriosityAgent.i: agent/CuriosityAgent.cpp.i
+.PHONY : agent/CuriosityAgent.i
+
+# target to preprocess a source file
+agent/CuriosityAgent.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/CuriosityAgent.cpp.i
+.PHONY : agent/CuriosityAgent.cpp.i
+
+agent/CuriosityAgent.s: agent/CuriosityAgent.cpp.s
+.PHONY : agent/CuriosityAgent.s
+
+# target to generate assembly for a file
+agent/CuriosityAgent.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/CuriosityAgent.cpp.s
+.PHONY : agent/CuriosityAgent.cpp.s
+
 agent/DoubleSarsaAgent.o: agent/DoubleSarsaAgent.cpp.o
 .PHONY : agent/DoubleSarsaAgent.o
 
@@ -225,29 +273,77 @@ agent/DoubleSarsaAgent.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/DoubleSarsaAgent.cpp.s
 .PHONY : agent/DoubleSarsaAgent.cpp.s
 
-agent/ModelReusableAgent.o: agent/ModelReusableAgent.cpp.o
-.PHONY : agent/ModelReusableAgent.o
+agent/LLMTaskAgent.o: agent/LLMTaskAgent.cpp.o
+.PHONY : agent/LLMTaskAgent.o
 
 # target to build an object file
-agent/ModelReusableAgent.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/ModelReusableAgent.cpp.o
-.PHONY : agent/ModelReusableAgent.cpp.o
+agent/LLMTaskAgent.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/LLMTaskAgent.cpp.o
+.PHONY : agent/LLMTaskAgent.cpp.o
 
-agent/ModelReusableAgent.i: agent/ModelReusableAgent.cpp.i
-.PHONY : agent/ModelReusableAgent.i
+agent/LLMTaskAgent.i: agent/LLMTaskAgent.cpp.i
+.PHONY : agent/LLMTaskAgent.i
 
 # target to preprocess a source file
-agent/ModelReusableAgent.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/ModelReusableAgent.cpp.i
-.PHONY : agent/ModelReusableAgent.cpp.i
+agent/LLMTaskAgent.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/LLMTaskAgent.cpp.i
+.PHONY : agent/LLMTaskAgent.cpp.i
 
-agent/ModelReusableAgent.s: agent/ModelReusableAgent.cpp.s
-.PHONY : agent/ModelReusableAgent.s
+agent/LLMTaskAgent.s: agent/LLMTaskAgent.cpp.s
+.PHONY : agent/LLMTaskAgent.s
 
 # target to generate assembly for a file
-agent/ModelReusableAgent.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/ModelReusableAgent.cpp.s
-.PHONY : agent/ModelReusableAgent.cpp.s
+agent/LLMTaskAgent.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/LLMTaskAgent.cpp.s
+.PHONY : agent/LLMTaskAgent.cpp.s
+
+agent/SarsaAgent.o: agent/SarsaAgent.cpp.o
+.PHONY : agent/SarsaAgent.o
+
+# target to build an object file
+agent/SarsaAgent.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/SarsaAgent.cpp.o
+.PHONY : agent/SarsaAgent.cpp.o
+
+agent/SarsaAgent.i: agent/SarsaAgent.cpp.i
+.PHONY : agent/SarsaAgent.i
+
+# target to preprocess a source file
+agent/SarsaAgent.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/SarsaAgent.cpp.i
+.PHONY : agent/SarsaAgent.cpp.i
+
+agent/SarsaAgent.s: agent/SarsaAgent.cpp.s
+.PHONY : agent/SarsaAgent.s
+
+# target to generate assembly for a file
+agent/SarsaAgent.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/SarsaAgent.cpp.s
+.PHONY : agent/SarsaAgent.cpp.s
+
+agent/WidgetPriorityProvider.o: agent/WidgetPriorityProvider.cpp.o
+.PHONY : agent/WidgetPriorityProvider.o
+
+# target to build an object file
+agent/WidgetPriorityProvider.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/WidgetPriorityProvider.cpp.o
+.PHONY : agent/WidgetPriorityProvider.cpp.o
+
+agent/WidgetPriorityProvider.i: agent/WidgetPriorityProvider.cpp.i
+.PHONY : agent/WidgetPriorityProvider.i
+
+# target to preprocess a source file
+agent/WidgetPriorityProvider.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/WidgetPriorityProvider.cpp.i
+.PHONY : agent/WidgetPriorityProvider.cpp.i
+
+agent/WidgetPriorityProvider.s: agent/WidgetPriorityProvider.cpp.s
+.PHONY : agent/WidgetPriorityProvider.s
+
+# target to generate assembly for a file
+agent/WidgetPriorityProvider.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/agent/WidgetPriorityProvider.cpp.s
+.PHONY : agent/WidgetPriorityProvider.cpp.s
 
 desc/Action.o: desc/Action.cpp.o
 .PHONY : desc/Action.o
@@ -537,6 +633,30 @@ events/Preference.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/events/Preference.cpp.s
 .PHONY : events/Preference.cpp.s
 
+llm/HttpLlmClient.o: llm/HttpLlmClient.cpp.o
+.PHONY : llm/HttpLlmClient.o
+
+# target to build an object file
+llm/HttpLlmClient.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/llm/HttpLlmClient.cpp.o
+.PHONY : llm/HttpLlmClient.cpp.o
+
+llm/HttpLlmClient.i: llm/HttpLlmClient.cpp.i
+.PHONY : llm/HttpLlmClient.i
+
+# target to preprocess a source file
+llm/HttpLlmClient.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/llm/HttpLlmClient.cpp.i
+.PHONY : llm/HttpLlmClient.cpp.i
+
+llm/HttpLlmClient.s: llm/HttpLlmClient.cpp.s
+.PHONY : llm/HttpLlmClient.s
+
+# target to generate assembly for a file
+llm/HttpLlmClient.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/llm/HttpLlmClient.cpp.s
+.PHONY : llm/HttpLlmClient.cpp.s
+
 model/Graph.o: model/Graph.cpp.o
 .PHONY : model/Graph.o
 
@@ -777,6 +897,30 @@ thirdpart/tinyxml2/tinyxml2.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/thirdpart/tinyxml2/tinyxml2.cpp.s
 .PHONY : thirdpart/tinyxml2/tinyxml2.cpp.s
 
+thirdpart/xxhash/xxhash_impl.o: thirdpart/xxhash/xxhash_impl.cpp.o
+.PHONY : thirdpart/xxhash/xxhash_impl.o
+
+# target to build an object file
+thirdpart/xxhash/xxhash_impl.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/thirdpart/xxhash/xxhash_impl.cpp.o
+.PHONY : thirdpart/xxhash/xxhash_impl.cpp.o
+
+thirdpart/xxhash/xxhash_impl.i: thirdpart/xxhash/xxhash_impl.cpp.i
+.PHONY : thirdpart/xxhash/xxhash_impl.i
+
+# target to preprocess a source file
+thirdpart/xxhash/xxhash_impl.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/thirdpart/xxhash/xxhash_impl.cpp.i
+.PHONY : thirdpart/xxhash/xxhash_impl.cpp.i
+
+thirdpart/xxhash/xxhash_impl.s: thirdpart/xxhash/xxhash_impl.cpp.s
+.PHONY : thirdpart/xxhash/xxhash_impl.s
+
+# target to generate assembly for a file
+thirdpart/xxhash/xxhash_impl.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/fastbot_native.dir/build.make CMakeFiles/fastbot_native.dir/thirdpart/xxhash/xxhash_impl.cpp.s
+.PHONY : thirdpart/xxhash/xxhash_impl.cpp.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -795,12 +939,24 @@ help:
 	@echo "... agent/AgentFactory.o"
 	@echo "... agent/AgentFactory.i"
 	@echo "... agent/AgentFactory.s"
+	@echo "... agent/ContentAwareInputProvider.o"
+	@echo "... agent/ContentAwareInputProvider.i"
+	@echo "... agent/ContentAwareInputProvider.s"
+	@echo "... agent/CuriosityAgent.o"
+	@echo "... agent/CuriosityAgent.i"
+	@echo "... agent/CuriosityAgent.s"
 	@echo "... agent/DoubleSarsaAgent.o"
 	@echo "... agent/DoubleSarsaAgent.i"
 	@echo "... agent/DoubleSarsaAgent.s"
-	@echo "... agent/ModelReusableAgent.o"
-	@echo "... agent/ModelReusableAgent.i"
-	@echo "... agent/ModelReusableAgent.s"
+	@echo "... agent/LLMTaskAgent.o"
+	@echo "... agent/LLMTaskAgent.i"
+	@echo "... agent/LLMTaskAgent.s"
+	@echo "... agent/SarsaAgent.o"
+	@echo "... agent/SarsaAgent.i"
+	@echo "... agent/SarsaAgent.s"
+	@echo "... agent/WidgetPriorityProvider.o"
+	@echo "... agent/WidgetPriorityProvider.i"
+	@echo "... agent/WidgetPriorityProvider.s"
 	@echo "... desc/Action.o"
 	@echo "... desc/Action.i"
 	@echo "... desc/Action.s"
@@ -837,6 +993,9 @@ help:
 	@echo "... events/Preference.o"
 	@echo "... events/Preference.i"
 	@echo "... events/Preference.s"
+	@echo "... llm/HttpLlmClient.o"
+	@echo "... llm/HttpLlmClient.i"
+	@echo "... llm/HttpLlmClient.s"
 	@echo "... model/Graph.o"
 	@echo "... model/Graph.i"
 	@echo "... model/Graph.s"
@@ -867,6 +1026,9 @@ help:
 	@echo "... thirdpart/tinyxml2/tinyxml2.o"
 	@echo "... thirdpart/tinyxml2/tinyxml2.i"
 	@echo "... thirdpart/tinyxml2/tinyxml2.s"
+	@echo "... thirdpart/xxhash/xxhash_impl.o"
+	@echo "... thirdpart/xxhash/xxhash_impl.i"
+	@echo "... thirdpart/xxhash/xxhash_impl.s"
 .PHONY : help
 
 
